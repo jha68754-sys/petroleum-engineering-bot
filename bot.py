@@ -1,7 +1,7 @@
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-TOKEN = "PUT_YOUR_BOT_TOKEN_HERE"
+TOKEN = "8930247827:AAFlPeIl5-6GD-ZMt1Wfof9r_0Axqh3A-sY"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Welcome to Petroleum Engineering Bot")
