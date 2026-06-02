@@ -1,1 +1,81 @@
-python import os import requests import time  TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}" OPENAI_URL = "https://api.openai.com/v1/chat/completions"  offset = 0  SYSTEM_PROMPT = """ You are a professional AI assistant specialized in Petroleum Engineering and PVT Lab. Answer in the same language as the user. Support Arabic and English. Explain PVT, CCE, CVD, DL, EOS, GOR, Bo, Rs, viscosity, Eclipse, CMG and reservoir engineering topics. """  def ask_ai(user_text):     headers = {         "Authorization": f"Bearer {OPENAI_API_KEY}",         "Content-Type": "application/json"     }      payload = {         "model": "gpt-4o-mini",         "messages": [             {"role": "system", "content": SYSTEM_PROMPT},             {"role": "user", "content": user_text}         ]     }      response = requests.post(         OPENAI_URL,         headers=headers,         json=payload,         timeout=60     )      data = response.json()      if "choices" in data:         return data["choices"][0]["message"]["content"]      return "Error connecting to AI."  def send_message(chat_id, text):     requests.post(         f"{TELEGRAM_URL}/sendMessage",         data={             "chat_id": chat_id,             "text": text[:4000]         }     )  while True:     try:         updates = requests.get(             f"{TELEGRAM_URL}/getUpdates",             params={                 "offset": offset + 1,                 "timeout": 30             }         ).json()          for update in updates.get("result", []):             offset = update["update_id"]              if "message" in update and "text" in update["message"]:                 chat_id = update["message"]["chat"]["id"]                 text = update["message"]["text"]                  if text == "/start":                     reply = "👋 أهلاً بك في PVT Lab AI Bot"                 else:                     reply = ask_ai(text)                  send_message(chat_id, reply)      except Exception as e:         print(e)      time.sleep(1) 
+import os
+import requests
+import time
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+
+offset = 0
+
+SYSTEM_PROMPT = """
+You are a professional AI assistant specialized in Petroleum Engineering and PVT Lab.
+Answer in the same language as the user.
+Support Arabic and English.
+Explain PVT, CCE, CVD, DL, EOS, GOR, Bo, Rs, viscosity, Eclipse, CMG and reservoir engineering topics.
+"""def ask_ai(user_text):
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_text}
+        ]
+    }
+
+    response = requests.post(
+        OPENAI_URL,
+        headers=headers,
+        json=payload,
+        timeout=60
+    )
+
+    data = response.json()
+
+    if "choices" in data:
+        return data["choices"][0]["message"]["content"]
+
+    return "Error connecting to AI."
+
+def send_message(chat_id, text):
+    requests.post(
+        f"{TELEGRAM_URL}/sendMessage",
+        data={
+            "chat_id": chat_id,
+            "text": text[:4000]
+        }
+    )
+while True:
+    try:
+        updates = requests.get(
+            f"{TELEGRAM_URL}/getUpdates",
+            params={
+                "offset": offset + 1,
+                "timeout": 30
+            }
+        ).json()
+
+        for update in updates.get("result", []):
+            offset = update["update_id"]
+
+            if "message" in update and "text" in update["message"]:
+                chat_id = update["message"]["chat"]["id"]
+                text = update["message"]["text"]
+
+                if text == "/start":
+                    reply = "👋 أهلاً بك في PVT Lab AI Bot"
+                else:
+                    reply = ask_ai(text)
+
+                send_message(chat_id, reply)
+
+    except Exception as e:
+        print(e)
+
+    time.sleep(1)
