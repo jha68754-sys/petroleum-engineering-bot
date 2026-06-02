@@ -43,7 +43,7 @@ def ask_ai(user_text):
     if "choices" in data:
         return data["choices"][0]["message"]["content"]
 
-    return "Error connecting to AI."
+    return str(data)[:1000]
 
 def send_message(chat_id, text):
     requests.post(
