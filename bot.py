@@ -16,6 +16,7 @@ Answer in the same language as the user.
 Support Arabic and English.
 Explain PVT, CCE, CVD, DL, EOS, GOR, Bo, Rs, viscosity, Eclipse, CMG and reservoir engineering topics.
 """
+
 def ask_ai(user_text):
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -52,6 +53,7 @@ def send_message(chat_id, text):
             "text": text[:4000]
         }
     )
+
 while True:
     try:
         updates = requests.get(
@@ -59,7 +61,8 @@ while True:
             params={
                 "offset": offset + 1,
                 "timeout": 30
-            }
+            },
+            timeout=40
         ).json()
 
         for update in updates.get("result", []):
