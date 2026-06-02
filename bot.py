@@ -15,7 +15,7 @@ You are a professional AI assistant specialized in Petroleum Engineering and PVT
 Answer in the same language as the user.
 Support Arabic and English.
 Explain PVT, CCE, CVD, DL, EOS, GOR, Bo, Rs, viscosity, Eclipse, CMG and reservoir engineering topics.
-"""def ask_ai(user_text):
+def ask_ai(user_text):
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json"
