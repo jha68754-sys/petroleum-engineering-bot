@@ -1,17 +1,37 @@
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import requests
+import time
 
 TOKEN = "8930247827:AAFlPeIl5-6GD-ZMt1Wfof9r_0Axqh3A-sY"
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Welcome to Petroleum Engineering Bot")
+URL = f"https://api.telegram.org/bot{TOKEN}"
 
-async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(update.message.text)
+offset = 0
 
-app = Application.builder().token(TOKEN).build()
+while True:
+    try:
+        r = requests.get(
+            f"{URL}/getUpdates",
+            params={"offset": offset + 1, "timeout": 30}
+        ).json()
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+        for update in r.get("result", []):
+            offset = update["update_id"]
 
-app.run_polling()
+            if "message" in update:
+                chat_id = update["message"]["chat"]["id"]
+
+                if "text" in update["message"]:
+                    text = update["message"]["text"]
+
+                    requests.post(
+                        f"{URL}/sendMessage",
+                        data={
+                            "chat_id": chat_id,
+                            "text": f"You said: {text}"
+                        }
+                    )
+
+    except Exception as e:
+        print(e)
+
+    time.sleep(1)
