@@ -3,11 +3,10 @@ import requests
 import time
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY = os.getenv("OPENAI_API_KEY")
 
 TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-8b:generateContent?key={GEMINI_API_KEY}"
-
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 offset = 0
 
@@ -19,28 +18,33 @@ Explain PVT, CCE, CVD, DL, EOS, GOR, Bo, Rs, viscosity, Eclipse, CMG and reservo
 """
 
 def ask_ai(user_text):
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
     payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": SYSTEM_PROMPT + "\n\nUser question: " + user_text}
-                ]
-            }
-        ]
+        "model": "llama-3.1-8b-instant",
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_text}
+        ],
+        "temperature": 0.4
     }
 
     response = requests.post(
-        GEMINI_URL,
+        GROQ_URL,
+        headers=headers,
         json=payload,
         timeout=60
     )
 
     data = response.json()
 
-    try:
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception:
-        return str(data)[:1000]
+    if "choices" in data:
+        return data["choices"][0]["message"]["content"]
+
+    return str(data)[:1000]
 
 def send_message(chat_id, text):
     requests.post(
