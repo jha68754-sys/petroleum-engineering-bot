@@ -1,6 +1,9 @@
 import os
 import requests
 import time
+import tempfile
+from PyPDF2 import PdfReader
+from docx import Document
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GROQ_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -8,30 +11,29 @@ GROQ_API_KEY = os.getenv("OPENAI_API_KEY")
 TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
+GROQ_MODEL = "llama-3.3-70b-versatile"
+
 offset = 0
 
-SYSTEM_PROMPT = """
-You are a professional human-like Petroleum Engineering and PVT Laboratory assistant.
+FILE_CONTEXT = {}
 
-You write naturally like an experienced PVT laboratory engineer and reservoir fluid specialist.
-Your writing must sound like a real technical PVT report, not like a chatbot.
-Do not say: As an AI language model.
-Do not use robotic introductions.
-Be clear, professional, practical, and technically accurate.
+SYSTEM_PROMPT = """
+You are a professional petroleum engineering assistant specialized in PVT laboratory reports.
+
+You write like an experienced PVT laboratory engineer, not like a chatbot.
+
+Main task:
+Read real PVT report text provided by the user, understand its structure, style, terminology, tables, sections, and reporting logic, then generate professional PVT reports based on the same reporting style.
 
 Language rules:
-- If the user writes in Arabic, answer in Arabic.
-- If the user writes in English, answer in English.
+- If the user writes Arabic, answer in Arabic.
+- If the user writes English, answer in English.
 - If the user mixes Arabic and English, answer in the same mixed style.
-- Use petroleum engineering terms correctly.
-- Keep the tone suitable for engineers, students, and laboratory reporting.
+- Use correct petroleum engineering terminology.
 
-Main specialty:
-Reservoir fluid analysis, PVT laboratory reports, bottom hole samples, separator samples, black oil, volatile oil, gas condensate, dry gas, wet gas, PVT calculations, PVT tables, and engineering interpretation.
+Professional PVT report style:
+When writing a report, follow a real Reservoir Fluid Analysis / PVT Study structure:
 
-Reference report style:
-When writing PVT reports, follow the style of a real Reservoir Fluid Analysis report.
-The report should be structured like a professional PVT lab report, including sections such as:
 Report Title
 Report Information
 Client
@@ -58,124 +60,81 @@ Conclusion
 Recommendations
 Required Additional Data
 
-When the user asks for /report:
-Create a professional PVT report based on the sample type and data provided.
-If the user provides data, use only the provided data.
-If data are missing, leave blanks using this format:
-Field: ______
-Well: ______
-Reservoir Temperature: ______
-Reservoir Pressure: ______
-Bubble Point Pressure: ______
-GOR: ______
-Bo: ______
-Viscosity: ______
-Density: ______
-
-Do not invent real laboratory values unless the user clearly asks for sample data.
-If the user asks for a template only, create a clean report template without fake numbers.
-If the user asks for a sample report, clearly write:
-SAMPLE DATA FOR DEMONSTRATION ONLY
-
-Adapt the report according to sample type:
-
-For Bottom Hole Fluid Sample:
-Focus on sample validation, opening pressure, sample restoration to reservoir conditions, CCE/CME test, differential vaporization, separator test, viscosity test, composition, and selected sample.
-
-For Black Oil:
-Focus on bubble point pressure, solution gas-oil ratio Rs, oil formation volume factor Bo, oil viscosity, oil density, differential liberation, separator test, stock tank oil gravity, and black oil PVT table.
-
-For Volatile Oil:
-Focus on high GOR, shrinkage behavior, saturation pressure, compositional behavior, separator optimization, and EOS relevance.
-
-For Gas Condensate:
-Focus on dew point pressure, CVD test, liquid dropout, CGR, gas Z-factor, gas viscosity, condensate recovery, and retrograde condensation.
-
-For Dry Gas or Wet Gas:
-Focus on gas composition, Z-factor, Bg, gas viscosity, gas density, heating value, and condensate content if present.
-
-When writing Methods:
-Use professional wording similar to:
-- The samples were checked for validation to ensure that no leakage occurred during sampling or transportation.
-- The samples were restored to reservoir conditions before conducting laboratory tests.
-- The CCE/CME test was performed to determine saturation pressure and establish the pressure-volume relationship.
-- Differential vaporization was carried out below saturation pressure at reservoir temperature.
-- Separator test was performed at specified separator pressure and temperature.
-- Reservoir fluid viscosity was measured above and below saturation pressure.
-
-When writing Summary of PVT Data:
-Include only values provided by the user.
-If values are missing, write them as blank fields.
-
-When the user asks for /calc:
-Perform petroleum engineering or PVT calculations step by step.
-Show:
-Given Data
-Formula
-Substitution
-Calculation
-Final Answer with Units
-Engineering Interpretation
-
-If data are missing, ask only for the missing values.
-
-When the user asks for /plot:
-If the user provides data points, organize them clearly and describe the expected curve.
-Support these plots:
-Pressure vs Relative Volume
-Pressure vs Y-Function
-Pressure vs Bo
-Pressure vs Rs
-Pressure vs Fluid Density
-Pressure vs Oil Viscosity
-Pressure vs Gas Gravity
-Pressure vs Gas Deviation Factor
-Pressure vs Bg
-Pressure vs Liquid Dropout
-Pressure vs CGR
-
-If actual image plotting is not enabled in the bot code, say:
-Graph image generation requires plotting support to be enabled in the bot code.
-Then organize the data and explain the curve professionally.
-
 Important rules:
-- Do not fabricate real laboratory data.
-- Do not invent pressures, temperatures, densities, viscosity, molecular weight, GOR, Bo, Rs, or API unless the user provides them or asks for sample data.
-- Do not write calculations unless numerical values are provided.
-- Always respect the sample type.
-- Use professional engineering interpretation, not only definitions.
-- If data are insufficient, clearly list the required missing data.
-- Make reports sound like real technical reports.
-- Keep Telegram responses readable.
+- Use the uploaded real report only as a reference for style, structure, and engineering logic.
+- Do not copy confidential company names, well names, field names, report numbers, dates, or private values unless the user asks to analyze the same report.
+- Do not invent real laboratory values.
+- If values are missing, leave blanks using: ______
+- If the user asks for a sample report, clearly write: SAMPLE DATA FOR DEMONSTRATION ONLY.
+- If the user provides numerical data, use only those values.
+- If the user asks for calculations, show Given Data, Formula, Substitution, Calculation, Final Answer, and Engineering Interpretation.
+- If the user asks for plots and provides data, organize the data and describe the curve.
 
 Formatting rules:
 - Do not use markdown symbols like **, ###, or vertical-line tables.
-- Write in clean plain text suitable for Telegram.
-- Use clear section titles without symbols.
-- Avoid very long paragraphs.
-- Use simple lists and clean spacing.
+- Write clean plain text suitable for Telegram.
+- Use clear section titles.
+- Keep paragraphs readable.
 """
 
-def ask_ai(user_text):
+def clean_text(text):
+    text = str(text)
+    text = text.replace("**", "")
+    text = text.replace("###", "")
+    text = text.replace("##", "")
+    text = text.replace("#", "")
+    text = text.replace("|", " ")
+    text = text.replace("[", "")
+    text = text.replace("]", "")
+    return text
+
+def send_message(chat_id, text):
+    text = clean_text(text)
+
+    if len(text) <= 3900:
+        requests.post(
+            f"{TELEGRAM_URL}/sendMessage",
+            data={"chat_id": chat_id, "text": text}
+        )
+    else:
+        for i in range(0, len(text), 3900):
+            part = text[i:i + 3900]
+            requests.post(
+                f"{TELEGRAM_URL}/sendMessage",
+                data={"chat_id": chat_id, "text": part}
+            )
+            time.sleep(0.5)
+
+def ask_ai(user_text, file_context=None):
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT}
+    ]
+
+    if file_context:
+        messages.append({
+            "role": "user",
+            "content": "This is extracted text from a real PVT report. Use it as reference style and context only:\n\n" + file_context[:25000]
+        })
+
+    messages.append({"role": "user", "content": user_text})
+
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
 
     payload = {
-        "model": "llama-3.1-8b-instant",
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_text}
-        ],
-        "temperature": 0.30
+        "model": GROQ_MODEL,
+        "messages": messages,
+        "temperature": 0.25,
+        "max_tokens": 3500
     }
 
     response = requests.post(
         GROQ_URL,
         headers=headers,
         json=payload,
-        timeout=60
+        timeout=90
     )
 
     data = response.json()
@@ -183,39 +142,120 @@ def ask_ai(user_text):
     if "choices" in data:
         return data["choices"][0]["message"]["content"]
 
-    return str(data)[:1000]
+    return str(data)[:1500]
 
-def send_message(chat_id, text):
-    requests.post(
-        f"{TELEGRAM_URL}/sendMessage",
-        data={
-            "chat_id": chat_id,
-            "text": text[:4000]
-        }
-    )
+def extract_pdf_text(file_path):
+    text = ""
+    reader = PdfReader(file_path)
+
+    for page in reader.pages:
+        page_text = page.extract_text()
+        if page_text:
+            text += page_text + "\n\n"
+
+    return text.strip()
+
+def extract_docx_text(file_path):
+    doc = Document(file_path)
+    text = ""
+
+    for paragraph in doc.paragraphs:
+        if paragraph.text.strip():
+            text += paragraph.text + "\n"
+
+    return text.strip()
+
+def download_telegram_file(file_id, file_name):
+    file_info = requests.get(
+        f"{TELEGRAM_URL}/getFile",
+        params={"file_id": file_id},
+        timeout=30
+    ).json()
+
+    file_path = file_info["result"]["file_path"]
+    file_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
+
+    suffix = os.path.splitext(file_name)[1]
+
+    temp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    temp.close()
+
+    file_data = requests.get(file_url, timeout=60).content
+
+    with open(temp.name, "wb") as f:
+        f.write(file_data)
+
+    return temp.name
+
+def handle_document(chat_id, document):
+    file_id = document["file_id"]
+    file_name = document.get("file_name", "uploaded_file")
+
+    try:
+        local_path = download_telegram_file(file_id, file_name)
+
+        if file_name.lower().endswith(".pdf"):
+            extracted_text = extract_pdf_text(local_path)
+        elif file_name.lower().endswith(".docx"):
+            extracted_text = extract_docx_text(local_path)
+        else:
+            send_message(chat_id, "الملف لازم يكون PDF أو DOCX فقط.")
+            return
+
+        if not extracted_text:
+            send_message(chat_id, "قرأت الملف لكن ما قدرتش نستخرج نص واضح منه. ممكن يكون الملف سكان صورة.")
+            return
+
+        FILE_CONTEXT[chat_id] = extracted_text
+
+        send_message(
+            chat_id,
+            "تم قراءة الملف بنجاح.\n\n"
+            "توا نقدر نعتمد عليه كسياق لتقرير PVT.\n\n"
+            "جربي تكتبي:\n"
+            "/report\n"
+            "اكتب تقرير PVT جديد بنفس أسلوب الملف، لعينة Bottom Hole Fluid Sample، كقالب فقط بدون أرقام افتراضية."
+        )
+
+    except Exception as e:
+        send_message(chat_id, "صار خطأ أثناء قراءة الملف:\n" + str(e))
 
 while True:
     try:
         updates = requests.get(
             f"{TELEGRAM_URL}/getUpdates",
-            params={
-                "offset": offset + 1,
-                "timeout": 30
-            },
+            params={"offset": offset + 1, "timeout": 30},
             timeout=40
         ).json()
 
         for update in updates.get("result", []):
             offset = update["update_id"]
 
-            if "message" in update and "text" in update["message"]:
-                chat_id = update["message"]["chat"]["id"]
-                text = update["message"]["text"]
+            if "message" not in update:
+                continue
+
+            message = update["message"]
+            chat_id = message["chat"]["id"]
+
+            if "document" in message:
+                handle_document(chat_id, message["document"])
+                continue
+
+            if "text" in message:
+                text = message["text"]
 
                 if text == "/start":
-                    reply = "أهلاً بك في PVT Lab AI Bot. أرسل /report أو /calc أو /plot مع البيانات المطلوبة."
+                    reply = (
+                        "أهلاً بك في PVT Lab AI Bot.\n\n"
+                        "أرسل ملف PDF أو DOCX لتقرير PVT حقيقي، وبعدها اطلب تقرير جديد بنفس الأسلوب.\n\n"
+                        "الأوامر:\n"
+                        "/report لكتابة تقرير\n"
+                        "/calc للحسابات\n"
+                        "/plot لتنظيم بيانات الرسم"
+                    )
                 else:
-                    reply = ask_ai(text)
+                    context = FILE_CONTEXT.get(chat_id)
+                    reply = ask_ai(text, context)
 
                 send_message(chat_id, reply)
 
