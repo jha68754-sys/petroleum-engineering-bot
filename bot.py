@@ -5,9 +5,7 @@ import base64
 import tempfile
 import mimetypes
 import requests
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
+
 from PyPDF2 import PdfReader
 from docx import Document
 
