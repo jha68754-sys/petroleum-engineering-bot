@@ -1,471 +1,510 @@
 import os
-import re
 import time
 import base64
 import tempfile
 import mimetypes
 import requests
-
 from PyPDF2 import PdfReader
 from docx import Document
 
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-GROQ_API_KEY = os.getenv('OPENAI_API_KEY')
-TELEGRAM_URL = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}'
-GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
-TEXT_MODEL = os.getenv('GROQ_TEXT_MODEL', 'llama-3.3-70b-versatile')
-VISION_MODEL = os.getenv('GROQ_VISION_MODEL', 'meta-llama/llama-4-scout-17b-16e-instruct')
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+GROQ_API_KEY = os.getenv("OPENAI_API_KEY")
+
+TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+TEXT_MODEL = os.getenv("GROQ_TEXT_MODEL", "openai/gpt-oss-120b")
+VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
 
 offset = 0
 FILE_CONTEXT = {}
 IMAGE_CONTEXT = {}
 
-GLOBAL_PVT_REFERENCE = '''
-Professional PVT Engineering Reference System
+SYSTEM_PROMPT = """
+You are a professional Petroleum Engineering, PVT Laboratory, Reservoir Fluid Analysis, and Reservoir Simulation assistant.
 
-Role: act as a real PVT laboratory engineer, reservoir fluid specialist, and reservoir simulation engineer.
-The reference report is an example for workflow and style only. It is not a rigid template.
-Always adapt to sample type, fluid system, reservoir type, available data, lab objective, report scope, client requirements, and simulation objective.
+You must answer like a real PVT laboratory engineer and reservoir fluid specialist, not like a generic chatbot.
+
+Language rules:
+- If the user writes Arabic, answer in strong professional Arabic.
+- If the user writes English, answer in professional petroleum engineering English.
+- If the user mixes Arabic and English, answer naturally in the same style.
+- Keep important technical terms in English beside Arabic when useful.
 
 Correct terminology:
 PVT = Pressure-Volume-Temperature.
-Reservoir = المكمن Reservoir.
-Well = البئر Well.
-Formation = التكوين Formation.
-Bottom Hole Sample = عينة قاع البئر Bottom Hole Sample.
-Surface Separator Oil Sample = عينة زيت من الفاصل السطحي Surface Separator Oil Sample.
-Separator Gas Sample = عينة غاز من الفاصل Separator Gas Sample.
-Stock Tank Oil = زيت الخزان السطحي Stock Tank Oil.
-Recombined Sample = عينة معاد تركيبها Recombined Sample.
-Recombination = إعادة تركيب العينة Recombination.
-Bubble Point Pressure = ضغط نقطة الفقاعة Bubble Point Pressure.
-Dew Point Pressure = ضغط نقطة الندى Dew Point Pressure.
-Bo = معامل حجم التكوين للزيت Oil Formation Volume Factor.
-Bg = معامل حجم التكوين للغاز Gas Formation Volume Factor.
-Rs = نسبة الغاز المذاب Solution Gas-Oil Ratio.
-Rv = نسبة الزيت المتبخر في الغاز Vaporized Oil-Gas Ratio.
-GOR = نسبة الغاز إلى الزيت Gas-Oil Ratio.
-CGR = نسبة المكثفات إلى الغاز Condensate-Gas Ratio.
-Z-factor = معامل الانحراف الغازي Gas Deviation Factor.
-Viscosity = اللزوجة Viscosity.
-Density = الكثافة Density.
-Specific Gravity = الكثافة النوعية Specific Gravity.
-API Gravity = درجة API.
+Reservoir = Ø§ÙÙÙÙÙ Reservoir.
+Well = Ø§ÙØ¨Ø¦Ø± Well.
+Formation = Ø§ÙØªÙÙÙÙ Formation.
+Bottom Hole Sample = Ø¹ÙÙØ© ÙØ§Ø¹ Ø§ÙØ¨Ø¦Ø± Bottom Hole Sample.
+Surface Separator Oil Sample = Ø¹ÙÙØ© Ø²ÙØª ÙÙ Ø§ÙÙØ§ØµÙ Ø§ÙØ³Ø·Ø­Ù Surface Separator Oil Sample.
+Separator Gas Sample = Ø¹ÙÙØ© ØºØ§Ø² ÙÙ Ø§ÙÙØ§ØµÙ Separator Gas Sample.
+Stock Tank Oil = Ø²ÙØª Ø§ÙØ®Ø²Ø§Ù Ø§ÙØ³Ø·Ø­Ù Stock Tank Oil.
+Recombined Sample = Ø¹ÙÙØ© ÙØ¹Ø§Ø¯ ØªØ±ÙÙØ¨ÙØ§ Recombined Sample.
+Recombination = Ø¥Ø¹Ø§Ø¯Ø© ØªØ±ÙÙØ¨ Ø§ÙØ¹ÙÙØ© Recombination.
+Bubble Point Pressure = Ø¶ØºØ· ÙÙØ·Ø© Ø§ÙÙÙØ§Ø¹Ø© Bubble Point Pressure.
+Dew Point Pressure = Ø¶ØºØ· ÙÙØ·Ø© Ø§ÙÙØ¯Ù Dew Point Pressure.
+Bo = ÙØ¹Ø§ÙÙ Ø­Ø¬Ù Ø§ÙØªÙÙÙÙ ÙÙØ²ÙØª Oil Formation Volume Factor.
+Bg = ÙØ¹Ø§ÙÙ Ø­Ø¬Ù Ø§ÙØªÙÙÙÙ ÙÙØºØ§Ø² Gas Formation Volume Factor.
+Rs = ÙØ³Ø¨Ø© Ø§ÙØºØ§Ø² Ø§ÙÙØ°Ø§Ø¨ Solution Gas-Oil Ratio.
+GOR = ÙØ³Ø¨Ø© Ø§ÙØºØ§Ø² Ø¥ÙÙ Ø§ÙØ²ÙØª Gas-Oil Ratio.
+CGR = ÙØ³Ø¨Ø© Ø§ÙÙÙØ«ÙØ§Øª Ø¥ÙÙ Ø§ÙØºØ§Ø² Condensate-Gas Ratio.
+Z-factor = ÙØ¹Ø§ÙÙ Ø§ÙØ§ÙØ­Ø±Ø§Ù Ø§ÙØºØ§Ø²Ù Gas Deviation Factor.
+Viscosity = Ø§ÙÙØ²ÙØ¬Ø© Viscosity.
+Density = Ø§ÙÙØ«Ø§ÙØ© Density.
+Specific Gravity = Ø§ÙÙØ«Ø§ÙØ© Ø§ÙÙÙØ¹ÙØ© Specific Gravity.
+API Gravity = Ø¯Ø±Ø¬Ø© API.
 CCE = Constant Composition Expansion.
 CME = Constant Mass Expansion.
 DV = Differential Vaporization / Differential Liberation.
 CVD = Constant Volume Depletion.
-Separator Test = اختبار الفاصل Separator Test.
-Flash Test = اختبار الوميض Flash Test.
-Compositional Analysis = التحليل التركيب Compositional Analysis.
-EOS Tuning = مواءمة معادلة الحالة EOS Tuning.
-PVTO = Eclipse black-oil oil PVT table.
-PVTG = Eclipse gas PVT table.
-CMG PVT Input = مدخلات PVT لمحاكي CMG.
+Separator Test = Ø§Ø®ØªØ¨Ø§Ø± Ø§ÙÙØ§ØµÙ Separator Test.
+Flash Test = Ø§Ø®ØªØ¨Ø§Ø± Ø§ÙÙÙÙØ¶ Flash Test.
+Compositional Analysis = Ø§ÙØªØ­ÙÙÙ Ø§ÙØªØ±ÙÙØ¨Ù Compositional Analysis.
+EOS Tuning = ÙÙØ§Ø¡ÙØ© ÙØ¹Ø§Ø¯ÙØ© Ø§ÙØ­Ø§ÙØ© EOS Tuning.
+PVTO = Ø¬Ø¯ÙÙ PVTO ÙÙØ­Ø§ÙÙ Eclipse.
+PVTG = Ø¬Ø¯ÙÙ PVTG ÙÙØ­Ø§ÙÙ Eclipse.
+CMG PVT Input = ÙØ¯Ø®ÙØ§Øª PVT ÙÙØ­Ø§ÙÙ CMG.
 
 Forbidden terms:
-Do not call Bo الضغط البيني or المعامل البيني.
-Do not call Rs الترشيح.
-Do not call GOR النسبة المئوية للغاز.
-Do not say الليزج for Viscosity.
-Do not say الحفرة for Reservoir.
-Do not say السطوع النوعي or اختبار السطوع.
-Do not define PVT as Pressuring Volume and Temperature.
-Do not use vague tests like اختبار الضغط والحرارة when actual tests are CCE/CME, DV, CVD, Separator Test, Recombination, Compositional Analysis, or Viscosity Test.
-
-Engineering workflow:
-1. Bottom Hole Sample: validation, opening pressure/leak check, restoration to reservoir conditions, CCE/CME, DV for oil systems, CVD for gas condensate, Separator Test, Viscosity, Composition, PVT tables and plots.
-2. Surface Separator Oil + Separator Gas: surface separated samples do not directly represent original reservoir fluid. Need separator P/T, oil/gas rates, separator GOR or producing GOR, oil and gas composition, API, density, water/emulsion check. Recombine oil and gas, validate recombined fluid, then run CCE/CME, DV or CVD, Separator Test, Viscosity.
-3. Black Oil: Bubble Point Pressure, Rs, Bo, Density, Viscosity, DV/Differential Liberation, Separator Test, Stock Tank Oil API, PVTO.
-4. Volatile Oil: saturation pressure, high GOR, shrinkage, composition, separator optimization, likely EOS/compositional simulation.
-5. Gas Condensate: Dew Point, CVD, liquid dropout, CGR, Z-factor, retrograde condensation, PVTG or compositional/EOS.
-
-Simulation logic:
-Use PVTO for black-oil oil systems with pressure-Rs-Bo-viscosity tables.
-Use PVTG for gas systems when gas PVT data are available.
-Use compositional/EOS for volatile oil, gas condensate, rich gas, miscibility, CO2/H2S, or strong compositional effects.
-DV supports black-oil tables. CVD supports gas condensate and EOS work. Separator conditions affect GOR, Bo, Rs, API and simulator surface conditions.
-
-Graph interpretation:
-Identify axes and units, trend, non-physical behavior, anomalies, retrograde behavior, contamination indicators, engineering meaning, causes and recommendations.
-'''
-
-SYSTEM_PROMPT = '''
-You are a professional Petroleum Engineering and PVT Laboratory AI assistant.
-Answer like a real PVT engineer, reservoir fluid specialist, and reservoir simulation engineer.
-Never give generic textbook answers. Never invent PVT values. Use engineering judgment.
-If Arabic: use strong professional Arabic with correct petroleum terms. If English: use professional petroleum engineering English.
+- Do not call Bo Ø§ÙØ¶ØºØ· Ø§ÙØ¨ÙÙÙ or Ø§ÙÙØ¹Ø§ÙÙ Ø§ÙØ¨ÙÙÙ.
+- Do not call Rs Ø§ÙØªØ±Ø´ÙØ­.
+- Do not call GOR Ø§ÙÙØ³Ø¨Ø© Ø§ÙÙØ¦ÙÙØ© ÙÙØºØ§Ø².
+- Do not say Ø§ÙÙÙØ²Ø¬ for Viscosity.
+- Do not say Ø§ÙØ­ÙØ±Ø© for Reservoir.
+- Do not say Ø§ÙØ³Ø·ÙØ¹ Ø§ÙÙÙØ¹Ù or Ø§Ø®ØªØ¨Ø§Ø± Ø§ÙØ³Ø·ÙØ¹.
+- Do not define PVT as Pressuring Volume and Temperature.
+- Do not invent numerical PVT values unless the user clearly asks for demo/sample values.
+- Do not create fake lab tables with fake values.
 
 For every technical answer:
-1. Identify sample type.
-2. Identify likely fluid system.
-3. Select correct PVT workflow.
-4. Explain required lab tests.
+1. Identify the sample type.
+2. Identify likely fluid system if possible.
+3. Select the correct PVT workflow.
+4. Explain required laboratory tests.
 5. Explain calculations only if data are available.
-6. Explain required plots.
-7. Explain simulation relevance.
-8. Mention missing data.
+6. Explain required plots if applicable.
+7. Explain simulation relevance if applicable.
+8. Mention missing data clearly.
 9. Give engineering interpretation.
 
-Commands: /analyze, /report, /calc, /plot, /graph, /interpret_graph, /check, /export_sim, /pvto, /pvtg, /eclipse, /cmg.
-Formatting: no markdown symbols like ** or ###, no vertical-line tables, clean Telegram text, clear headings.
-'''
+Surface Separator Oil Sample + Separator Gas Sample logic:
+- These are surface separated samples, not original reservoir fluid directly.
+- They usually require Recombination to reconstruct reservoir fluid.
+- Required data: separator pressure, separator temperature, oil rate, gas rate, producing GOR or separator GOR, gas composition, oil/stock tank oil composition, oil density, API gravity, gas specific gravity, water/emulsion content, H2S/CO2 if present.
+- Correct workflow: sample QC, compositional analysis, recombination, validation of recombined fluid, CCE/CME, DV for oil systems, CVD for gas condensate, separator test, viscosity test.
+- For black oil simulation use PVTO when pressure, Rs, Bo, and oil viscosity are available.
+- For gas systems use PVTG when gas PVT data are available.
+- For volatile oil or gas condensate use EOS/compositional simulation.
 
-def fix_terms(text):
-    text = str(text)
-    repl = {
-        'Pressuring Volume and Temperature': 'Pressure-Volume-Temperature',
-        'الضغط البيني': 'معامل حجم التكوين',
-        'المعامل البيني': 'معامل حجم التكوين',
-        'الترشيح': 'نسبة الغاز المذاب',
-        'النسبة المئوية للغاز': 'نسبة الغاز إلى الزيت',
-        'نسبة الغاز المئوية': 'نسبة الغاز إلى الزيت',
-        'الويسكوزية': 'اللزوجة',
-        'الليزج': 'اللزوجة',
-        'الحفرة': 'المكمن',
-        'السطوع النوعي': 'الكثافة النوعية',
-        'اختبار السطوع': 'اختبار الكثافة النوعية',
-        'نحو PVT': 'منحنيات PVT',
-        'النموذج البيني': 'Black Oil Model أو Compositional Model',
-        'النموذج المضغوط': 'Black Oil Model أو Compositional Model',
-        'Volume Expansion Factor': 'Oil Formation Volume Factor',
-        'Bo (Volume Expansion Factor)': 'Bo معامل حجم التكوين للزيت Oil Formation Volume Factor',
-        'Bo Volume Expansion Factor': 'Bo معامل حجم التكوين للزيت Oil Formation Volume Factor',
-        'Rs (Solution Gas-Oil Ratio)': 'Rs نسبة الغاز المذاب Solution Gas-Oil Ratio',
-        'GOR النسبة': 'GOR نسبة الغاز إلى الزيت',
-        'الضغط البالغ': 'ضغط التشبع أو ضغط الاختبار حسب السياق',
-        'الحرارة البالغة': 'درجة حرارة المكمن أو درجة حرارة الاختبار حسب السياق',
-    }
-    for a, b in repl.items():
-        text = text.replace(a, b)
-    return text
+Report philosophy:
+- A reference PDF is an example only, not a fixed template.
+- Adapt report structure to sample type, fluid system, available data, lab objective, report scope, client requirements, and simulation objective.
+
+Graph interpretation:
+- For uploaded images/graphs, identify axes, units, trend, anomalies, non-physical behavior, possible contamination, retrograde behavior if applicable, separator performance issues, engineering meaning, causes, and recommendations.
+
+Formatting:
+- Do not use markdown symbols like ** or ###.
+- Do not use vertical-line tables.
+- Use clean Telegram text with clear headings.
+"""
 
 def clean_text(text):
-    text = fix_terms(text)
-    for s in ['**', '###', '##', '#', '|', '[', ']']:
-        text = text.replace(s, ' ' if s == '|' else '')
+    text = str(text)
+    replacements = {
+        "**": "",
+        "###": "",
+        "##": "",
+        "#": "",
+        "|": " ",
+        "[": "",
+        "]": "",
+        "Pressuring Volume and Temperature": "Pressure-Volume-Temperature",
+        "Ø§ÙØ¶ØºØ· Ø§ÙØ¨ÙÙÙ": "ÙØ¹Ø§ÙÙ Ø­Ø¬Ù Ø§ÙØªÙÙÙÙ",
+        "Ø§ÙÙØ¹Ø§ÙÙ Ø§ÙØ¨ÙÙÙ": "ÙØ¹Ø§ÙÙ Ø­Ø¬Ù Ø§ÙØªÙÙÙÙ",
+        "Ø§ÙØªØ±Ø´ÙØ­": "ÙØ³Ø¨Ø© Ø§ÙØºØ§Ø² Ø§ÙÙØ°Ø§Ø¨",
+        "Ø§ÙÙØ³Ø¨Ø© Ø§ÙÙØ¦ÙÙØ© ÙÙØºØ§Ø²": "ÙØ³Ø¨Ø© Ø§ÙØºØ§Ø² Ø¥ÙÙ Ø§ÙØ²ÙØª",
+        "ÙØ³Ø¨Ø© Ø§ÙØºØ§Ø² Ø§ÙÙØ¦ÙÙØ©": "ÙØ³Ø¨Ø© Ø§ÙØºØ§Ø² Ø¥ÙÙ Ø§ÙØ²ÙØª",
+        "Ø§ÙÙÛØ³ÙÙØ²ÙØ©": "Ø§ÙÙØ²ÙØ¬Ø©",
+        "Ø§ÙÙÙØ²Ø¬": "Ø§ÙÙØ²ÙØ¬Ø©",
+        "Ø§ÙØ­ÙØ±Ø©": "Ø§ÙÙÙÙÙ",
+        "Ø§ÙØ³Ø·ÙØ¹ Ø§ÙÙÙØ¹Ù": "Ø§ÙÙØ«Ø§ÙØ© Ø§ÙÙÙØ¹ÙØ©",
+        "Ø§Ø®ØªØ¨Ø§Ø± Ø§ÙØ³Ø·ÙØ¹": "Ø§Ø®ØªØ¨Ø§Ø± Ø§ÙÙØ«Ø§ÙØ© Ø§ÙÙÙØ¹ÙØ©",
+        "Volume Expansion Factor": "Oil Formation Volume Factor",
+    }
+    for wrong, correct in replacements.items():
+        text = text.replace(wrong, correct)
     return text.strip()
 
 def send_message(chat_id, text):
     text = clean_text(text)
-    if len(text) <= 3900:
-        requests.post(f'{TELEGRAM_URL}/sendMessage', data={'chat_id': chat_id, 'text': text})
-    else:
-        for i in range(0, len(text), 3900):
-            requests.post(f'{TELEGRAM_URL}/sendMessage', data={'chat_id': chat_id, 'text': text[i:i+3900]})
-            time.sleep(0.5)
+    if not text:
+        text = "ÙÙ Ø£ØªÙÙÙ ÙÙ ØªÙÙÙØ¯ Ø±Ø¯ ÙØ§Ø¶Ø­."
+    for i in range(0, len(text), 3900):
+        requests.post(
+            f"{TELEGRAM_URL}/sendMessage",
+            data={"chat_id": chat_id, "text": text[i:i+3900]},
+            timeout=30
+        )
+        time.sleep(0.4)
 
-def send_photo(chat_id, photo_path, caption=''):
-    with open(photo_path, 'rb') as photo:
-        requests.post(f'{TELEGRAM_URL}/sendPhoto', data={'chat_id': chat_id, 'caption': caption}, files={'photo': photo})
+def download_telegram_file(file_id, file_name):
+    info = requests.get(
+        f"{TELEGRAM_URL}/getFile",
+        params={"file_id": file_id},
+        timeout=30
+    ).json()
+    file_path = info["result"]["file_path"]
+    file_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
 
-def surface_separator_analysis_ar():
-    return '''
-تحليل هندسي لعينة زيت من الفاصل السطحي مع عينة غاز من الفاصل
+    suffix = os.path.splitext(file_name)[1] or ".bin"
+    temp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    temp.close()
 
-نوع العينات
-العينات المذكورة هي عينات سطحية منفصلة:
-- Surface Separator Oil Sample: عينة زيت من الفاصل السطحي.
-- Separator Gas Sample: عينة غاز من الفاصل.
+    data = requests.get(file_url, timeout=60).content
+    with open(temp.name, "wb") as f:
+        f.write(data)
+    return temp.name
 
-هذه العينات لا تمثل سائل المكمن الأصلي مباشرة مثل عينة قاع البئر Bottom Hole Sample، لأن الغاز والزيت انفصلا عند ظروف الفاصل السطحي. لذلك لا يمكن بناء سلوك PVT كامل للمكمن منها مباشرة إلا بعد إعادة تركيب العينة Recombination بطريقة صحيحة.
-
-الفكرة الهندسية الأساسية
-الهدف هو إعادة بناء سائل المكمن الأصلي تقريبياً من خلال عينة الزيت السطحية، عينة الغاز المنفصل، ظروف الفاصل، ونسبة الغاز إلى الزيت GOR أو معدلات الإنتاج. بعد ذلك تُجرى اختبارات PVT على العينة المعاد تركيبها Recombined Sample.
-
-البيانات المطلوبة
-1. بيانات الفاصل السطحي:
-- Separator Pressure ضغط الفاصل.
-- Separator Temperature درجة حرارة الفاصل.
-- عدد مراحل الفصل إن وجدت.
-- Stock Tank Conditions إن وجدت.
-
-2. بيانات الإنتاج:
-- Oil Rate معدل إنتاج الزيت.
-- Gas Rate معدل إنتاج الغاز.
-- Producing GOR أو Separator GOR نسبة الغاز إلى الزيت.
-- Water Cut أو وجود ماء/مستحلب إن وجد.
-
-3. بيانات العينات:
-- حجم عينة الزيت.
-- ضغط ودرجة حرارة أخذ العينة.
-- Separator Gas Composition تركيب الغاز.
-- Stock Tank Oil Composition أو تركيب الزيت.
-- Oil Density كثافة الزيت.
-- API Gravity.
-- Gas Specific Gravity.
-- H2S و CO2 إن وجدت.
-
-الاختبارات المطلوبة
-1. Compositional Analysis التحليل التركيبي:
-تحليل الغاز C1 إلى C7+ مع CO2 و N2 و H2S، وتحليل السائل وتوصيف C7+ أو C12+ حسب المختبر.
-
-2. Recombination إعادة تركيب العينة:
-خلط زيت الفاصل مع غاز الفاصل بنسبة مناسبة اعتماداً على Producing GOR أو Separator GOR أو معدلات الزيت والغاز وظروف الفاصل.
-
-3. Validation of Recombined Fluid:
-التأكد من استقرار العينة، عدم فقدان الغاز، وتوافق ضغط التشبع المتوقع مع البيانات الحقلية إن وجدت.
-
-4. CCE أو CME:
-لتحديد Bubble Point Pressure إذا كان النظام زيتي، أو Dew Point Pressure إذا كان غازياً مكثفاً، مع Relative Volume و Y-Function و Compressibility.
-
-5. DV Differential Vaporization:
-مناسب غالباً لـ Black Oil أو Volatile Oil، ويعطي Rs و Bo والكثافة و Gas Gravity و Z-factor و Bg.
-
-6. CVD Constant Volume Depletion:
-يستخدم إذا كان النظام Gas Condensate، ويعطي Liquid Dropout و Retrograde Condensation و CGR و Z-factor.
-
-7. Separator Test:
-مهم جداً لأن العينة أصلها من السطح، ويعطي Separator GOR و Stock Tank Oil properties و Surface shrinkage وتأثير ظروف الفاصل على Bo و Rs و API.
-
-8. Viscosity Test:
-قياس Oil Viscosity و Gas Viscosity عند الحاجة فوق وتحت ضغط التشبع.
-
-الحسابات الصحيحة
-لا يتم حساب قيم نهائية بدون بيانات رقمية، لكن الحسابات المطلوبة عادة هي:
-- Recombination Ratio.
-- Total GOR.
-- Rs نسبة الغاز المذاب.
-- Bo معامل حجم التكوين للزيت.
-- Bg معامل حجم التكوين للغاز.
-- Oil Density.
-- Gas Specific Gravity.
-- API Gravity.
-- Z-factor.
-- Oil and Gas Viscosity.
-- Compressibility.
-- Y-Function.
-
-المنحنيات المطلوبة
-للزيت:
-- Pressure vs Bo.
-- Pressure vs Rs.
-- Pressure vs Oil Viscosity.
-- Pressure vs Oil Density.
-- Pressure vs Relative Volume.
-- Pressure vs Y-Function.
-
-للغاز:
-- Pressure vs Z-factor.
-- Pressure vs Bg.
-- Pressure vs Gas Viscosity.
-
-لـ Gas Condensate:
-- Pressure vs Liquid Dropout.
-- Pressure vs CGR.
-- Phase Envelope إذا كان التركيب متوفر.
-
-إعداد البيانات للمحاكاة Eclipse أو CMG
-إذا كان السائل Black Oil: الأفضل تجهيز PVTO في Eclipse باستخدام Pressure, Rs, Bo, Oil Viscosity، مع PVTG للغاز إذا لزم.
-إذا كان السائل Volatile Oil أو Gas Condensate: الأفضل استخدام Compositional Model مع EOS Tuning في CMG GEM أو Eclipse Compositional.
-
-تحذيرات هندسية مهمة
-- لا تُستخدم عينات السطح مباشرة كأنها عينة مكمن.
-- يجب إجراء Recombination قبل الحكم النهائي على سلوك المكمن.
-- قيم Bo و Rs و Bubble Point Pressure لا تُستنتج بدقة من السطح بدون إعادة تركيب واختبار PVT.
-- ظروف الفاصل تؤثر مباشرة على GOR و API و Stock Tank Properties.
-- اختيار Black Oil Model أو Compositional Model يعتمد على نوع السائل والهدف من المحاكاة.
-
-الخلاصة الهندسية
-العينتان تمثلان زيتاً وغازاً منفصلين عند السطح. الخطوة الصحيحة هي Recombination ثم إجراء اختبارات PVT المناسبة. إذا أظهرت البيانات أن السائل Black Oil يمكن تجهيز PVTO. أما إذا كان Volatile Oil أو Gas Condensate أو غني بالمركبات الخفيفة، فالأفضل استخدام EOS و Compositional Simulation.
-'''
-
-def ask_ai(user_text, file_context=None):
-    messages = [
-        {'role': 'system', 'content': SYSTEM_PROMPT},
-        {'role': 'user', 'content': GLOBAL_PVT_REFERENCE}
-    ]
-    if file_context:
-        messages.append({'role': 'user', 'content': 'Extra uploaded PVT report context for this chat only:\n\n' + file_context[:25000]})
-    messages.append({'role': 'user', 'content': user_text})
-    headers = {'Authorization': f'Bearer {GROQ_API_KEY}', 'Content-Type': 'application/json'}
-    payload = {'model': TEXT_MODEL, 'messages': messages, 'temperature': 0.10, 'max_tokens': 3500}
-    try:
-        response = requests.post(GROQ_URL, headers=headers, json=payload, timeout=90)
-        data = response.json()
-        if 'choices' in data:
-            return data['choices'][0]['message']['content']
-        return str(data)[:1500]
-    except Exception as e:
-        return 'صار خطأ في الاتصال بالذكاء الاصطناعي:\n' + str(e)
-
-def encode_image_to_data_url(file_path):
-    mime_type, _ = mimetypes.guess_type(file_path)
-    if not mime_type:
-        mime_type = 'image/jpeg'
-    with open(file_path, 'rb') as f:
-        b64 = base64.b64encode(f.read()).decode('utf-8')
-    return f'data:{mime_type};base64,{b64}'
-
-def ask_vision_ai(prompt, image_path, file_context=None):
-    image_data_url = encode_image_to_data_url(image_path)
-    full_prompt = SYSTEM_PROMPT + '\n\n' + GLOBAL_PVT_REFERENCE + '\n\nGraph Interpretation Task:\n' + prompt
-    if file_context:
-        full_prompt += '\n\nExtra report context:\n' + file_context[:12000]
-    messages = [{'role': 'user', 'content': [{'type': 'text', 'text': full_prompt}, {'type': 'image_url', 'image_url': {'url': image_data_url}}]}]
-    headers = {'Authorization': f'Bearer {GROQ_API_KEY}', 'Content-Type': 'application/json'}
-    payload = {'model': VISION_MODEL, 'messages': messages, 'temperature': 0.10, 'max_tokens': 2500}
-    try:
-        response = requests.post(GROQ_URL, headers=headers, json=payload, timeout=90)
-        data = response.json()
-        if 'choices' in data:
-            return data['choices'][0]['message']['content']
-        return str(data)[:1500]
-    except Exception as e:
-        return 'صار خطأ في تحليل الصورة:\n' + str(e)
-
-def extract_pdf_text(file_path):
-    text = ''
-    reader = PdfReader(file_path)
+def extract_pdf_text(path):
+    text = ""
+    reader = PdfReader(path)
     for page in reader.pages:
         page_text = page.extract_text()
         if page_text:
-            text += page_text + '\n\n'
+            text += page_text + "\n\n"
     return text.strip()
 
-def extract_docx_text(file_path):
-    doc = Document(file_path)
-    text = ''
-    for paragraph in doc.paragraphs:
-        if paragraph.text.strip():
-            text += paragraph.text + '\n'
-    return text.strip()
+def extract_docx_text(path):
+    doc = Document(path)
+    lines = []
+    for p in doc.paragraphs:
+        if p.text.strip():
+            lines.append(p.text.strip())
+    return "\n".join(lines)
 
-def download_telegram_file(file_id, file_name):
-    file_info = requests.get(f'{TELEGRAM_URL}/getFile', params={'file_id': file_id}, timeout=30).json()
-    file_path = file_info['result']['file_path']
-    file_url = f'https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}'
-    suffix = os.path.splitext(file_name)[1] or '.bin'
-    temp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-    temp.close()
-    file_data = requests.get(file_url, timeout=60).content
-    with open(temp.name, 'wb') as f:
-        f.write(file_data)
-    return temp.name
+def encode_image_to_data_url(path):
+    mime_type, _ = mimetypes.guess_type(path)
+    if not mime_type:
+        mime_type = "image/jpeg"
+    with open(path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode("utf-8")
+    return f"data:{mime_type};base64,{b64}"
+
+def ask_ai(user_text, file_context=None):
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    if file_context:
+        messages.append({
+            "role": "user",
+            "content": "Reference PVT report or uploaded engineering context for this chat only:\n\n" + file_context[:25000]
+        })
+    messages.append({"role": "user", "content": user_text})
+
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": TEXT_MODEL,
+        "messages": messages,
+        "temperature": 0.08,
+        "max_tokens": 3000
+    }
+
+    try:
+        r = requests.post(GROQ_URL, headers=headers, json=payload, timeout=90)
+        data = r.json()
+        if "choices" in data:
+            return data["choices"][0]["message"]["content"]
+        return "Ø­Ø¯Ø« Ø®Ø·Ø£ ÙÙ Groq:\n" + str(data)[:1500]
+    except Exception as e:
+        return "Ø­Ø¯Ø« Ø®Ø·Ø£ ÙÙ Ø§ÙØ§ØªØµØ§Ù Ø¨Ø®Ø¯ÙØ© Ø§ÙØ°ÙØ§Ø¡ Ø§ÙØ§ØµØ·ÙØ§Ø¹Ù:\n" + str(e)
+
+def ask_vision_ai(prompt, image_path, file_context=None):
+    image_url = encode_image_to_data_url(image_path)
+    full_prompt = SYSTEM_PROMPT + "\n\nTask:\n" + prompt
+    if file_context:
+        full_prompt += "\n\nReference context:\n" + file_context[:12000]
+
+    messages = [{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": full_prompt},
+            {"type": "image_url", "image_url": {"url": image_url}}
+        ]
+    }]
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": VISION_MODEL,
+        "messages": messages,
+        "temperature": 0.08,
+        "max_tokens": 2200
+    }
+
+    try:
+        r = requests.post(GROQ_URL, headers=headers, json=payload, timeout=90)
+        data = r.json()
+        if "choices" in data:
+            return data["choices"][0]["message"]["content"]
+        return "Ø­Ø¯Ø« Ø®Ø·Ø£ ÙÙ Groq Vision:\n" + str(data)[:1500]
+    except Exception as e:
+        return "Ø­Ø¯Ø« Ø®Ø·Ø£ ÙÙ ØªØ­ÙÙÙ Ø§ÙØµÙØ±Ø©:\n" + str(e)
 
 def handle_document(chat_id, document):
-    file_id = document['file_id']
-    file_name = document.get('file_name', 'uploaded_file')
-    mime_type = document.get('mime_type', '')
     try:
+        file_id = document["file_id"]
+        file_name = document.get("file_name", "uploaded_file")
+        mime_type = document.get("mime_type", "")
         local_path = download_telegram_file(file_id, file_name)
-        lower_name = file_name.lower()
-        if lower_name.endswith('.pdf'):
-            extracted_text = extract_pdf_text(local_path)
-            if not extracted_text:
-                send_message(chat_id, 'قرأت ملف PDF لكن ما قدرت نستخرج نص واضح. ممكن يكون الملف سكان صورة. ارسلي صورة الرسم أو التقرير كصورة للتحليل البصري.')
+        lower = file_name.lower()
+
+        if lower.endswith(".pdf"):
+            text = extract_pdf_text(local_path)
+            if not text:
+                send_message(chat_id, "ÙØ±Ø£Øª ÙÙÙ PDF ÙÙÙ ÙÙ Ø£Ø³ØªØ®Ø±Ø¬ ÙØµØ§Ù ÙØ§Ø¶Ø­Ø§Ù. ØºØ§ÙØ¨Ø§Ù Ø§ÙÙÙÙ Ø³ÙØ§Ù ØµÙØ±Ø©. Ø£Ø±Ø³ÙÙ Ø§ÙØµÙØ­Ø§Øª Ø£Ù Ø§ÙØ±Ø³ÙÙØ§Øª ÙØµÙØ±Ø Ø£Ù Ø§Ø±ÙØ¹Ù PDF ÙØµÙ.")
                 return
-            FILE_CONTEXT[chat_id] = extracted_text
-            send_message(chat_id, 'تم قراءة PDF بنجاح.\n\nالملف صار مرجع إضافي لهذه المحادثة.\n\nجربي:\n/analyze\nحلل التقرير وحدد نوع العينة والاختبارات والحسابات والرسوم المطلوبة.')
+            FILE_CONTEXT[chat_id] = text
+            send_message(chat_id, "ØªÙ ÙØ±Ø§Ø¡Ø© PDF Ø¨ÙØ¬Ø§Ø­. Ø§ÙÙÙÙ Ø£ØµØ¨Ø­ ÙØ±Ø¬Ø¹Ø§Ù ÙÙØ°Ù Ø§ÙÙØ­Ø§Ø¯Ø«Ø©. Ø§ÙØªØ¨Ù /analyze ÙØªØ­ÙÙÙ Ø§ÙØªÙØ±ÙØ± ÙÙØ¯Ø³ÙØ§Ù.")
             return
-        if lower_name.endswith('.docx'):
-            extracted_text = extract_docx_text(local_path)
-            if not extracted_text:
-                send_message(chat_id, 'قرأت ملف DOCX لكن ما لقيتش نص واضح.')
+
+        if lower.endswith(".docx"):
+            text = extract_docx_text(local_path)
+            if not text:
+                send_message(chat_id, "ÙØ±Ø£Øª ÙÙÙ DOCX ÙÙÙ ÙÙ Ø£Ø¬Ø¯ ÙØµØ§Ù ÙØ§Ø¶Ø­Ø§Ù.")
                 return
-            FILE_CONTEXT[chat_id] = extracted_text
-            send_message(chat_id, 'تم قراءة DOCX بنجاح.\n\nالملف صار مرجع إضافي لهذه المحادثة.')
+            FILE_CONTEXT[chat_id] = text
+            send_message(chat_id, "ØªÙ ÙØ±Ø§Ø¡Ø© DOCX Ø¨ÙØ¬Ø§Ø­. Ø§ÙÙÙÙ Ø£ØµØ¨Ø­ ÙØ±Ø¬Ø¹Ø§Ù ÙÙØ°Ù Ø§ÙÙØ­Ø§Ø¯Ø«Ø©.")
             return
-        if mime_type.startswith('image/') or lower_name.endswith(('.png', '.jpg', '.jpeg', '.webp')):
+
+        if mime_type.startswith("image/") or lower.endswith((".png", ".jpg", ".jpeg", ".webp")):
             IMAGE_CONTEXT[chat_id] = local_path
-            send_message(chat_id, 'تم استلام الصورة بنجاح.\n\nاكتب:\n/graph\nحلل الرسم هندسياً')
+            send_message(chat_id, "ØªÙ Ø§Ø³ØªÙØ§Ù Ø§ÙØµÙØ±Ø© Ø¨ÙØ¬Ø§Ø­. Ø§ÙØªØ¨Ù /graph ÙØªØ­ÙÙÙ Ø§ÙØ±Ø³Ù Ø£Ù Ø§ÙØ´ÙÙ ÙÙØ¯Ø³ÙØ§Ù.")
             return
-        send_message(chat_id, 'الملف لازم يكون PDF أو DOCX أو صورة.')
+
+        send_message(chat_id, "Ø§ÙÙÙÙ ÙØ§Ø²Ù ÙÙÙÙ PDF Ø£Ù DOCX Ø£Ù ØµÙØ±Ø©.")
     except Exception as e:
-        send_message(chat_id, 'صار خطأ أثناء قراءة الملف:\n' + str(e))
+        send_message(chat_id, "Ø­Ø¯Ø« Ø®Ø·Ø£ Ø£Ø«ÙØ§Ø¡ ÙØ±Ø§Ø¡Ø© Ø§ÙÙÙÙ:\n" + str(e))
 
 def handle_photo(chat_id, photos):
     try:
-        best_photo = photos[-1]
-        file_id = best_photo['file_id']
-        local_path = download_telegram_file(file_id, 'uploaded_graph.jpg')
+        best = photos[-1]
+        file_id = best["file_id"]
+        local_path = download_telegram_file(file_id, "uploaded_image.jpg")
         IMAGE_CONTEXT[chat_id] = local_path
-        send_message(chat_id, 'تم استلام الصورة بنجاح.\n\nاكتب:\n/graph\nحلل الرسم هندسياً وحدد السلوك والملاحظات')
+        send_message(chat_id, "ØªÙ Ø§Ø³ØªÙØ§Ù Ø§ÙØµÙØ±Ø© Ø¨ÙØ¬Ø§Ø­. Ø§ÙØªØ¨Ù /graph ÙØªØ­ÙÙÙ Ø§ÙØ±Ø³Ù Ø£Ù Ø§ÙØ´ÙÙ ÙÙØ¯Ø³ÙØ§Ù.")
     except Exception as e:
-        send_message(chat_id, 'صار خطأ أثناء تحميل الصورة:\n' + str(e))
-
-def parse_numbers_list(text, key):
-    pattern = key + r'\s*=\s*\[([^\]]+)\]'
-    match = re.search(pattern, text, re.IGNORECASE)
-    if not match:
-        return None
-    numbers = []
-    for item in match.group(1).split(','):
-        try:
-            numbers.append(float(item.strip()))
-        except Exception:
-            pass
-    return numbers
-
-# تم تعطيل دالة الرسم المؤقتة لتجنب خطأ التثبيت
-def try_generate_plot(chat_id, text):
-    send_message(chat_id, 'عذراً، ميزة رسم المنحنيات (/plot) معطلة حالياً للصيانة. يمكنك طلب تحليل البيانات نصياً عبر أمر /analyze.')
-    return True 
+        send_message(chat_id, "Ø­Ø¯Ø« Ø®Ø·Ø£ Ø£Ø«ÙØ§Ø¡ ØªØ­ÙÙÙ Ø§ÙØµÙØ±Ø©:\n" + str(e))
 
 def is_graph_command(text):
     t = text.lower().strip()
-    return t.startswith('/graph') or t.startswith('/interpret_graph') or t.startswith('/interpret graph')
-
-def is_plot_command(text):
-    return text.lower().strip().startswith('/plot')
+    return t.startswith("/graph") or t.startswith("/interpret_graph")
 
 def is_export_command(text):
     t = text.lower().strip()
-    return t.startswith('/export_sim') or t.startswith('/pvto') or t.startswith('/pvtg') or t.startswith('/eclipse') or t.startswith('/cmg')
+    return t.startswith(("/export_sim", "/pvto", "/pvtg", "/eclipse", "/cmg"))
+
+def is_plot_command(text):
+    return text.lower().strip().startswith("/plot")
 
 def is_surface_separator_question(text):
     t = text.lower()
-    has_oil = ('surface separator oil' in t or 'separator oil' in t or 'عينة زيت من الفاصل' in t or 'زيت من الفاصل' in t or 'زيت من الفاصل السطحي' in t)
-    has_gas = ('separator gas' in t or 'عينة غاز من الفاصل' in t or 'غاز من الفاصل' in t or 'غاز من الفاصل السطحي' in t)
+    has_oil = "surface separator oil" in t or "separator oil" in t or "Ø²ÙØª ÙÙ Ø§ÙÙØ§ØµÙ" in t or "Ø¹ÙÙØ© Ø²ÙØª" in t
+    has_gas = "separator gas" in t or "ØºØ§Ø² ÙÙ Ø§ÙÙØ§ØµÙ" in t or "Ø¹ÙÙØ© ØºØ§Ø²" in t
     return has_oil and has_gas
+
+def start_message():
+    return """
+Ø£ÙÙØ§Ù Ø¨Ù ÙÙ PVT Lab AI Bot.
+
+Ø£ÙØ§ ÙØ³Ø§Ø¹Ø¯ ÙÙØ¯Ø³Ù ÙØªØ®ØµØµ ÙÙ:
+- PVT Laboratory
+- Reservoir Fluid Analysis
+- Reservoir Simulation
+- PDF/DOCX report analysis
+- Graph and figure interpretation
+- Eclipse / CMG PVT guidance
+
+Ø§ÙØ£ÙØ§ÙØ±:
+/analyze
+/report
+/calc
+/plot
+/graph
+/interpret_graph
+/check
+/export_sim
+/pvto
+/pvtg
+/eclipse
+/cmg
+
+ÙÙØ§Ø­Ø¸Ø©:
+ÙØ§ Ø£Ø­Ø³Ø¨ ÙÙÙØ§Ù ÙÙØ§Ø¦ÙØ© Ø£Ù Ø£ÙØªØ¨ Ø¨ÙØ§ÙØ§Øª ÙØ®ØªØ¨Ø±ÙØ© Ø±ÙÙÙØ© Ø¥ÙØ§ Ø¥Ø°Ø§ Ø²ÙØ¯ØªÙÙ Ø¨Ø§ÙØ¨ÙØ§ÙØ§Øª.
+"""
+
+def surface_separator_direct_answer():
+    return """
+ØªØ­ÙÙÙ ÙÙØ¯Ø³Ù ÙØ¹ÙÙØ© Ø²ÙØª ÙÙ Ø§ÙÙØ§ØµÙ Ø§ÙØ³Ø·Ø­Ù ÙØ¹ Ø¹ÙÙØ© ØºØ§Ø² ÙÙ Ø§ÙÙØ§ØµÙ
+
+ÙÙØ¹ Ø§ÙØ¹ÙÙØ§Øª
+
+Ø§ÙØ¹ÙÙØ§Øª Ø§ÙÙØ°ÙÙØ±Ø© ÙÙ Ø¹ÙÙØ§Øª Ø³Ø·Ø­ÙØ© ÙÙÙØµÙØ©:
+- Surface Separator Oil Sample: Ø¹ÙÙØ© Ø²ÙØª ÙÙ Ø§ÙÙØ§ØµÙ Ø§ÙØ³Ø·Ø­Ù.
+- Separator Gas Sample: Ø¹ÙÙØ© ØºØ§Ø² ÙÙ Ø§ÙÙØ§ØµÙ.
+
+ÙØ°Ù Ø§ÙØ¹ÙÙØ§Øª ÙØ§ ØªÙØ«Ù Ø³Ø§Ø¦Ù Ø§ÙÙÙÙÙ Ø§ÙØ£ØµÙÙ ÙØ¨Ø§Ø´Ø±Ø© ÙØ«Ù Bottom Hole SampleØ ÙØ£Ù Ø§ÙØ²ÙØª ÙØ§ÙØºØ§Ø² Ø§ÙÙØµÙØ§ Ø¹ÙØ¯ Ø¸Ø±ÙÙ Ø§ÙÙØ§ØµÙ Ø§ÙØ³Ø·Ø­Ù. ÙØ°ÙÙ ÙÙØ²Ù Ø¹Ø§Ø¯Ø© Ø¥Ø¬Ø±Ø§Ø¡ Recombination ÙØ¥Ø¹Ø§Ø¯Ø© Ø¨ÙØ§Ø¡ Ø³Ø§Ø¦Ù Ø§ÙÙÙÙÙ ÙØ¨Ù Ø§ÙØ­ÙÙ Ø¹ÙÙ Ø®ÙØ§Øµ PVT Ø§ÙÙÙØ§Ø¦ÙØ©.
+
+Ø§ÙØ¨ÙØ§ÙØ§Øª Ø§ÙÙØ·ÙÙØ¨Ø©
+
+- Separator Pressure Ø¶ØºØ· Ø§ÙÙØ§ØµÙ.
+- Separator Temperature Ø¯Ø±Ø¬Ø© Ø­Ø±Ø§Ø±Ø© Ø§ÙÙØ§ØµÙ.
+- Oil Rate ÙØ¹Ø¯Ù Ø¥ÙØªØ§Ø¬ Ø§ÙØ²ÙØª.
+- Gas Rate ÙØ¹Ø¯Ù Ø¥ÙØªØ§Ø¬ Ø§ÙØºØ§Ø².
+- Producing GOR Ø£Ù Separator GOR ÙØ³Ø¨Ø© Ø§ÙØºØ§Ø² Ø¥ÙÙ Ø§ÙØ²ÙØª.
+- Separator Gas Composition ØªØ±ÙÙØ¨ ØºØ§Ø² Ø§ÙÙØ§ØµÙ.
+- Separator Oil Ø£Ù Stock Tank Oil Composition ØªØ±ÙÙØ¨ Ø§ÙØ²ÙØª.
+- Oil Density ÙØ«Ø§ÙØ© Ø§ÙØ²ÙØª.
+- API Gravity Ø¯Ø±Ø¬Ø© API.
+- Gas Specific Gravity Ø§ÙÙØ«Ø§ÙØ© Ø§ÙÙÙØ¹ÙØ© ÙÙØºØ§Ø².
+- Water Cut Ø£Ù ÙØ¬ÙØ¯ ÙØ³ØªØ­ÙØ¨.
+- CO2 Ù H2S Ø¥Ù ÙØ¬Ø¯Øª.
+
+Ø§ÙØ§Ø®ØªØ¨Ø§Ø±Ø§Øª Ø§ÙÙØ·ÙÙØ¨Ø©
+
+1. Sample QC
+ÙØ­Øµ Ø­Ø§ÙØ© Ø§ÙØ¹ÙÙØ§ØªØ Ø§ÙØªØ³Ø±ÙØ¨Ø Ø¶ØºØ· Ø§ÙØ¹ÙÙØ©Ø ÙØªÙØ«ÙÙÙØ© Ø§ÙØ¹ÙÙØ©.
+
+2. Compositional Analysis
+ØªØ­ÙÙÙ ØªØ±ÙÙØ¨Ù ÙÙØºØ§Ø² ÙØ§ÙØ²ÙØªØ ÙØ¹ ØªÙØµÙÙ C7+ Ø£Ù C12+ Ø­Ø³Ø¨ ÙØ¸Ø§Ù Ø§ÙÙØ®ØªØ¨Ø±.
+
+3. Recombination
+Ø¥Ø¹Ø§Ø¯Ø© ØªØ±ÙÙØ¨ Ø²ÙØª Ø§ÙÙØ§ØµÙ ÙØ¹ ØºØ§Ø² Ø§ÙÙØ§ØµÙ Ø¨Ø§Ø³ØªØ®Ø¯Ø§Ù Producing GOR Ø£Ù ÙØ¹Ø¯ÙØ§Øª Ø§ÙØ²ÙØª ÙØ§ÙØºØ§Ø² ÙØ¸Ø±ÙÙ Ø§ÙÙØ§ØµÙ.
+
+4. Validation of Recombined Fluid
+Ø§ÙØªØ£ÙØ¯ ÙÙ Ø£Ù Ø§ÙØ¹ÙÙØ© Ø§ÙÙØ¹Ø§Ø¯ ØªØ±ÙÙØ¨ÙØ§ ÙØ³ØªÙØ±Ø© ÙØªÙØ«Ù Ø³Ø§Ø¦Ù Ø§ÙÙÙÙÙ Ø¨Ø´ÙÙ ÙÙØ¨ÙÙ.
+
+5. CCE Ø£Ù CME
+ÙØªØ­Ø¯ÙØ¯ Ø¶ØºØ· Ø§ÙØªØ´Ø¨Ø¹ ÙØ³ÙÙÙ Ø§ÙØ­Ø¬Ù ÙØ¹ Ø§ÙØ¶ØºØ·.
+
+6. DV Differential Vaporization
+Ø¥Ø°Ø§ ÙØ§Ù Ø§ÙÙØ¸Ø§Ù Black Oil Ø£Ù Volatile OilØ ÙÙØ­ØµÙÙ Ø¹ÙÙ Rs Ù Bo ÙØ§ÙÙØ«Ø§ÙØ© ÙØ§ÙÙØ²ÙØ¬Ø©.
+
+7. CVD Constant Volume Depletion
+Ø¥Ø°Ø§ ÙØ§Ù Ø§ÙÙØ¸Ø§Ù Gas CondensateØ ÙØ¯Ø±Ø§Ø³Ø© Liquid Dropout Ù Dew Point Ù CGR.
+
+8. Separator Test
+ÙØªÙÙÙÙ ØªØ£Ø«ÙØ± Ø¸Ø±ÙÙ Ø§ÙÙØ§ØµÙ Ø¹ÙÙ GOR Ù Stock Tank Oil Ù API Ù shrinkage.
+
+9. Viscosity Test
+ÙÙÙØ§Ø³ ÙØ²ÙØ¬Ø© Ø§ÙØ²ÙØª ÙØ§ÙØºØ§Ø² Ø¹ÙØ¯ Ø§ÙØ­Ø§Ø¬Ø©.
+
+Ø§ÙØ­Ø³Ø§Ø¨Ø§Øª Ø§ÙÙÙÙÙØ© Ø¹ÙØ¯ ØªÙÙØ± Ø§ÙØ¨ÙØ§ÙØ§Øª
+
+- Recombination Ratio.
+- Total GOR.
+- Rs ÙØ³Ø¨Ø© Ø§ÙØºØ§Ø² Ø§ÙÙØ°Ø§Ø¨.
+- Bo ÙØ¹Ø§ÙÙ Ø­Ø¬Ù Ø§ÙØªÙÙÙÙ ÙÙØ²ÙØª.
+- Bg ÙØ¹Ø§ÙÙ Ø­Ø¬Ù Ø§ÙØªÙÙÙÙ ÙÙØºØ§Ø².
+- Z-factor.
+- Oil Density.
+- API Gravity.
+- Oil Viscosity.
+- Gas Viscosity.
+- Compressibility.
+- Y-Function.
+
+Ø§ÙÙÙØ­ÙÙØ§Øª Ø§ÙÙØ·ÙÙØ¨Ø©
+
+- Pressure vs Bo.
+- Pressure vs Rs.
+- Pressure vs Oil Viscosity.
+- Pressure vs Density.
+- Pressure vs Relative Volume.
+- Pressure vs Y-Function.
+- ÙÙØºØ§Ø² Ø§ÙÙÙØ«Ù: Pressure vs Liquid Dropout Ù Pressure vs CGR.
+
+Ø¥Ø¹Ø¯Ø§Ø¯ Ø§ÙÙØ­Ø§ÙØ§Ø©
+
+Ø¥Ø°Ø§ ÙØ§Ù Ø§ÙØ³Ø§Ø¦Ù Black Oil:
+ØªØ³ØªØ®Ø¯Ù Ø¨ÙØ§ÙØ§Øª DV Ù Separator Test ÙØªØ¬ÙÙØ² PVTO ÙÙ EclipseØ Ø¨Ø´Ø±Ø· ØªÙÙØ± Pressure Ù Rs Ù Bo Ù Oil Viscosity.
+
+Ø¥Ø°Ø§ ÙØ§Ù Ø§ÙØ³Ø§Ø¦Ù Gas Condensate Ø£Ù Volatile Oil:
+Ø§ÙØ£ÙØ¶Ù Ø§Ø³ØªØ®Ø¯Ø§Ù Compositional Model ÙØ¹ EOS Tuning ÙÙ CMG Ø£Ù Eclipse Compositional.
+
+Ø§ÙØ®ÙØ§ØµØ©
+
+Ø§ÙØ®Ø·ÙØ© Ø§ÙØµØ­ÙØ­Ø© ÙÙØ³Øª Ø§Ø¹ØªØ¨Ø§Ø± Ø¹ÙÙØ§Øª Ø§ÙØ³Ø·Ø­ ÙÙØ«ÙØ© ÙØ¨Ø§Ø´Ø±Ø© ÙÙÙÙÙÙØ Ø¨Ù Ø¥Ø¬Ø±Ø§Ø¡ Recombination Ø«Ù Ø§Ø®ØªØ¨Ø§Ø±Ø§Øª PVT Ø§ÙÙÙØ§Ø³Ø¨Ø©. Ø¨Ø¯ÙÙ Ø¨ÙØ§ÙØ§Øª Ø§ÙÙØ§ØµÙ Ù GOR ÙØ§ÙØªØ±ÙÙØ¨ ÙØ§ ÙÙÙÙ Ø­Ø³Ø§Ø¨ ÙÙÙ ÙÙØ§Ø¦ÙØ© ÙÙØ«ÙÙØ© ÙØ«Ù Bo Ø£Ù Rs Ø£Ù Bubble Point Pressure.
+"""
 
 while True:
     try:
-        updates = requests.get(f'{TELEGRAM_URL}/getUpdates', params={'offset': offset + 1, 'timeout': 30}, timeout=40).json()
-        for update in updates.get('result', []):
-            offset = update['update_id']
-            if 'message' not in update:
+        updates = requests.get(
+            f"{TELEGRAM_URL}/getUpdates",
+            params={"offset": offset + 1, "timeout": 30},
+            timeout=40
+        ).json()
+
+        for update in updates.get("result", []):
+            offset = update["update_id"]
+            if "message" not in update:
                 continue
-            message = update['message']
-            chat_id = message['chat']['id']
-            if 'document' in message:
-                handle_document(chat_id, message['document'])
+
+            message = update["message"]
+            chat_id = message["chat"]["id"]
+
+            if "document" in message:
+                handle_document(chat_id, message["document"])
                 continue
-            if 'photo' in message:
-                handle_photo(chat_id, message['photo'])
+
+            if "photo" in message:
+                handle_photo(chat_id, message["photo"])
                 continue
-            if 'text' not in message:
+
+            if "text" not in message:
+                send_message(chat_id, "Ø£Ø±Ø³ÙÙ ÙØµØ§Ù Ø£Ù ÙÙÙ PDF/DOCX Ø£Ù ØµÙØ±Ø©.")
                 continue
-            text = message['text']
+
+            text = message["text"]
             context = FILE_CONTEXT.get(chat_id)
-            if text == '/start':
-                reply = 'أهلاً بك في PVT Lab AI Bot.\n\nأنا مساعد هندسي متخصص في PVT Lab و Reservoir Fluid Analysis و Reservoir Simulation.\n\nالأوامر:\n/analyze\n/report\n/calc\n/plot\n/graph\n/interpret_graph\n/check\n/export_sim\n/pvto\n/pvtg\n/eclipse\n/cmg'
-                send_message(chat_id, reply)
+
+            if text.strip() == "/start":
+                send_message(chat_id, start_message())
                 continue
+
             if is_surface_separator_question(text):
-                send_message(chat_id, surface_separator_analysis_ar())
+                send_message(chat_id, surface_separator_direct_answer())
                 continue
+
             if is_graph_command(text):
                 image_path = IMAGE_CONTEXT.get(chat_id)
                 if not image_path:
-                    send_message(chat_id, 'ارسلي صورة الرسم أو Figure أولاً، وبعدها اكتبي /graph.')
+                    send_message(chat_id, "Ø£Ø±Ø³ÙÙ ØµÙØ±Ø© Ø§ÙØ±Ø³Ù Ø£Ù Figure Ø£ÙÙØ§ÙØ ÙØ¨Ø¹Ø¯ÙØ§ Ø§ÙØªØ¨Ù /graph.")
                     continue
-                prompt = text + '\n\nAnalyze this engineering graph professionally. Identify graph type, axes, trend, anomalies, non-physical behavior, retrograde behavior if applicable, contamination indicators, separator performance issues, engineering meaning, possible causes, and recommendations.'
+                prompt = text + "\n\nAnalyze this engineering figure professionally. Identify axes, units, trend, anomalies, non-physical behavior, retrograde behavior if applicable, contamination indicators, separator performance issues, engineering meaning, possible causes, and recommendations."
                 reply = ask_vision_ai(prompt, image_path, context)
                 send_message(chat_id, reply)
                 continue
+
             if is_plot_command(text):
-                try_generate_plot(chat_id, text)
-                # تم إزالة استدعاء ask_ai هنا لتجنب الرد المكرر عند تعطيل الرسم
-                continue
-            if is_export_command(text):
-                export_prompt = text + '\n\nGenerate simulator export guidance or formatting. Adapt to fluid type and data availability. Include unit validation, consistency checks, simulator warnings, black-oil vs compositional decision, Eclipse/CMG keyword guidance, and missing required data if needed.'
-                reply = ask_ai(export_prompt, context)
+                prompt = text + "\n\nIf numerical data are provided, explain which PVT plot should be prepared and interpret the expected trend. If data are missing, list the exact arrays needed. Do not invent values."
+                reply = ask_ai(prompt, context)
                 send_message(chat_id, reply)
                 continue
+
+            if is_export_command(text):
+                prompt = text + "\n\nGenerate simulator export guidance. Decide black-oil vs compositional based on data. Include unit checks, consistency checks, Eclipse/CMG keyword guidance, warnings, and missing required data."
+                reply = ask_ai(prompt, context)
+                send_message(chat_id, reply)
+                continue
+
             reply = ask_ai(text, context)
             send_message(chat_id, reply)
+
     except Exception as e:
         print(e)
-    time.sleep(1)
 
+    time.sleep(1)
