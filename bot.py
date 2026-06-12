@@ -13,6 +13,7 @@ GROQ_API_KEY = os.getenv("OPENAI_API_KEY")
 TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
+# تم تحديث الموديل لتجنب مشاكل الـ Rate Limit
 TEXT_MODEL = os.getenv("GROQ_TEXT_MODEL", "llama-3.3-70b-versatile")
 VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
 
@@ -33,46 +34,46 @@ Language rules:
 
 Correct terminology:
 PVT = Pressure-Volume-Temperature.
-Reservoir = Ø§ÙÙÙÙÙ Reservoir.
-Well = Ø§ÙØ¨Ø¦Ø± Well.
-Formation = Ø§ÙØªÙÙÙÙ Formation.
-Bottom Hole Sample = Ø¹ÙÙØ© ÙØ§Ø¹ Ø§ÙØ¨Ø¦Ø± Bottom Hole Sample.
-Surface Separator Oil Sample = Ø¹ÙÙØ© Ø²ÙØª ÙÙ Ø§ÙÙØ§ØµÙ Ø§ÙØ³Ø·Ø­Ù Surface Separator Oil Sample.
-Separator Gas Sample = Ø¹ÙÙØ© ØºØ§Ø² ÙÙ Ø§ÙÙØ§ØµÙ Separator Gas Sample.
-Stock Tank Oil = Ø²ÙØª Ø§ÙØ®Ø²Ø§Ù Ø§ÙØ³Ø·Ø­Ù Stock Tank Oil.
-Recombined Sample = Ø¹ÙÙØ© ÙØ¹Ø§Ø¯ ØªØ±ÙÙØ¨ÙØ§ Recombined Sample.
-Recombination = Ø¥Ø¹Ø§Ø¯Ø© ØªØ±ÙÙØ¨ Ø§ÙØ¹ÙÙØ© Recombination.
-Bubble Point Pressure = Ø¶ØºØ· ÙÙØ·Ø© Ø§ÙÙÙØ§Ø¹Ø© Bubble Point Pressure.
-Dew Point Pressure = Ø¶ØºØ· ÙÙØ·Ø© Ø§ÙÙØ¯Ù Dew Point Pressure.
-Bo = ÙØ¹Ø§ÙÙ Ø­Ø¬Ù Ø§ÙØªÙÙÙÙ ÙÙØ²ÙØª Oil Formation Volume Factor.
-Bg = ÙØ¹Ø§ÙÙ Ø­Ø¬Ù Ø§ÙØªÙÙÙÙ ÙÙØºØ§Ø² Gas Formation Volume Factor.
-Rs = ÙØ³Ø¨Ø© Ø§ÙØºØ§Ø² Ø§ÙÙØ°Ø§Ø¨ Solution Gas-Oil Ratio.
-GOR = ÙØ³Ø¨Ø© Ø§ÙØºØ§Ø² Ø¥ÙÙ Ø§ÙØ²ÙØª Gas-Oil Ratio.
-CGR = ÙØ³Ø¨Ø© Ø§ÙÙÙØ«ÙØ§Øª Ø¥ÙÙ Ø§ÙØºØ§Ø² Condensate-Gas Ratio.
-Z-factor = ÙØ¹Ø§ÙÙ Ø§ÙØ§ÙØ­Ø±Ø§Ù Ø§ÙØºØ§Ø²Ù Gas Deviation Factor.
-Viscosity = Ø§ÙÙØ²ÙØ¬Ø© Viscosity.
-Density = Ø§ÙÙØ«Ø§ÙØ© Density.
-Specific Gravity = Ø§ÙÙØ«Ø§ÙØ© Ø§ÙÙÙØ¹ÙØ© Specific Gravity.
-API Gravity = Ø¯Ø±Ø¬Ø© API.
+Reservoir = المكمن Reservoir.
+Well = البئر Well.
+Formation = التكوين Formation.
+Bottom Hole Sample = عينة قاع البئر Bottom Hole Sample.
+Surface Separator Oil Sample = عينة زيت من الفاصل السطحي Surface Separator Oil Sample.
+Separator Gas Sample = عينة غاز من الفاصل Separator Gas Sample.
+Stock Tank Oil = زيت الخزان السطحي Stock Tank Oil.
+Recombined Sample = عينة معاد تركيبها Recombined Sample.
+Recombination = إعادة تركيب العينة Recombination.
+Bubble Point Pressure = ضغط نقطة الفقاعة Bubble Point Pressure.
+Dew Point Pressure = ضغط نقطة الندى Dew Point Pressure.
+Bo = معامل حجم التكوين للزيت Oil Formation Volume Factor.
+Bg = معامل حجم التكوين للغاز Gas Formation Volume Factor.
+Rs = نسبة الغاز المذاب Solution Gas-Oil Ratio.
+GOR = نسبة الغاز إلى الزيت Gas-Oil Ratio.
+CGR = نسبة المكثفات إلى الغاز Condensate-Gas Ratio.
+Z-factor = معامل الانحراف الغازي Gas Deviation Factor.
+Viscosity = اللزوجة Viscosity.
+Density = الكثافة Density.
+Specific Gravity = الكثافة النوعية Specific Gravity.
+API Gravity = درجة API.
 CCE = Constant Composition Expansion.
 CME = Constant Mass Expansion.
 DV = Differential Vaporization / Differential Liberation.
 CVD = Constant Volume Depletion.
-Separator Test = Ø§Ø®ØªØ¨Ø§Ø± Ø§ÙÙØ§ØµÙ Separator Test.
-Flash Test = Ø§Ø®ØªØ¨Ø§Ø± Ø§ÙÙÙÙØ¶ Flash Test.
-Compositional Analysis = Ø§ÙØªØ­ÙÙÙ Ø§ÙØªØ±ÙÙØ¨Ù Compositional Analysis.
-EOS Tuning = ÙÙØ§Ø¡ÙØ© ÙØ¹Ø§Ø¯ÙØ© Ø§ÙØ­Ø§ÙØ© EOS Tuning.
-PVTO = Ø¬Ø¯ÙÙ PVTO ÙÙØ­Ø§ÙÙ Eclipse.
-PVTG = Ø¬Ø¯ÙÙ PVTG ÙÙØ­Ø§ÙÙ Eclipse.
-CMG PVT Input = ÙØ¯Ø®ÙØ§Øª PVT ÙÙØ­Ø§ÙÙ CMG.
+Separator Test = اختبار الفاصل Separator Test.
+Flash Test = اختبار الوميض Flash Test.
+Compositional Analysis = التحليل التركيب Compositional Analysis.
+EOS Tuning = مواءمة معادلة الحالة EOS Tuning.
+PVTO = جدول PVTO لمحاكي Eclipse.
+PVTG = جدول PVTG لمحاكي Eclipse.
+CMG PVT Input = مدخلات PVT لمحاكي CMG.
 
 Forbidden terms:
-- Do not call Bo Ø§ÙØ¶ØºØ· Ø§ÙØ¨ÙÙÙ or Ø§ÙÙØ¹Ø§ÙÙ Ø§ÙØ¨ÙÙÙ.
-- Do not call Rs Ø§ÙØªØ±Ø´ÙØ­.
-- Do not call GOR Ø§ÙÙØ³Ø¨Ø© Ø§ÙÙØ¦ÙÙØ© ÙÙØºØ§Ø².
-- Do not say Ø§ÙÙÙØ²Ø¬ for Viscosity.
-- Do not say Ø§ÙØ­ÙØ±Ø© for Reservoir.
-- Do not say Ø§ÙØ³Ø·ÙØ¹ Ø§ÙÙÙØ¹Ù or Ø§Ø®ØªØ¨Ø§Ø± Ø§ÙØ³Ø·ÙØ¹.
+- Do not call Bo الضغط البيني or المعامل البيني.
+- Do not call Rs الترشيح.
+- Do not call GOR النسبة المئوية للغاز.
+- Do not say الليزج for Viscosity.
+- Do not say الحفرة for Reservoir.
+- Do not say السطوع النوعي or اختبار السطوع.
 - Do not define PVT as Pressuring Volume and Temperature.
 - Do not invent numerical PVT values unless the user clearly asks for demo/sample values.
 - Do not create fake lab tables with fake values.
@@ -121,16 +122,16 @@ def clean_text(text):
         "[": "",
         "]": "",
         "Pressuring Volume and Temperature": "Pressure-Volume-Temperature",
-        "Ø§ÙØ¶ØºØ· Ø§ÙØ¨ÙÙÙ": "ÙØ¹Ø§ÙÙ Ø­Ø¬Ù Ø§ÙØªÙÙÙÙ",
-        "Ø§ÙÙØ¹Ø§ÙÙ Ø§ÙØ¨ÙÙÙ": "ÙØ¹Ø§ÙÙ Ø­Ø¬Ù Ø§ÙØªÙÙÙÙ",
-        "Ø§ÙØªØ±Ø´ÙØ­": "ÙØ³Ø¨Ø© Ø§ÙØºØ§Ø² Ø§ÙÙØ°Ø§Ø¨",
-        "Ø§ÙÙØ³Ø¨Ø© Ø§ÙÙØ¦ÙÙØ© ÙÙØºØ§Ø²": "ÙØ³Ø¨Ø© Ø§ÙØºØ§Ø² Ø¥ÙÙ Ø§ÙØ²ÙØª",
-        "ÙØ³Ø¨Ø© Ø§ÙØºØ§Ø² Ø§ÙÙØ¦ÙÙØ©": "ÙØ³Ø¨Ø© Ø§ÙØºØ§Ø² Ø¥ÙÙ Ø§ÙØ²ÙØª",
-        "Ø§ÙÙÛØ³ÙÙØ²ÙØ©": "Ø§ÙÙØ²ÙØ¬Ø©",
-        "Ø§ÙÙÙØ²Ø¬": "Ø§ÙÙØ²ÙØ¬Ø©",
-        "Ø§ÙØ­ÙØ±Ø©": "Ø§ÙÙÙÙÙ",
-        "Ø§ÙØ³Ø·ÙØ¹ Ø§ÙÙÙØ¹Ù": "Ø§ÙÙØ«Ø§ÙØ© Ø§ÙÙÙØ¹ÙØ©",
-        "Ø§Ø®ØªØ¨Ø§Ø± Ø§ÙØ³Ø·ÙØ¹": "Ø§Ø®ØªØ¨Ø§Ø± Ø§ÙÙØ«Ø§ÙØ© Ø§ÙÙÙØ¹ÙØ©",
+        "الضغط البيني": "معامل حجم التكوين",
+        "المعامل البيني": "معامل حجم التكوين",
+        "الترشيح": "نسبة الغاز المذاب",
+        "النسبة المئوية للغاز": "نسبة الغاز إلى الزيت",
+        "نسبة الغاز المئوية": "نسبة الغاز إلى الزيت",
+        "الويسكوزية": "اللزوجة",
+        "الليزج": "اللزوجة",
+        "الحفرة": "المكمن",
+        "السطوع النوعي": "الكثافة النوعية",
+        "اختبار السطوع": "اختبار الكثافة النوعية",
         "Volume Expansion Factor": "Oil Formation Volume Factor",
     }
     for wrong, correct in replacements.items():
@@ -140,7 +141,7 @@ def clean_text(text):
 def send_message(chat_id, text):
     text = clean_text(text)
     if not text:
-        text = "ÙÙ Ø£ØªÙÙÙ ÙÙ ØªÙÙÙØ¯ Ø±Ø¯ ÙØ§Ø¶Ø­."
+        text = "لم أتمكن من توليد رد واضح."
     for i in range(0, len(text), 3900):
         requests.post(
             f"{TELEGRAM_URL}/sendMessage",
@@ -217,9 +218,9 @@ def ask_ai(user_text, file_context=None):
         data = r.json()
         if "choices" in data:
             return data["choices"][0]["message"]["content"]
-        return "Ø­Ø¯Ø« Ø®Ø·Ø£ ÙÙ Groq:\n" + str(data)[:1500]
+        return "حدث خطأ من Groq:\n" + str(data)[:1500]
     except Exception as e:
-        return "Ø­Ø¯Ø« Ø®Ø·Ø£ ÙÙ Ø§ÙØ§ØªØµØ§Ù Ø¨Ø®Ø¯ÙØ© Ø§ÙØ°ÙØ§Ø¡ Ø§ÙØ§ØµØ·ÙØ§Ø¹Ù:\n" + str(e)
+        return "حدث خطأ في الاتصال بخدمة الذكاء الاصطناعي:\n" + str(e)
 
 def ask_vision_ai(prompt, image_path, file_context=None):
     image_url = encode_image_to_data_url(image_path)
@@ -250,9 +251,9 @@ def ask_vision_ai(prompt, image_path, file_context=None):
         data = r.json()
         if "choices" in data:
             return data["choices"][0]["message"]["content"]
-        return "Ø­Ø¯Ø« Ø®Ø·Ø£ ÙÙ Groq Vision:\n" + str(data)[:1500]
+        return "حدث خطأ من Groq Vision:\n" + str(data)[:1500]
     except Exception as e:
-        return "Ø­Ø¯Ø« Ø®Ø·Ø£ ÙÙ ØªØ­ÙÙÙ Ø§ÙØµÙØ±Ø©:\n" + str(e)
+        return "حدث خطأ في تحليل الصورة:\n" + str(e)
 
 def handle_document(chat_id, document):
     try:
@@ -265,29 +266,29 @@ def handle_document(chat_id, document):
         if lower.endswith(".pdf"):
             text = extract_pdf_text(local_path)
             if not text:
-                send_message(chat_id, "ÙØ±Ø£Øª ÙÙÙ PDF ÙÙÙ ÙÙ Ø£Ø³ØªØ®Ø±Ø¬ ÙØµØ§Ù ÙØ§Ø¶Ø­Ø§Ù. ØºØ§ÙØ¨Ø§Ù Ø§ÙÙÙÙ Ø³ÙØ§Ù ØµÙØ±Ø©. Ø£Ø±Ø³ÙÙ Ø§ÙØµÙØ­Ø§Øª Ø£Ù Ø§ÙØ±Ø³ÙÙØ§Øª ÙØµÙØ±Ø Ø£Ù Ø§Ø±ÙØ¹Ù PDF ÙØµÙ.")
+                send_message(chat_id, "قرأت ملف PDF لكن لم أستخرج نصاً واضحاً. غالباً الملف سكان صورة. أرسل الصفحات أو الرسومات كصور، أو ارفعي PDF نصي.")
                 return
             FILE_CONTEXT[chat_id] = text
-            send_message(chat_id, "ØªÙ ÙØ±Ø§Ø¡Ø© PDF Ø¨ÙØ¬Ø§Ø­. Ø§ÙÙÙÙ Ø£ØµØ¨Ø­ ÙØ±Ø¬Ø¹Ø§Ù ÙÙØ°Ù Ø§ÙÙØ­Ø§Ø¯Ø«Ø©. Ø§ÙØªØ¨Ù /analyze ÙØªØ­ÙÙÙ Ø§ÙØªÙØ±ÙØ± ÙÙØ¯Ø³ÙØ§Ù.")
+            send_message(chat_id, "تم قراءة PDF بنجاح. الملف أصبح مرجعاً لهذه المحادثة. اكتب /analyze لتحليل التقرير هندسياً.")
             return
 
         if lower.endswith(".docx"):
             text = extract_docx_text(local_path)
             if not text:
-                send_message(chat_id, "ÙØ±Ø£Øª ÙÙÙ DOCX ÙÙÙ ÙÙ Ø£Ø¬Ø¯ ÙØµØ§Ù ÙØ§Ø¶Ø­Ø§Ù.")
+                send_message(chat_id, "قرأت ملف DOCX لكن لم أجد نصاً واضحاً.")
                 return
             FILE_CONTEXT[chat_id] = text
-            send_message(chat_id, "ØªÙ ÙØ±Ø§Ø¡Ø© DOCX Ø¨ÙØ¬Ø§Ø­. Ø§ÙÙÙÙ Ø£ØµØ¨Ø­ ÙØ±Ø¬Ø¹Ø§Ù ÙÙØ°Ù Ø§ÙÙØ­Ø§Ø¯Ø«Ø©.")
+            send_message(chat_id, "تم قراءة DOCX بنجاح. الملف أصبح مرجعاً لهذه المحادثة.")
             return
 
         if mime_type.startswith("image/") or lower.endswith((".png", ".jpg", ".jpeg", ".webp")):
             IMAGE_CONTEXT[chat_id] = local_path
-            send_message(chat_id, "ØªÙ Ø§Ø³ØªÙØ§Ù Ø§ÙØµÙØ±Ø© Ø¨ÙØ¬Ø§Ø­. Ø§ÙØªØ¨Ù /graph ÙØªØ­ÙÙÙ Ø§ÙØ±Ø³Ù Ø£Ù Ø§ÙØ´ÙÙ ÙÙØ¯Ø³ÙØ§Ù.")
+            send_message(chat_id, "تم استلام الصورة بنجاح. اكتب /graph لتحليل الرسم أو الشكل هندسياً.")
             return
 
-        send_message(chat_id, "Ø§ÙÙÙÙ ÙØ§Ø²Ù ÙÙÙÙ PDF Ø£Ù DOCX Ø£Ù ØµÙØ±Ø©.")
+        send_message(chat_id, "الملف لازم يكون PDF أو DOCX أو صورة.")
     except Exception as e:
-        send_message(chat_id, "Ø­Ø¯Ø« Ø®Ø·Ø£ Ø£Ø«ÙØ§Ø¡ ÙØ±Ø§Ø¡Ø© Ø§ÙÙÙÙ:\n" + str(e))
+        send_message(chat_id, "حدث خطأ أثناء قراءة الملف:\n" + str(e))
 
 def handle_photo(chat_id, photos):
     try:
@@ -295,9 +296,9 @@ def handle_photo(chat_id, photos):
         file_id = best["file_id"]
         local_path = download_telegram_file(file_id, "uploaded_image.jpg")
         IMAGE_CONTEXT[chat_id] = local_path
-        send_message(chat_id, "ØªÙ Ø§Ø³ØªÙØ§Ù Ø§ÙØµÙØ±Ø© Ø¨ÙØ¬Ø§Ø­. Ø§ÙØªØ¨Ù /graph ÙØªØ­ÙÙÙ Ø§ÙØ±Ø³Ù Ø£Ù Ø§ÙØ´ÙÙ ÙÙØ¯Ø³ÙØ§Ù.")
+        send_message(chat_id, "تم استلام الصورة بنجاح. اكتب /graph لتحليل الرسم أو الشكل هندسياً.")
     except Exception as e:
-        send_message(chat_id, "Ø­Ø¯Ø« Ø®Ø·Ø£ Ø£Ø«ÙØ§Ø¡ ØªØ­ÙÙÙ Ø§ÙØµÙØ±Ø©:\n" + str(e))
+        send_message(chat_id, "حدث خطأ أثناء تحميل الصورة:\n" + str(e))
 
 def is_graph_command(text):
     t = text.lower().strip()
@@ -312,15 +313,15 @@ def is_plot_command(text):
 
 def is_surface_separator_question(text):
     t = text.lower()
-    has_oil = "surface separator oil" in t or "separator oil" in t or "Ø²ÙØª ÙÙ Ø§ÙÙØ§ØµÙ" in t or "Ø¹ÙÙØ© Ø²ÙØª" in t
-    has_gas = "separator gas" in t or "ØºØ§Ø² ÙÙ Ø§ÙÙØ§ØµÙ" in t or "Ø¹ÙÙØ© ØºØ§Ø²" in t
+    has_oil = "surface separator oil" in t or "separator oil" in t or "زيت من الفاصل" in t or "عينة زيت" in t
+    has_gas = "separator gas" in t or "غاز من الفاصل" in t or "عينة غاز" in t
     return has_oil and has_gas
 
 def start_message():
     return """
-Ø£ÙÙØ§Ù Ø¨Ù ÙÙ PVT Lab AI Bot.
+أهلاً بك في PVT Lab AI Bot.
 
-Ø£ÙØ§ ÙØ³Ø§Ø¹Ø¯ ÙÙØ¯Ø³Ù ÙØªØ®ØµØµ ÙÙ:
+أنا مساعد هندسي متخصص في:
 - PVT Laboratory
 - Reservoir Fluid Analysis
 - Reservoir Simulation
@@ -328,7 +329,7 @@ def start_message():
 - Graph and figure interpretation
 - Eclipse / CMG PVT guidance
 
-Ø§ÙØ£ÙØ§ÙØ±:
+الأوامر:
 /analyze
 /report
 /calc
@@ -342,73 +343,73 @@ def start_message():
 /eclipse
 /cmg
 
-ÙÙØ§Ø­Ø¸Ø©:
-ÙØ§ Ø£Ø­Ø³Ø¨ ÙÙÙØ§Ù ÙÙØ§Ø¦ÙØ© Ø£Ù Ø£ÙØªØ¨ Ø¨ÙØ§ÙØ§Øª ÙØ®ØªØ¨Ø±ÙØ© Ø±ÙÙÙØ© Ø¥ÙØ§ Ø¥Ø°Ø§ Ø²ÙØ¯ØªÙÙ Ø¨Ø§ÙØ¨ÙØ§ÙØ§Øª.
+ملاحظة:
+لا أحسب قيماً نهائية أو أكتب بيانات مخبرية رقمية إلا إذا زودتني بالبيانات.
 """
 
 def surface_separator_direct_answer():
     return """
-ØªØ­ÙÙÙ ÙÙØ¯Ø³Ù ÙØ¹ÙÙØ© Ø²ÙØª ÙÙ Ø§ÙÙØ§ØµÙ Ø§ÙØ³Ø·Ø­Ù ÙØ¹ Ø¹ÙÙØ© ØºØ§Ø² ÙÙ Ø§ÙÙØ§ØµÙ
+تحليل هندسي لعينة زيت من الفاصل السطحي مع عينة غاز من الفاصل
 
-ÙÙØ¹ Ø§ÙØ¹ÙÙØ§Øª
+نوع العينات
 
-Ø§ÙØ¹ÙÙØ§Øª Ø§ÙÙØ°ÙÙØ±Ø© ÙÙ Ø¹ÙÙØ§Øª Ø³Ø·Ø­ÙØ© ÙÙÙØµÙØ©:
-- Surface Separator Oil Sample: Ø¹ÙÙØ© Ø²ÙØª ÙÙ Ø§ÙÙØ§ØµÙ Ø§ÙØ³Ø·Ø­Ù.
-- Separator Gas Sample: Ø¹ÙÙØ© ØºØ§Ø² ÙÙ Ø§ÙÙØ§ØµÙ.
+العينات المذكورة هي عينات سطحية منفصلة:
+- Surface Separator Oil Sample: عينة زيت من الفاصل السطحي.
+- Separator Gas Sample: عينة غاز من الفاصل.
 
-ÙØ°Ù Ø§ÙØ¹ÙÙØ§Øª ÙØ§ ØªÙØ«Ù Ø³Ø§Ø¦Ù Ø§ÙÙÙÙÙ Ø§ÙØ£ØµÙÙ ÙØ¨Ø§Ø´Ø±Ø© ÙØ«Ù Bottom Hole SampleØ ÙØ£Ù Ø§ÙØ²ÙØª ÙØ§ÙØºØ§Ø² Ø§ÙÙØµÙØ§ Ø¹ÙØ¯ Ø¸Ø±ÙÙ Ø§ÙÙØ§ØµÙ Ø§ÙØ³Ø·Ø­Ù. ÙØ°ÙÙ ÙÙØ²Ù Ø¹Ø§Ø¯Ø© Ø¥Ø¬Ø±Ø§Ø¡ Recombination ÙØ¥Ø¹Ø§Ø¯Ø© Ø¨ÙØ§Ø¡ Ø³Ø§Ø¦Ù Ø§ÙÙÙÙÙ ÙØ¨Ù Ø§ÙØ­ÙÙ Ø¹ÙÙ Ø®ÙØ§Øµ PVT Ø§ÙÙÙØ§Ø¦ÙØ©.
+هذه العينات لا تمثل سائل المكمن الأصلي مباشرة مثل Bottom Hole Sample، لأن الزيت والغاز انفصلا عند ظروف الفاصل السطحي. لذلك يلزم عادة إجراء Recombination لإعادة بناء سائل المكمن قبل الحكم على خواص PVT النهائية.
 
-Ø§ÙØ¨ÙØ§ÙØ§Øª Ø§ÙÙØ·ÙÙØ¨Ø©
+البيانات المطلوبة
 
-- Separator Pressure Ø¶ØºØ· Ø§ÙÙØ§ØµÙ.
-- Separator Temperature Ø¯Ø±Ø¬Ø© Ø­Ø±Ø§Ø±Ø© Ø§ÙÙØ§ØµÙ.
-- Oil Rate ÙØ¹Ø¯Ù Ø¥ÙØªØ§Ø¬ Ø§ÙØ²ÙØª.
-- Gas Rate ÙØ¹Ø¯Ù Ø¥ÙØªØ§Ø¬ Ø§ÙØºØ§Ø².
-- Producing GOR Ø£Ù Separator GOR ÙØ³Ø¨Ø© Ø§ÙØºØ§Ø² Ø¥ÙÙ Ø§ÙØ²ÙØª.
-- Separator Gas Composition ØªØ±ÙÙØ¨ ØºØ§Ø² Ø§ÙÙØ§ØµÙ.
-- Separator Oil Ø£Ù Stock Tank Oil Composition ØªØ±ÙÙØ¨ Ø§ÙØ²ÙØª.
-- Oil Density ÙØ«Ø§ÙØ© Ø§ÙØ²ÙØª.
-- API Gravity Ø¯Ø±Ø¬Ø© API.
-- Gas Specific Gravity Ø§ÙÙØ«Ø§ÙØ© Ø§ÙÙÙØ¹ÙØ© ÙÙØºØ§Ø².
-- Water Cut Ø£Ù ÙØ¬ÙØ¯ ÙØ³ØªØ­ÙØ¨.
-- CO2 Ù H2S Ø¥Ù ÙØ¬Ø¯Øª.
+- Separator Pressure ضغط الفاصل.
+- Separator Temperature درجة حرارة الفاصل.
+- Oil Rate معدل إنتاج الزيت.
+- Gas Rate معدل إنتاج الغاز.
+- Producing GOR أو Separator GOR نسبة الغاز إلى الزيت.
+- Separator Gas Composition تركيب غاز الفاصل.
+- Separator Oil أو Stock Tank Oil Composition تركيب الزيت.
+- Oil Density كثافة الزيت.
+- API Gravity درجة API.
+- Gas Specific Gravity الكثافة النوعية للغاز.
+- Water Cut أو وجود مستحلب.
+- CO2 و H2S إن وجدت.
 
-Ø§ÙØ§Ø®ØªØ¨Ø§Ø±Ø§Øª Ø§ÙÙØ·ÙÙØ¨Ø©
+الاختبارات المطلوبة
 
 1. Sample QC
-ÙØ­Øµ Ø­Ø§ÙØ© Ø§ÙØ¹ÙÙØ§ØªØ Ø§ÙØªØ³Ø±ÙØ¨Ø Ø¶ØºØ· Ø§ÙØ¹ÙÙØ©Ø ÙØªÙØ«ÙÙÙØ© Ø§ÙØ¹ÙÙØ©.
+فحص حالة العينات، التسريب، ضغط العينة، وتمثيلية العينة.
 
 2. Compositional Analysis
-ØªØ­ÙÙÙ ØªØ±ÙÙØ¨Ù ÙÙØºØ§Ø² ÙØ§ÙØ²ÙØªØ ÙØ¹ ØªÙØµÙÙ C7+ Ø£Ù C12+ Ø­Ø³Ø¨ ÙØ¸Ø§Ù Ø§ÙÙØ®ØªØ¨Ø±.
+تحليل تركيبي للغاز والزيت، مع توصيف C7+ أو C12+ حسب نظام المختبر.
 
 3. Recombination
-Ø¥Ø¹Ø§Ø¯Ø© ØªØ±ÙÙØ¨ Ø²ÙØª Ø§ÙÙØ§ØµÙ ÙØ¹ ØºØ§Ø² Ø§ÙÙØ§ØµÙ Ø¨Ø§Ø³ØªØ®Ø¯Ø§Ù Producing GOR Ø£Ù ÙØ¹Ø¯ÙØ§Øª Ø§ÙØ²ÙØª ÙØ§ÙØºØ§Ø² ÙØ¸Ø±ÙÙ Ø§ÙÙØ§ØµÙ.
+إعادة تركيب زيت الفاصل مع غاز الفاصل باستخدام Producing GOR أو معدلات الزيت والغاز وظروف الفاصل.
 
 4. Validation of Recombined Fluid
-Ø§ÙØªØ£ÙØ¯ ÙÙ Ø£Ù Ø§ÙØ¹ÙÙØ© Ø§ÙÙØ¹Ø§Ø¯ ØªØ±ÙÙØ¨ÙØ§ ÙØ³ØªÙØ±Ø© ÙØªÙØ«Ù Ø³Ø§Ø¦Ù Ø§ÙÙÙÙÙ Ø¨Ø´ÙÙ ÙÙØ¨ÙÙ.
+التأكد من أن العينة المعاد تركيبها مستقرة وتمثل سائل المكمن بشكل مقبول.
 
-5. CCE Ø£Ù CME
-ÙØªØ­Ø¯ÙØ¯ Ø¶ØºØ· Ø§ÙØªØ´Ø¨Ø¹ ÙØ³ÙÙÙ Ø§ÙØ­Ø¬Ù ÙØ¹ Ø§ÙØ¶ØºØ·.
+5. CCE أو CME
+لتحديد ضغط التشبع وسلوك الحجم مع الضغط.
 
 6. DV Differential Vaporization
-Ø¥Ø°Ø§ ÙØ§Ù Ø§ÙÙØ¸Ø§Ù Black Oil Ø£Ù Volatile OilØ ÙÙØ­ØµÙÙ Ø¹ÙÙ Rs Ù Bo ÙØ§ÙÙØ«Ø§ÙØ© ÙØ§ÙÙØ²ÙØ¬Ø©.
+إذا كان النظام Black Oil أو Volatile Oil، للحصول على Rs و Bo والكثافة واللزوجة.
 
 7. CVD Constant Volume Depletion
-Ø¥Ø°Ø§ ÙØ§Ù Ø§ÙÙØ¸Ø§Ù Gas CondensateØ ÙØ¯Ø±Ø§Ø³Ø© Liquid Dropout Ù Dew Point Ù CGR.
+إذا كان النظام Gas Condensate، لدراسة Liquid Dropout و Dew Point و CGR.
 
 8. Separator Test
-ÙØªÙÙÙÙ ØªØ£Ø«ÙØ± Ø¸Ø±ÙÙ Ø§ÙÙØ§ØµÙ Ø¹ÙÙ GOR Ù Stock Tank Oil Ù API Ù shrinkage.
+لتقييم تأثير ظروف الفاصل على GOR و Stock Tank Oil و API و shrinkage.
 
 9. Viscosity Test
-ÙÙÙØ§Ø³ ÙØ²ÙØ¬Ø© Ø§ÙØ²ÙØª ÙØ§ÙØºØ§Ø² Ø¹ÙØ¯ Ø§ÙØ­Ø§Ø¬Ø©.
+لقياس لزوجة الزيت والغاز عند الحاجة.
 
-Ø§ÙØ­Ø³Ø§Ø¨Ø§Øª Ø§ÙÙÙÙÙØ© Ø¹ÙØ¯ ØªÙÙØ± Ø§ÙØ¨ÙØ§ÙØ§Øª
+الحسابات الممكنة عند توفر البيانات
 
 - Recombination Ratio.
 - Total GOR.
-- Rs ÙØ³Ø¨Ø© Ø§ÙØºØ§Ø² Ø§ÙÙØ°Ø§Ø¨.
-- Bo ÙØ¹Ø§ÙÙ Ø­Ø¬Ù Ø§ÙØªÙÙÙÙ ÙÙØ²ÙØª.
-- Bg ÙØ¹Ø§ÙÙ Ø­Ø¬Ù Ø§ÙØªÙÙÙÙ ÙÙØºØ§Ø².
+- Rs نسبة الغاز المذاب.
+- Bo معامل حجم التكوين للزيت.
+- Bg معامل حجم التكوين للغاز.
 - Z-factor.
 - Oil Density.
 - API Gravity.
@@ -417,7 +418,7 @@ def surface_separator_direct_answer():
 - Compressibility.
 - Y-Function.
 
-Ø§ÙÙÙØ­ÙÙØ§Øª Ø§ÙÙØ·ÙÙØ¨Ø©
+المنحنيات المطلوبة
 
 - Pressure vs Bo.
 - Pressure vs Rs.
@@ -425,19 +426,19 @@ def surface_separator_direct_answer():
 - Pressure vs Density.
 - Pressure vs Relative Volume.
 - Pressure vs Y-Function.
-- ÙÙØºØ§Ø² Ø§ÙÙÙØ«Ù: Pressure vs Liquid Dropout Ù Pressure vs CGR.
+- للغاز المكثف: Pressure vs Liquid Dropout و Pressure vs CGR.
 
-Ø¥Ø¹Ø¯Ø§Ø¯ Ø§ÙÙØ­Ø§ÙØ§Ø©
+إعداد المحاكاة
 
-Ø¥Ø°Ø§ ÙØ§Ù Ø§ÙØ³Ø§Ø¦Ù Black Oil:
-ØªØ³ØªØ®Ø¯Ù Ø¨ÙØ§ÙØ§Øª DV Ù Separator Test ÙØªØ¬ÙÙØ² PVTO ÙÙ EclipseØ Ø¨Ø´Ø±Ø· ØªÙÙØ± Pressure Ù Rs Ù Bo Ù Oil Viscosity.
+إذا كان السائل Black Oil:
+تستخدم بيانات DV و Separator Test لتجهيز PVTO في Eclipse، بشرط توفر Pressure و Rs و Bo و Oil Viscosity.
 
-Ø¥Ø°Ø§ ÙØ§Ù Ø§ÙØ³Ø§Ø¦Ù Gas Condensate Ø£Ù Volatile Oil:
-Ø§ÙØ£ÙØ¶Ù Ø§Ø³ØªØ®Ø¯Ø§Ù Compositional Model ÙØ¹ EOS Tuning ÙÙ CMG Ø£Ù Eclipse Compositional.
+إذا كان السائل Gas Condensate أو Volatile Oil:
+الأفضل استخدام Compositional Model مع EOS Tuning في CMG أو Eclipse Compositional.
 
-Ø§ÙØ®ÙØ§ØµØ©
+الخلاصة
 
-Ø§ÙØ®Ø·ÙØ© Ø§ÙØµØ­ÙØ­Ø© ÙÙØ³Øª Ø§Ø¹ØªØ¨Ø§Ø± Ø¹ÙÙØ§Øª Ø§ÙØ³Ø·Ø­ ÙÙØ«ÙØ© ÙØ¨Ø§Ø´Ø±Ø© ÙÙÙÙÙÙØ Ø¨Ù Ø¥Ø¬Ø±Ø§Ø¡ Recombination Ø«Ù Ø§Ø®ØªØ¨Ø§Ø±Ø§Øª PVT Ø§ÙÙÙØ§Ø³Ø¨Ø©. Ø¨Ø¯ÙÙ Ø¨ÙØ§ÙØ§Øª Ø§ÙÙØ§ØµÙ Ù GOR ÙØ§ÙØªØ±ÙÙØ¨ ÙØ§ ÙÙÙÙ Ø­Ø³Ø§Ø¨ ÙÙÙ ÙÙØ§Ø¦ÙØ© ÙÙØ«ÙÙØ© ÙØ«Ù Bo Ø£Ù Rs Ø£Ù Bubble Point Pressure.
+الخطوة الصحيحة ليست اعتبار عينات السطح ممثلة مباشرة للمكمن، بل إجراء Recombination ثم اختبارات PVT المناسبة. بدون بيانات الفاصل و GOR والتركيب لا يمكن حساب قيم نهائية موثوقة مثل Bo أو Rs أو Bubble Point Pressure.
 """
 
 while True:
@@ -465,7 +466,7 @@ while True:
                 continue
 
             if "text" not in message:
-                send_message(chat_id, "Ø£Ø±Ø³ÙÙ ÙØµØ§Ù Ø£Ù ÙÙÙ PDF/DOCX Ø£Ù ØµÙØ±Ø©.")
+                send_message(chat_id, "أرسلي نصاً أو ملف PDF/DOCX أو صورة.")
                 continue
 
             text = message["text"]
@@ -482,7 +483,7 @@ while True:
             if is_graph_command(text):
                 image_path = IMAGE_CONTEXT.get(chat_id)
                 if not image_path:
-                    send_message(chat_id, "Ø£Ø±Ø³ÙÙ ØµÙØ±Ø© Ø§ÙØ±Ø³Ù Ø£Ù Figure Ø£ÙÙØ§ÙØ ÙØ¨Ø¹Ø¯ÙØ§ Ø§ÙØªØ¨Ù /graph.")
+                    send_message(chat_id, "أرسلي صورة الرسم أو Figure أولاً، وبعدها اكتبي /graph.")
                     continue
                 prompt = text + "\n\nAnalyze this engineering figure professionally. Identify axes, units, trend, anomalies, non-physical behavior, retrograde behavior if applicable, contamination indicators, separator performance issues, engineering meaning, possible causes, and recommendations."
                 reply = ask_vision_ai(prompt, image_path, context)
@@ -508,3 +509,4 @@ while True:
         print(e)
 
     time.sleep(1)
+
