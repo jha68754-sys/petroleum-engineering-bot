@@ -1,498 +1,531 @@
 """
-PVT Lab AI Bot — Final Professional Version
-Critical Bo vs Pressure rules added.
+╔══════════════════════════════════════════════════════════════╗
+║         PetroMind — Petroleum Engineering Telegram Bot       ║
+║         Groq API | llama-3.3-70b / llama-4-scout            ║
+║         Production-Ready v2.0                                ║
+╚══════════════════════════════════════════════════════════════╝
+
+Requirements:
+    pip install groq python-telegram-bot python-dotenv
+
+.env file:
+    TELEGRAM_BOT_TOKEN=your_telegram_token
+    GROQ_API_KEY=your_groq_api_key
 """
 
 import os
-import re
-import time
-import base64
-import tempfile
-import mimetypes
-import requests
-from PyPDF2 import PdfReader
-from docx import Document
+import logging
+from datetime import datetime
+from dotenv import load_dotenv
+from groq import Groq
+from telegram import Update, BotCommand
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-GROQ_API_KEY = os.getenv("OPENAI_API_KEY")
+# ─── Load Environment ────────────────────────────────────────
+load_dotenv()
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+GROQ_API_KEY   = os.getenv("GROQ_API_KEY")
 
-if not TELEGRAM_BOT_TOKEN or not GROQ_API_KEY:
-    raise ValueError("Missing env vars: TELEGRAM_BOT_TOKEN or OPENAI_API_KEY")
+# ─── Logging ─────────────────────────────────────────────────
+logging.basicConfig(
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
 
-TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-TEXT_MODEL = os.getenv("GROQ_TEXT_MODEL", "llama-3.3-70b-versatile")
-VISION_MODEL = os.getenv("GROQ_VISION_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+# ─── Groq Client ─────────────────────────────────────────────
+client = Groq(api_key=GROQ_API_KEY)
 
-offset = 0
-FILE_CONTEXT = {}
-IMAGE_CONTEXT = {}
+# ─── Model Config ────────────────────────────────────────────
+MODELS = {
+    "fast":    "llama-3.3-70b-versatile",          # default — fast & accurate
+    "scout":   "meta-llama/llama-4-scout-17b-16e-instruct",  # multimodal
+}
+DEFAULT_MODEL = MODELS["fast"]
 
-SYSTEM_PROMPT = """
-You are a professional Petroleum Engineering, PVT Laboratory, Reservoir Fluid Analysis,
-and Reservoir Simulation assistant. Answer like a real PVT laboratory engineer, not a generic chatbot.
+# ─── Conversation Memory (per user) ──────────────────────────
+# Stores last N messages per user_id for context
+conversation_history: dict[int, list[dict]] = {}
+MAX_HISTORY = 10   # keep last 10 exchanges
 
-Language rules:
-- Arabic message -> answer in strong professional Arabic.
-- English message -> answer in professional petroleum engineering English.
-- Mixed -> match the user style naturally.
-- Keep key technical terms in English beside Arabic when useful.
-- Do not force weak Arabic translation. If the Arabic wording sounds uncommon, keep the English technical term.
+# ════════════════════════════════════════════════════════════════
+# SYSTEM PROMPT — Petroleum Engineering Expert
+# ════════════════════════════════════════════════════════════════
+SYSTEM_PROMPT = """أنت PetroMind — مساعد هندسة نفط متخصص بخبرة +20 سنة في:
+1. مختبر PVT
+2. هندسة المكامن
+3. محاكاة المكامن
+4. هندسة الحفر
+5. هندسة الإنتاج
 
-Preferred technical terms:
-PVT = Pressure-Volume-Temperature.
-Reservoir = المكمن.
-Well = البئر.
-Formation = التكوين.
-Bottom Hole Sample = عينة قاع البئر.
-Surface Separator Oil Sample = عينة زيت من الفاصل السطحي.
-Separator Gas Sample = عينة غاز من الفاصل.
-Recombination = إعادة تركيب العينة.
-Bubble Point Pressure = ضغط نقطة الفقاعة.
-Dew Point Pressure = ضغط نقطة الندى.
-Bo = Oil Formation Volume Factor.
-Bg = Gas Formation Volume Factor.
-Rs = Solution Gas-Oil Ratio.
-GOR = Gas-Oil Ratio.
-CGR = Condensate-Gas Ratio.
-Z-factor = Gas Deviation Factor.
-Viscosity.
-Density.
-Specific Gravity.
-API Gravity.
-CCE = Constant Composition Expansion.
-CME = Constant Mass Expansion.
-DV = Differential Vaporization / Differential Liberation.
-CVD = Constant Volume Depletion.
-Separator Test.
-Flash Test.
-Compositional Analysis.
-EOS Tuning.
-PVTO.
-PVTG.
-Black Oil Model.
-Compositional Model.
-Eclipse.
-CMG.
+تدعم العربية والإنجليزية. إذا السؤال بالعربية → رد بالعربية. إذا بالإنجليزية → رد بالإنجليزية.
 
-Strict engineering rules:
-- Do not invent numerical PVT values unless the user clearly asks for demo data.
-- Do not create fake lab tables as if they are real.
-- Calculations require real input values.
-- If data are missing, list exactly what is missing.
-- Use engineering judgment, not generic textbook lists.
+═══════════════════════════════════════════════════
+بروتوكول مكافحة الأخطاء الهندسية (إلزامي)
+═══════════════════════════════════════════════════
+1. لا تخترع معاملات أو بيانات حقلية غير موجودة
+2. عند استخدام علاقة تجريبية → اذكر اسمها ونطاق تطبيقها
+3. دائماً اذكر نظام الوحدات (Field / SI / Metric)
+4. إذا البيانات خارج النطاق → حذّر المستخدم صراحةً
+5. لا تستقرئ منحنيات PVT خارج نطاق البيانات المقاسة
+6. عند تفسير المخططات: صف الشكل أولاً ثم استنتج الفيزياء
+7. إذا البيانات ناقصة → اذكر بالضبط ما ينقص
+8. فرّق دائماً: بيانات مقاسة / محسوبة بعلاقة / محاكاة / مفترضة
+9. معاملات ضبط معادلة الحالة (EOS) ≠ بيانات مختبرية
+10. دائماً اذكر المصدر عند استخدام معادلة أو علاقة تجريبية
 
-Answer structure:
-1. Identify sample type or question category.
-2. Identify fluid system when possible: Black Oil, Volatile Oil, Gas Condensate, Dry Gas.
-3. Select correct workflow.
-4. Explain required lab tests or engineering steps.
-5. Show calculations only if real input data are provided.
-6. List required plots if applicable.
-7. Mention simulation relevance: Eclipse / CMG when applicable.
-8. State missing data clearly.
-9. Give concise engineering interpretation.
+═══════════════════════════════════════════════════
+قسم PVT ومختبر الطوارئ
+═══════════════════════════════════════════════════
+الاختبارات المدعومة:
+• CCE — اختبار التمدد عند ثبات التركيب
+• DLE — اختبار التحرير التفاضلي
+• CVD — اختبار الاستنفاد عند ثبات الحجم
+• اختبار الفاصل (Separator Test)
+• قياس اللزوجة: نفط ميت / حي / مشبع / غير مشبع
+• تحليل التركيب الجزيئي C1–C7+
+• درجة حرارة ظهور الشمع (WAT)
+• ضغط بداية ترسب الإسفلتين (AOP)
 
-Surface Separator logic:
-- Surface Separator Oil + Gas samples are not direct reservoir fluid.
-- Always recommend Recombination first when reservoir-fluid behavior is required.
-- Required: Separator Pressure, Separator Temperature, Oil Rate, Gas Rate, GOR, gas composition, oil composition, API Gravity, Gas Specific Gravity, Water Cut, H2S/CO2 if present.
+قواعد مراقبة الجودة (QC):
+• Bo < 1.0 في المكمن → مستحيل، خطأ في البيانات
+• Rs يزيد مع انخفاض الضغط → مستحيل، خطأ في البيانات
+• Z-factor > 1.5 عند ضغط منخفض → مشكوك فيه، راجع البيانات
+• API < 10° → نفط ثقيل جداً، العلاقات التجريبية القياسية قد لا تنطبق
 
-Critical PVT plot rules:
+العلاقات التجريبية:
+• Standing (1947): API 16-63°، GOR 20-1425 scf/STB، T 100-258°F
+• Al-Marhoun (1988): API 19.4-44.6°، GOR 26-1602 scf/STB ← الأنسب للشرق الأوسط
+• Vazquez & Beggs (1980): API 15-59°، GOR 0-2199 scf/STB
+• Glaso (1980): API 22-48°، GOR 90-2637 scf/STB ← بحر الشمال
+• Petrosky & Farshad (1993): API 25-46.1°، GOR 217-1406 scf/STB ← خليج المكسيك
 
-For Black Oil systems:
+تفسير المخططات:
+CCE: ضغط نقطة الفقاعة (Pb) عند نقطة الانكسار في المنحنى وليس عند الحجم الأقصى
+DLE: Rs يتناقص بشكل رتيب من Pb حتى الضغط الجوي — أي زيادة = خطأ
+منحنى Bo: الحد الأقصى دائماً عند Pb
+CVD: التكثف الرجعي — السائل يزيد مع انخفاض الضغط (سلوك غير عادي طبيعي للغاز المكثف)
+Z-factor: منحنى على شكل U طبيعي للغاز الطبيعي
+اللزوجة: النفط الميت تتناقص لزوجته مع الحرارة (سلوك أرهينيوس)
 
-Bo versus Pressure:
-- Bo reaches its maximum value at Bubble Point Pressure Pb.
-- Below Pb, Bo decreases as pressure decreases because gas is liberated from oil.
-- Above Pb, Bo changes only slightly and generally decreases as pressure increases due to oil compressibility.
-- Never say that Pb is the minimum Bo point.
-- Never say that Bo continuously increases with pressure.
+═══════════════════════════════════════════════════
+قسم هندسة المكامن
+═══════════════════════════════════════════════════
+موازنة المادة (Havlena-Odeh):
+F = Eo·N + Efw·N + Eg·mN + We
+حيث:
+  F  = الاستخلاص تحت سطح الأرض
+  Eo = تمدد النفط + الغاز المنحل
+  Efw = انضغاطية الماء الرابط + الصخر
+  Eg = تمدد الغطاء الغازي
+  We = تدفق الماء من الحوض المائي
+  N  = الاحتياطي النفطي الأصلي في باطن الأرض (STOIIP)
 
-Rs versus Pressure:
-- Rs increases with pressure below Pb.
-- Rs becomes constant above Pb because the oil is undersaturated.
-- Never say Rs keeps increasing above Pb.
+آليات الإنتاج ومعاملات الاسترداد:
+• محرك الغاز المنحل: 5-25%
+• محرك اندفاع الماء: 20-50%
+• التصريف الثقالي: 60-80%
+• محرك الغطاء الغازي: 20-40%
 
-Oil Viscosity versus Pressure:
-- Below Pb, oil viscosity generally increases as pressure decreases because dissolved gas leaves the oil.
-- Above Pb, viscosity may increase slightly with pressure depending on compressibility and fluid type.
+منحنيات تناقص الإنتاج (Arps):
+• أسي (Exponential): q = qi·exp(-Di·t)، b=0
+• هذبي (Hyperbolic): q = qi·(1+b·Di·t)^(-1/b)، 0<b<1
+• توافقي (Harmonic): q = qi/(1+Di·t)، b=1
 
-Bg versus Pressure:
-- Bg generally decreases as pressure increases.
-- Bg generally increases as pressure decreases.
+اختبار الآبار:
+• مخطط هورنر: (Pws-Pwf) مقابل log[(tp+Δt)/Δt]
+• عامل الجلد: موجب = تلف، سالب = تحسين
+• تأثير التخزين في البئر: ميل وحدوي على المخطط اللوغاريتمي
 
-Z-factor:
-- Z-factor is not always greater than 1 at high pressure.
-- Z may be less than 1 or greater than 1 depending on pressure, temperature, and gas composition.
-- Near atmospheric conditions, Z approaches 1.
+═══════════════════════════════════════════════════
+قسم محاكاة المكامن
+═══════════════════════════════════════════════════
+المحاكيات المدعومة: Eclipse (E100/E300)، CMG (IMEX/GEM/STARS)
+أنواع المحاكاة:
+• نموذج النفط الأسود: Eclipse E100، CMG IMEX
+• النموذج التركيبي: Eclipse E300، CMG GEM
+• النموذج الحراري/EOR: CMG STARS
 
-Graph answer rule:
-When the user asks for a sketch or plot only, give the plot first and keep explanation very short.
-For ASCII sketches, make the axes clear and put Pb or Pd in the correct location.
+مراحل مطابقة البيانات التاريخية:
+1. مطابقة ضغط الحقل (ضبط HCPV، الحوض المائي)
+2. مطابقة معدلات الإنتاج (ضبط النفاذية، عامل الجلد)
+3. مطابقة WCT و GOR (ضبط kr، Kv/Kh)
+4. مطابقة أداء الآبار المنفردة
 
-Formatting:
-- No markdown ** or ###.
-- No vertical-line tables.
-- Clean plain text with clear section headings.
-- Be concise, direct, professional.
-"""
+التحقق من التهيئة:
+• STOIIP المحاكاة مقابل الحجمية: يجب أن يتطابقا ضمن 2-5%
+• تلامس السوائل GOC و OWC يجب أن يتوافق مع تفسير السجلات
 
-def clean_text(text: str) -> str:
-    text = str(text)
-    fixes = {
-        "**": "", "###": "", "##": "", "#": "", "|": " ", "[": "", "]": "",
-        "Pressuring Volume and Temperature": "Pressure-Volume-Temperature",
-        "Volume Expansion Factor": "Oil Formation Volume Factor",
-        "الضغط البيني": "Oil Formation Volume Factor Bo",
-        "المعامل البيني": "Oil Formation Volume Factor Bo",
-        "الترشيح": "Solution Gas-Oil Ratio Rs",
-        "النسبة المئوية للغاز": "Gas-Oil Ratio GOR",
-        "نسبة الغاز المئوية": "Gas-Oil Ratio GOR",
-        "الويسكوزية": "Viscosity",
-        "الویسكوزية": "Viscosity",
-        "الليزج": "Viscosity",
-        "الحفرة": "Reservoir",
-        "السطوح النوعي": "Specific Gravity",
-        "اختبار السطوح": "Specific Gravity Measurement",
-        "السطوع النوعي": "Specific Gravity",
-        "اختبار السطوع": "Specific Gravity Measurement",
-        "نحو PVT": "PVT curves",
-    }
-    for wrong, right in fixes.items():
-        text = text.replace(wrong, right)
-    return text.strip()
+═══════════════════════════════════════════════════
+قسم الحفر
+═══════════════════════════════════════════════════
+نافذة كثافة الطين الآمنة:
+  الحد الأدنى = تدرج ضغط المسام + هامش أمان (0.5 ppg)
+  الحد الأقصى = تدرج ضغط التكسير - هامش أمان (0.5 ppg)
+  دائماً ارسم: PP، FG، MW على نفس محور العمق
 
-def handle_calculation(query: str):
-    q = query.lower()
-    nums = [float(x) for x in re.findall(r"[-+]?\d*\.?\d+", query) if x]
+تصميم الأغلفة:
+• فحص الانفجار (Burst): Pi - Po > 0
+• فحص الانهيار (Collapse): Po - Pi > 0
+• التحليل الثلاثي المحاور للأحمال المركبة
 
-    if "api" in q and any(k in q for k in ["sg", "specific gravity", "gravity"]):
-        if nums:
-            sg = nums[0]
-            if 0.5 < sg < 1.5:
-                api = (141.5 / sg) - 131.5
-                cls = "Light Oil" if api > 35 else "Medium Oil" if api > 22 else "Heavy Oil"
-                return f"حساب API Gravity\n\nFormula: API = (141.5 / SG) - 131.5\nSpecific Gravity = {sg}\nResult = {api:.2f} API\nClassification = {cls}"
+استقرار جدار البئر:
+• الانهيار الانضغاطي (Breakout) → زيادة كثافة الطين
+• الشقوق التوترية الناجمة عن الحفر → تخفيض كثافة الطين
 
-    if "hydrostatic" in q or ("pressure" in q and any(k in q for k in ["mw", "mud", "tvd"])):
-        if len(nums) >= 2:
-            mw, tvd = nums[0], nums[1]
-            hp = 0.052 * mw * tvd
-            return f"حساب Hydrostatic Pressure\n\nFormula: P = 0.052 x MW x TVD\nMW = {mw} ppg\nTVD = {tvd} ft\nResult = {hp:.2f} psi"
+═══════════════════════════════════════════════════
+قسم هندسة الإنتاج
+═══════════════════════════════════════════════════
+تحليل العقدة:
+• IPR (داخلي): Vogel، Darcy، Jones-Blount-Glaze
+• VLP (خارجي): Beggs-Brill، Hagedorn-Brown، Mukherjee-Brill
+• نقطة التشغيل: تقاطع IPR مع VLP
 
-    if "ooip" in q:
-        if len(nums) >= 5:
-            a, h, phi, sw, bo = nums[0], nums[1], nums[2], nums[3], nums[4]
-            ooip = (7758 * a * h * phi * (1 - sw)) / bo
-            return f"حساب OOIP\n\nFormula: OOIP = (7758 x A x h x phi x (1-Sw)) / Bo\nArea = {a} acres\nh = {h} ft\nphi = {phi}\nSw = {sw}\nBo = {bo}\nResult = {ooip:,.0f} STB"
-        return "لحساب OOIP احتاج 5 قيم:\nExample: /calc ooip 500 50 0.2 0.3 1.3\nA acres, h ft, porosity, Sw, Bo"
+اختيار الرفع الاصطناعي:
+• ESP: معدل إنتاج عالي، بحري، آبار منحرفة
+• رفع الغاز: GOR عالي، بحري، مرونة تشغيلية
+• مضخة الساق (Sucker Rod): إنتاج منخفض، بري، بسيطة
+• PCP: نفط لزج، تكوينات رملية
 
-    if "darcy" in q or "flow rate" in q:
-        if len(nums) >= 5:
-            k, a, dp, mu, l = nums[0], nums[1], nums[2], nums[3], nums[4]
-            q_rate = (0.001127 * k * a * dp) / (mu * l)
-            return f"حساب Darcy Linear Flow\n\nFormula: q = 0.001127 x k x A x dP / (mu x L)\nk = {k} mD\nA = {a} ft2\ndP = {dp} psi\nmu = {mu} cP\nL = {l} ft\nResult = {q_rate:.4f} bbl/day"
+ضمان انسياب التدفق:
+• تكوين الهيدرات: مخطط P-T
+• ترسب الشمع: تحت درجة حرارة WAT
+• ترسب الإسفلتين: قرب منطقة Pb
 
-    if "recovery" in q or " rf " in q:
-        if len(nums) >= 2:
-            np_v, ooip_v = nums[0], nums[1]
-            rf = (np_v / ooip_v) * 100
-            return f"حساب Recovery Factor\n\nFormula: RF = NP / OOIP x 100\nNP = {np_v:,.0f}\nOOIP = {ooip_v:,.0f}\nResult = RF = {rf:.2f}%"
+═══════════════════════════════════════════════════
+المصطلحات النفطية العربية المعتمدة
+═══════════════════════════════════════════════════
+ضغط نقطة الفقاعة = Bubble Point Pressure (Pb)
+ضغط نقطة الندى = Dew Point Pressure (Pd)
+معامل حجم تكوين النفط = Bo
+نسبة الغاز المنحل = Solution GOR (Rs)
+اختبار التمدد عند ثبات التركيب = CCE
+اختبار التحرير التفاضلي = DLE
+اختبار الاستنفاد عند ثبات الحجم = CVD
+معامل انضغاطية الغاز = Z-factor
+اللزوجة الديناميكية للنفط = Oil Viscosity (μo)
+معادلة الحالة = EOS
+موازنة المادة = Material Balance
+آلية الإنتاج = Drive Mechanism
+محرك الغاز المنحل = Solution Gas Drive
+محرك اندفاع الماء = Water Drive
+منحنى تناقص الإنتاج = Production Decline Curve
+الإنتاج التراكمي النهائي المتوقع = EUR
+علاقة الأداء الداخلي للبئر = IPR
+منحنى أداء الأنبوب الرأسي = VLP
+مؤشر الإنتاجية = Productivity Index (J)
+عامل الجلد = Skin Factor (S)
+الاحتياطي النفطي الأصلي في باطن الأرض = STOIIP
+الاحتياطي الغازي الأصلي في باطن الأرض = GIIP
+معامل الاسترداد = Recovery Factor
+النفاذية النسبية = Relative Permeability (kr)
+المسامية = Porosity (φ)
+تشبع الماء = Water Saturation (Sw)
+نسبة الماء المنتج = Water Cut (WCT)
+نسبة الغاز إلى النفط المنتج = Producing GOR
+مطابقة البيانات التاريخية = History Matching
+محاكاة المكمن = Reservoir Simulation
+كثافة طين الحفر = Mud Weight (MW)
+تدرج ضغط التكسير = Fracture Gradient (FG)
+ضغط المسام = Pore Pressure (PP)
+الغلاف الوقائي = Casing
+مجموعة قاع البئر = BHA
+الرفع الاصطناعي = Artificial Lift
+المضخة الكهربائية الغاطسة = ESP
+رفع الغاز = Gas Lift
+ضمان انسياب التدفق = Flow Assurance
+تقييم التكوين = Formation Evaluation
+سجلات الآبار = Well Logs
+النفاذية المطلقة = Absolute Permeability (k)
+الحوض المائي = Aquifer
+التصريف الثقالي = Gravity Drainage
+مستوى تلامس النفط والماء = OWC
+مستوى تلامس الغاز والنفط = GOC
+ضغط قاع البئر المتدفق = FBHP
+ضغط قاع البئر الساكن = SBHP
 
-    if "water cut" in q or "wc" in q:
-        if len(nums) >= 2:
-            qw, qo = nums[0], nums[1]
-            wc = (qw / (qo + qw)) * 100
-            return f"حساب Water Cut\n\nFormula: WC = qw / (qo + qw) x 100\nqw = {qw}\nqo = {qo}\nResult = WC = {wc:.2f}%"
+═══════════════════════════════════════════════════
+تنسيق الرد (إلزامي)
+═══════════════════════════════════════════════════
+1. التخصص: [PVT / مكامن / حفر / إنتاج / محاكاة]
+2. الطريقة أو العلاقة التجريبية المستخدمة
+3. المعادلة
+4. الحساب مع الوحدات
+5. النتائج
+6. التفسير الهندسي
+7. التوصيات
+⚠️ تحذير: للبيانات المشكوك فيها أو خارج النطاق
+📌 افتراض: للبيانات المفترضة"""
 
-    return None
 
-GLOSSARY_HTML = r"""<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Petroleum Glossary</title><style>body{font-family:Arial,sans-serif;background:#f7f2e8;color:#1f1f1f;line-height:1.8;padding:20px}h1{color:#3d1f00;text-align:center}.card{background:white;border:1px solid #ddd0b8;border-radius:10px;padding:14px;margin:10px 0}.en{direction:ltr;color:#c8760a;font-weight:bold}.eq{direction:ltr;background:#111827;color:#facc15;padding:10px;border-radius:8px;margin-top:8px}</style></head><body><h1>المصطلحات النفطية — Petroleum Glossary</h1><div class="card"><div class="en">Bo — Oil Formation Volume Factor</div><div>معامل حجم التكوين للزيت. يصل عادة إلى أعلى قيمة عند Bubble Point Pressure.</div></div><div class="card"><div class="en">Rs — Solution Gas-Oil Ratio</div><div>كمية الغاز المذاب في الزيت عند ضغط ودرجة حرارة محددين.</div></div><div class="card"><div class="en">GOR — Gas-Oil Ratio</div><div>نسبة الغاز المنتج إلى الزيت المنتج.</div></div><div class="card"><div class="en">Bg — Gas Formation Volume Factor</div><div>معامل حجم التكوين للغاز.</div></div><div class="card"><div class="en">Z-factor — Gas Deviation Factor</div><div>معامل يصف انحراف الغاز الحقيقي عن الغاز المثالي.</div></div><div class="card"><div class="en">Bubble Point Pressure</div><div>ضغط نقطة الفقاعة، يبدأ عنده الغاز المذاب بالخروج من الزيت.</div></div><div class="card"><div class="en">Dew Point Pressure</div><div>ضغط نقطة الندى، يبدأ عنده السائل بالتكون من الغاز.</div></div><h2>معادلات مهمة</h2><div class="card"><div class="en">API Gravity</div><div class="eq">API = (141.5 / SG) - 131.5</div></div><div class="card"><div class="en">Hydrostatic Pressure</div><div class="eq">P = 0.052 x MW x TVD</div></div><div class="card"><div class="en">OOIP</div><div class="eq">OOIP = (7758 x A x h x phi x (1-Sw)) / Bo</div></div></body></html>"""
+# ════════════════════════════════════════════════════════════════
+# GLOSSARY — Arabic ↔️ English
+# ════════════════════════════════════════════════════════════════
+GLOSSARY = {
+    "bubble point pressure":        "ضغط نقطة الفقاعة (Pb)",
+    "dew point pressure":           "ضغط نقطة الندى (Pd)",
+    "oil formation volume factor":  "معامل حجم تكوين النفط (Bo)",
+    "gas formation volume factor":  "معامل حجم تكوين الغاز (Bg)",
+    "solution gor":                 "نسبة الغاز المنحل (Rs)",
+    "cce":                          "اختبار التمدد عند ثبات التركيب",
+    "dle":                          "اختبار التحرير التفاضلي",
+    "cvd":                          "اختبار الاستنفاد عند ثبات الحجم",
+    "z-factor":                     "معامل انضغاطية الغاز (Z)",
+    "oil viscosity":                "اللزوجة الديناميكية للنفط (μo)",
+    "eos":                          "معادلة الحالة",
+    "material balance":             "موازنة المادة",
+    "stoiip":                       "الاحتياطي النفطي الأصلي في باطن الأرض",
+    "giip":                         "الاحتياطي الغازي الأصلي في باطن الأرض",
+    "recovery factor":              "معامل الاسترداد",
+    "ipr":                          "علاقة الأداء الداخلي للبئر",
+    "vlp":                          "منحنى أداء الأنبوب الرأسي",
+    "skin factor":                  "عامل الجلد (S)",
+    "productivity index":           "مؤشر الإنتاجية (J)",
+    "water cut":                    "نسبة الماء المنتج (WCT)",
+    "history matching":             "مطابقة البيانات التاريخية",
+    "mud weight":                   "كثافة طين الحفر (MW)",
+    "pore pressure":                "ضغط المسام (PP)",
+    "fracture gradient":            "تدرج ضغط التكسير (FG)",
+    "esp":                          "المضخة الكهربائية الغاطسة",
+    "gas lift":                     "رفع الغاز",
+    "nodal analysis":               "تحليل العقدة",
+    "flow assurance":               "ضمان انسياب التدفق",
+    "permeability":                 "النفاذية (k)",
+    "porosity":                     "المسامية (φ)",
+    "water saturation":             "تشبع الماء (Sw)",
+    "decline curve":                "منحنى تناقص الإنتاج",
+    "eur":                          "الإنتاج التراكمي النهائي المتوقع",
+    "bha":                          "مجموعة قاع البئر",
+    "owc":                          "مستوى تلامس النفط والماء",
+    "goc":                          "مستوى تلامس الغاز والنفط",
+    "fbhp":                         "ضغط قاع البئر المتدفق",
+    "sbhp":                         "ضغط قاع البئر الساكن",
+    "wat":                          "درجة حرارة ظهور الشمع",
+    "aop":                          "ضغط بداية ترسب الإسفلتين",
+    "aquifer":                      "الحوض المائي",
+    "gravity drainage":             "التصريف الثقالي",
+    "casing":                       "الغلاف الوقائي (Casing)",
+    "wob":                          "قوة الضغط على الرأس الثاقب",
+    "rop":                          "معدل الاختراق",
+    "wellbore stability":           "استقرار جدار البئر",
+    "pvt":                          "خصائص الضغط والحجم والحرارة",
+    "formation evaluation":         "تقييم التكوين",
+    "relative permeability":        "النفاذية النسبية (kr)",
+    "capillary pressure":           "ضغط الشعيرات الدموية (Pc)",
+    "drive mechanism":              "آلية الإنتاج",
+    "artificial lift":              "الرفع الاصطناعي",
+    "reservoir simulation":         "محاكاة المكمن",
+}
 
-def send_message(chat_id: int, text: str) -> None:
-    text = clean_text(text)
-    if not text:
-        text = "لم أتمكن من توليد رد واضح."
-    for i in range(0, len(text), 3900):
-        try:
-            requests.post(f"{TELEGRAM_URL}/sendMessage", json={"chat_id": chat_id, "text": text[i:i+3900]}, timeout=15)
-        except Exception as e:
-            print(f"send_message error: {e}")
-        time.sleep(0.4)
+UNIT_CONVERSIONS = {
+    ("psia", "kpa"):   lambda x: x * 6.895,
+    ("kpa", "psia"):   lambda x: x / 6.895,
+    ("bar", "psia"):   lambda x: x * 14.504,
+    ("psia", "bar"):   lambda x: x / 14.504,
+    ("ft", "m"):       lambda x: x * 0.3048,
+    ("m", "ft"):       lambda x: x / 0.3048,
+    ("in", "mm"):      lambda x: x * 25.4,
+    ("mm", "in"):      lambda x: x / 25.4,
+    ("f", "c"):        lambda x: (x - 32) * 5 / 9,
+    ("c", "f"):        lambda x: x * 9 / 5 + 32,
+    ("stb/d", "m3/d"): lambda x: x * 0.15899,
+    ("m3/d", "stb/d"): lambda x: x / 0.15899,
+    ("ppg", "sg"):     lambda x: x / 8.33,
+    ("sg", "ppg"):     lambda x: x * 8.33,
+    ("ppg", "psi/ft"): lambda x: x * 0.05195,
+    ("psi/ft", "ppg"): lambda x: x / 0.05195,
+    ("md", "m2"):      lambda x: x * 9.869e-16,
+    ("cp", "mpas"):    lambda x: x * 1.0,
+}
 
-def send_document(chat_id: int, file_bytes: bytes, filename: str, caption: str) -> None:
-    try:
-        requests.post(f"{TELEGRAM_URL}/sendDocument", data={"chat_id": chat_id, "caption": caption}, files={"document": (filename, file_bytes, "text/html")}, timeout=20)
-    except Exception as e:
-        send_message(chat_id, f"خطأ في إرسال الملف: {e}")
 
-def download_file(file_id: str, suffix: str = ".bin"):
-    try:
-        info = requests.get(f"{TELEGRAM_URL}/getFile", params={"file_id": file_id}, timeout=15).json()
-        if not info.get("ok"):
-            return None
-        url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{info['result']['file_path']}"
-        data = requests.get(url, timeout=60).content
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-        tmp.write(data)
-        tmp.close()
-        return tmp.name
-    except Exception as e:
-        print(f"download_file error: {e}")
-        return None
+# ════════════════════════════════════════════════════════════════
+# HELPER FUNCTIONS
+# ════════════════════════════════════════════════════════════════
 
-def extract_pdf_text(path: str) -> str:
-    try:
-        reader = PdfReader(path)
-        return "\n\n".join(p.extract_text() for p in reader.pages if p.extract_text()).strip()
-    except Exception as e:
-        print(f"PDF error: {e}")
-        return ""
+def get_history(user_id: int) -> list[dict]:
+    return conversation_history.get(user_id, [])
 
-def extract_docx_text(path: str) -> str:
-    try:
-        doc = Document(path)
-        return "\n".join(p.text.strip() for p in doc.paragraphs if p.text.strip())
-    except Exception as e:
-        print(f"DOCX error: {e}")
-        return ""
 
-def encode_image(path: str) -> str:
-    mime, _ = mimetypes.guess_type(path)
-    if not mime:
-        mime = "image/jpeg"
-    with open(path, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode("utf-8")
-    return f"data:{mime};base64,{b64}"
+def add_to_history(user_id: int, role: str, content: str):
+    if user_id not in conversation_history:
+        conversation_history[user_id] = []
+    conversation_history[user_id].append({"role": role, "content": content})
+    # Keep only last MAX_HISTORY messages
+    if len(conversation_history[user_id]) > MAX_HISTORY * 2:
+        conversation_history[user_id] = conversation_history[user_id][-MAX_HISTORY * 2:]
 
-def ask_ai(user_text: str, file_context=None) -> str:
+
+def clear_history(user_id: int):
+    conversation_history[user_id] = []
+
+
+def call_groq(user_id: int, user_message: str, model: str = DEFAULT_MODEL) -> str:
+    """Send message to Groq API with conversation history."""
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    if file_context:
-        messages.append({"role": "user", "content": "Reference document context:\n\n" + file_context[:18000]})
-    messages.append({"role": "user", "content": user_text})
+    messages += get_history(user_id)
+    messages.append({"role": "user", "content": user_message})
+
     try:
-        r = requests.post(GROQ_URL, headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}, json={"model": TEXT_MODEL, "messages": messages, "temperature": 0.08, "max_tokens": 2000}, timeout=90)
-        data = r.json()
-        if "choices" in data:
-            return data["choices"][0]["message"]["content"]
-        return "خطأ من Groq:\n" + str(data)[:800]
-    except Exception as e:
-        return f"خطأ في الاتصال بالذكاء الاصطناعي:\n{e}"
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.3,        # low temp for technical accuracy
+            max_tokens=2048,
+            top_p=0.9,
+        )
+        reply = response.choices[0].message.content
+        add_to_history(user_id, "user", user_message)
+        add_to_history(user_id, "assistant", reply)
+        return reply
 
-def ask_vision_ai(prompt: str, image_path: str, file_context=None) -> str:
-    full_prompt = SYSTEM_PROMPT + "\n\nTask:\n" + prompt
-    if file_context:
-        full_prompt += "\n\nReference context:\n" + file_context[:8000]
-    messages = [{"role": "user", "content": [{"type": "text", "text": full_prompt}, {"type": "image_url", "image_url": {"url": encode_image(image_path)}}]}]
+    except Exception as e:
+        logger.error(f"Groq API error: {e}")
+        return f"⚠️ خطأ في الاتصال بالنموذج:\n{str(e)}"
+
+
+def lookup_glossary(term: str) -> str:
+    term_lower = term.strip().lower()
+    # exact match
+    if term_lower in GLOSSARY:
+        return f"📖 *{term}*\n🇦🇪 {GLOSSARY[term_lower]}"
+    # partial match
+    matches = [(k, v) for k, v in GLOSSARY.items() if term_lower in k]
+    if matches:
+        result = "📖 *نتائج البحث:*\n"
+        for k, v in matches[:5]:
+            result += f"• *{k}* → {v}\n"
+        return result
+    return f"❌ المصطلح '{term}' غير موجود في القاموس.\nجرب مصطلحاً آخر أو اسأل مباشرة."
+
+
+def convert_units(args: list[str]) -> str:
+    """Convert between petroleum engineering units."""
+    if len(args) < 3:
+        return (
+            "❌ الاستخدام الصحيح:\n`/convert [القيمة] [الوحدة من] [الوحدة إلى]`\n\n"
+            "مثال: `/convert 3000 psia kpa`\n\n"
+            "الوحدات المدعومة:\n"
+            "ضغط: psia, kpa, bar\n"
+            "طول: ft, m\n"
+            "حرارة: f, c\n"
+            "معدل: stb/d, m3/d\n"
+            "كثافة الطين: ppg, sg, psi/ft\n"
+            "لزوجة: cp, mpas"
+        )
     try:
-        r = requests.post(GROQ_URL, headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}, json={"model": VISION_MODEL, "messages": messages, "temperature": 0.08, "max_tokens": 1200}, timeout=90)
-        data = r.json()
-        if "choices" in data:
-            return data["choices"][0]["message"]["content"]
-        return "خطأ من Groq Vision:\n" + str(data)[:800]
-    except Exception as e:
-        return f"خطأ في تحليل الصورة:\n{e}"
+        value = float(args[0])
+        from_unit = args[1].lower()
+        to_unit = args[2].lower()
+        key = (from_unit, to_unit)
+        if key in UNIT_CONVERSIONS:
+            result = UNIT_CONVERSIONS[key](value)
+            return f"🔄 *تحويل الوحدات*\n`{value} {args[1]}` = `{result:.4f} {args[2]}`"
+        else:
+            return f"❌ لا يوجد تحويل بين `{args[1]}` و `{args[2]}`\nتحقق من قائمة الوحدات المدعومة."
+    except ValueError:
+        return "❌ القيمة غير صحيحة. أدخل رقماً صحيحاً.\nمثال: `/convert 3000 psia kpa`"
 
-def handle_document_upload(chat_id, doc):
-    file_id = doc["file_id"]
-    file_name = doc.get("file_name", "file")
-    mime = doc.get("mime_type", "")
-    ext = os.path.splitext(file_name)[1].lower() or ".bin"
-    path = download_file(file_id, ext)
-    if not path:
-        send_message(chat_id, "حدث خطأ أثناء تحميل الملف.")
-        return
-    lower = file_name.lower()
-    if lower.endswith(".pdf"):
-        text = extract_pdf_text(path)
-        if not text:
-            send_message(chat_id, "قرأت PDF لكن لم أستخرج نصاً واضحاً. الملف غالباً سكان صورة. أرسل صفحاته كصور أو ارفع PDF نصي.")
-            return
-        FILE_CONTEXT[chat_id] = text
-        send_message(chat_id, "تم قراءة PDF بنجاح. الملف أصبح مرجعاً لهذه المحادثة.\nاكتب /analyze لتحليله هندسياً.")
-    elif lower.endswith(".docx"):
-        text = extract_docx_text(path)
-        if not text:
-            send_message(chat_id, "قرأت DOCX لكن لم أجد نصاً.")
-            return
-        FILE_CONTEXT[chat_id] = text
-        send_message(chat_id, "تم قراءة DOCX بنجاح. اكتب /analyze للتحليل.")
-    elif mime.startswith("image/") or lower.endswith((".png", ".jpg", ".jpeg", ".webp")):
-        IMAGE_CONTEXT[chat_id] = path
-        send_message(chat_id, "تم استلام الصورة. اكتب /graph لتحليل الرسم هندسياً.")
-    else:
-        send_message(chat_id, "الملف المدعوم: PDF أو DOCX أو صورة PNG/JPG/JPEG/WEBP.")
 
-def handle_photo_upload(chat_id, photos):
-    path = download_file(photos[-1]["file_id"], ".jpg")
-    if path:
-        IMAGE_CONTEXT[chat_id] = path
-        send_message(chat_id, "تم استلام الصورة. اكتب /graph لتحليل الرسم هندسياً.")
-    else:
-        send_message(chat_id, "خطأ في تحميل الصورة.")
+# ════════════════════════════════════════════════════════════════
+# COMMAND HANDLERS
+# ════════════════════════════════════════════════════════════════
 
-def is_graph_cmd(t):
-    return t.lower().startswith(("/graph", "/interpret_graph"))
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    clear_history(update.effective_user.id)
+    text = (
+        f"🛢️ *أهلاً {user.first_name}!*\n\n"
+        "*PetroMind* — مساعد هندسة النفط المتخصص\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "🔬 مختبر PVT\n"
+        "⚖️ هندسة المكامن\n"
+        "💻 محاكاة المكامن\n"
+        "🔩 هندسة الحفر\n"
+        "⚙️ هندسة الإنتاج\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "اكتب سؤالك مباشرة بالعربية أو الإنجليزية.\n"
+        "أو استخدم الأوامر التالية:\n\n"
+        "/help — قائمة جميع الأوامر"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown")
 
-def is_export_cmd(t):
-    return t.lower().startswith(("/export_sim", "/pvto", "/pvtg", "/eclipse", "/cmg"))
 
-def is_plot_cmd(t):
-    return t.lower().startswith("/plot")
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "📋 *قائمة الأوامر — PetroMind*\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "🔬 *PVT*\n"
+        "`/pvt` — تحليل بيانات PVT\n"
+        "`/pvt_qc` — مراقبة جودة بيانات PVT\n"
+        "`/pvt_plot` — تفسير مخططات PVT\n"
+        "`/pvt_cor` — حساب بعلاقات تجريبية\n\n"
+        "⚖️ *هندسة المكامن*\n"
+        "`/mb` — موازنة المادة\n"
+        "`/decline` — منحنيات تناقص الإنتاج\n"
+        "`/ipr` — علاقة الأداء الداخلي للبئر\n"
+        "`/drive` — تحديد آلية الإنتاج\n\n"
+        "🔩 *الحفر*\n"
+        "`/mw` — نافذة كثافة الطين الآمنة\n"
+        "`/casing` — تصميم الأغلفة\n"
+        "`/stability` — استقرار جدار البئر\n\n"
+        "⚙️ *الإنتاج*\n"
+        "`/nodal` — تحليل العقدة\n"
+        "`/lift` — اختيار الرفع الاصطناعي\n"
+        "`/fa` — ضمان انسياب التدفق\n\n"
+        "💻 *المحاكاة*\n"
+        "`/sim_init` — التحقق من التهيئة\n"
+        "`/sim_hm` — مطابقة البيانات التاريخية\n"
+        "`/sim_kw` — مساعدة كلمات Eclipse/CMG\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "🛠️ *أدوات*\n"
+        "`/convert [قيمة] [من] [إلى]` — تحويل الوحدات\n"
+        "`/glossary [مصطلح]` — قاموس المصطلحات\n"
+        "`/model` — تغيير نموذج الذكاء الاصطناعي\n"
+        "`/new` — محادثة جديدة (مسح السياق)\n"
+        "`/status` — حالة البوت والنموذج الحالي\n"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown")
 
-def is_analyze_cmd(t):
-    return t.lower().startswith("/analyze")
 
-def is_calc_cmd(t):
-    return t.lower().startswith("/calc")
+async def cmd_new(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    clear_history(update.effective_user.id)
+    await update.message.reply_text(
+        "🔄 تم مسح سياق المحادثة.\nابدأ سؤالاً جديداً.",
+        parse_mode="Markdown"
+    )
 
-def is_check_cmd(t):
-    return t.lower().startswith("/check")
 
-def is_surface_separator(t):
-    t = t.lower()
-    oil = any(k in t for k in ["surface separator oil", "separator oil", "زيت من الفاصل", "عينة زيت"])
-    gas = any(k in t for k in ["separator gas", "غاز من الفاصل", "عينة غاز"])
-    return oil and gas
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    history_len = len(get_history(user_id)) // 2
+    model_name = context.user_data.get("model", DEFAULT_MODEL)
+    text = (
+        "📊 *حالة PetroMind*\n\n"
+        f"🤖 النموذج الحالي: `{model_name}`\n"
+        f"💬 رسائل في السياق: `{history_len}`\n"
+        f"🕐 الوقت: `{datetime.now().strftime('%Y-%m-%d %H:%M')}`\n\n"
+        "الوحدات النشطة:\n"
+        "✅ مختبر PVT\n"
+        "✅ هندسة المكامن\n"
+        "✅ محاكاة المكامن\n"
+        "✅ هندسة الحفر\n"
+        "✅ هندسة الإنتاج"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown")
 
-def start_message() -> str:
-    return """أهلاً بك في PVT Lab AI Bot
 
-أنا مساعد هندسي متخصص في:
-- PVT Laboratory and Reservoir Fluid Analysis
-- Reservoir Simulation (Eclipse / CMG)
-- Drilling Engineering
-- PDF/DOCX Report Analysis
-- Graph and Figure Interpretation
-
-الأوامر المتاحة:
-
-/glossary    — المصطلحات النفطية
-/calc        — حسابات هندسية سريعة
-  /calc API for SG 0.85
-  /calc hydrostatic mw 10 tvd 5000
-  /calc ooip 500 50 0.2 0.3 1.3
-  /calc water cut qw 800 qo 200
-  /calc recovery np 5000000 ooip 20000000
-/analyze     — تحليل تقرير PDF/DOCX مرفوع
-/graph       — تحليل رسم بياني أو صورة هندسية
-/plot        — توجيه رسومات PVT
-/check       — فحص بيانات PVT
-/export_sim  — تصدير بيانات للمحاكاة
-/pvto        — جدول PVTO لـ Eclipse
-/pvtg        — جدول PVTG لـ Eclipse
-/eclipse     — إرشادات Eclipse
-/cmg         — إرشادات CMG
-
-يمكنك كتابة سؤالك مباشرة بالعربي أو الإنجليزي."""
-
-def surface_separator_answer() -> str:
-    return """تحليل هندسي — عينة زيت من الفاصل السطحي مع عينة غاز
-
-نوع العينات
-هذه عينات سطحية منفصلة وليست سائل مكمن مباشراً مثل Bottom Hole Sample.
-الزيت والغاز انفصلا عند ظروف الفاصل السطحي لذلك يلزم Recombination أولاً.
-
-البيانات المطلوبة
-- Separator Pressure و Temperature
-- Oil Rate و Gas Rate
-- Producing GOR أو Separator GOR
-- Gas Composition و Oil/Stock Tank Oil Composition
-- API Gravity و Gas Specific Gravity
-- Water Cut و وجود H2S/CO2
-
-الاختبارات المطلوبة
-1. Sample QC — فحص سلامة العينات
-2. Compositional Analysis — تحليل تركيبي كامل
-3. Recombination — إعادة بناء سائل المكمن
-4. Validation — التحقق من تمثيلية العينة المعاد تركيبها
-5. CCE/CME — لتحديد Saturation Pressure وسلوك الحجم
-6. DV للزيت أو CVD للغاز المكثف
-7. Separator Test و Viscosity Test
-
-الرسومات المطلوبة
-- Pressure vs Bo
-- Pressure vs Rs
-- Pressure vs Oil Viscosity
-- Pressure vs Relative Volume / Y-Function
-- للغاز المكثف: Pressure vs Liquid Dropout
-
-إعداد المحاكاة
-Black Oil: PVTO في Eclipse يحتاج Bo و Rs و Viscosity عند كل ضغط.
-Gas Condensate / Volatile Oil: Compositional Model مع EOS Tuning.
-
-الخلاصة
-لا يمكن حساب Bo أو Rs أو Bubble Point بدون بيانات الفاصل والتركيب.
-أرسل البيانات وسأبدأ الحسابات مباشرة."""
-
-print("PVT Lab AI Bot running...")
-
-while True:
-    try:
-        updates = requests.get(f"{TELEGRAM_URL}/getUpdates", params={"offset": offset + 1, "timeout": 30}, timeout=40).json()
-        for update in updates.get("result", []):
-            offset = update["update_id"]
-            msg = update.get("message")
-            if not msg:
-                continue
-            chat_id = msg["chat"]["id"]
-            if "document" in msg:
-                handle_document_upload(chat_id, msg["document"])
-                continue
-            if "photo" in msg:
-                handle_photo_upload(chat_id, msg["photo"])
-                continue
-            if "text" not in msg:
-                send_message(chat_id, "أرسل نصاً أو ملف PDF/DOCX أو صورة.")
-                continue
-            text = msg["text"].strip()
-            context = FILE_CONTEXT.get(chat_id)
-            if text == "/start":
-                send_message(chat_id, start_message())
-                continue
-            if text == "/glossary":
-                send_document(chat_id, GLOSSARY_HTML.encode("utf-8"), "petroleum_glossary.html", "المصطلحات النفطية الشاملة")
-                continue
-            if is_calc_cmd(text):
-                query = text[5:].strip()
-                result = handle_calculation(query)
-                if result:
-                    send_message(chat_id, result)
-                else:
-                    send_message(chat_id, "لم أتعرف على الحساب. أمثلة:\n\n/calc API for SG 0.85\n/calc hydrostatic mw 10 tvd 5000\n/calc ooip 500 50 0.2 0.3 1.3\n/calc darcy 50 100 200 2 500\n/calc recovery 5000000 20000000\n/calc water cut 800 200")
-                continue
-            if is_analyze_cmd(text):
-                if not context:
-                    send_message(chat_id, "لا يوجد ملف مرفوع. أرسل PDF أو DOCX أولاً.")
-                    continue
-                prompt = "قم بتحليل هذا التقرير الهندسي:\n1. نوع العينة ونظام السائل\n2. الاختبارات المنفذة وجودتها\n3. القيم الرئيسية Pb, Bo, Rs, API, Viscosity\n4. انتقادات أو مشاكل في البيانات\n5. توصيات للمحاكاة\n6. الخلاصة الهندسية"
-                send_message(chat_id, ask_ai(prompt, context))
-                continue
-            if is_graph_cmd(text):
-                img = IMAGE_CONTEXT.get(chat_id)
-                if not img:
-                    send_message(chat_id, "أرسل صورة الرسم أولاً ثم اكتب /graph.")
-                    continue
-                prompt = text + "\n\nحلل هذا الرسم الهندسي النفطي:\n- حدد المحاور والوحدات\n- فسر الاتجاه العام\n- اكشف أي سلوك غير طبيعي\n- اذكر أي ظاهرة Retrograde إن وجدت\n- أعط التفسير الهندسي والتوصيات"
-                send_message(chat_id, ask_vision_ai(prompt, img, context))
-                continue
-            if is_plot_cmd(text):
-                prompt = text + "\n\nThe user is asking for a PVT plot or sketch. Use correct petroleum engineering trends. For Bo vs Pressure, Bo must peak at Bubble Point Pressure Pb. Below Pb, Bo decreases as pressure decreases. Above Pb, Bo changes slightly and generally decreases as pressure increases. Do not say Pb is minimum Bo. If the user asks for drawing only, provide a simple ASCII sketch first, then very short notes. If data are missing, say it is a schematic plot only."
-                send_message(chat_id, ask_ai(prompt, context))
-                continue
-            if is_check_cmd(text):
-                prompt = text + "\n\nافحص البيانات المقدمة هندسياً:\n- تحقق من المنطقية والاتساق\n- حدد أي قيم غير طبيعية أو مشبوهة\n- اذكر البيانات الناقصة\n- أعط توصيات التصحيح"
-                send_message(chat_id, ask_ai(prompt, context))
-                continue
-            if is_export_cmd(text):
-                prompt = text + "\n\nقدم توجيهات تصدير المحاكاة:\n- حدد نوع النموذج Black Oil / Compositional\n- الكلمات المفتاحية المطلوبة في Eclipse/CMG\n- تحقق من الوحدات والاتساق\n- اذكر البيانات الناقصة"
-                send_message(chat_id, ask_ai(prompt, context))
-                continue
-            if is_surface_separator(text):
-                send_message(chat_id, surface_separator_answer())
-                continue
-            send_message(chat_id, ask_ai(text, context))
-    except Exception as e:
-        print(f"Main loop error: {e}")
-    time.sleep(1)
+async def cmd_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if not args:
+        current = context.user_data.get("model", DEFAULT_MODEL)
+        text = (
+            f"🤖 *النموذج الحالي:* `{current}`\n\n"
+            "النماذج المتاحة:\n"
+            f"• `fast`
