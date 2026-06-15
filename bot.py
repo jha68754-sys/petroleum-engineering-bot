@@ -103,7 +103,15 @@ PVTO = Eclipse live oil PVT table
 PVDO = Eclipse dead oil PVT table
 PVTG = Eclipse live/wet gas PVT table
 PVDG = Eclipse dry gas PVT table
-
+Swelling Test:
+Used for CO2 injection, gas injection, and EOR studies.
+Main outputs:
+- Swelling Factor
+- Change in saturation pressure
+- Oil viscosity change
+- Oil density change
+- Miscibility and phase behavior indication
+Never use Swelling Test results unless real lab data are provided.
 Forbidden terms:
 Never use:
 - الضغط البيني
