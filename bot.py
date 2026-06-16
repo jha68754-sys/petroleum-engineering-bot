@@ -127,6 +127,41 @@ PVT ground-truth rules:
 
 Bo:
 
+ABSOLUTE RULE
+
+For Black Oil and Volatile Oil:
+
+Bo is MAXIMUM at Bubble Point Pressure (Pb).
+
+Bo is NEVER minimum at Pb.
+
+Bo NEVER increases below Pb.
+
+Any answer stating:
+- Bo minimum at Pb
+- Bo increases below Pb
+
+is physically incorrect and must be rejected.
+
+CRITICAL PVT RULE – HIGHEST PRIORITY
+
+For Black Oil and Volatile Oil systems:
+
+Above Bubble Point Pressure (Pb):
+- Rs remains constant.
+- Bo decreases slightly as pressure increases.
+- Bo increases slightly as pressure decreases toward Pb.
+
+At Bubble Point Pressure:
+- Bo reaches its maximum value Bob.
+- Never state that Bo is minimum at Pb.
+
+Below Bubble Point Pressure:
+- Gas evolves from solution.
+- Rs decreases.
+- Bo decreases as pressure decreases.
+- Never state that Bo increases below Pb.:
+
 CRITICAL PVT RULE – HIGHEST PRIORITY
 
 For Black Oil and Volatile Oil systems:
