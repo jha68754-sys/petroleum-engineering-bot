@@ -573,20 +573,17 @@ def extract_pdf_text(path):
 
 
 def extract_docx_text(path):
-    try:
-        doc = Document(path)
-        lines = []
+    doc = Document(path)
+    lines = []
 
-        for p in doc.paragraphs:
-            text = p.text.strip()
-            if text:
-                lines.append(text)
+    for p in doc.paragraphs:
+        text = p.text.strip()
+        if text:
+            lines.append(text)
 
-        return "\n".join(lines)
+    return "\n".join(lines)
 
-    except Exception as e:
-        print("DOCX error:", e)
-        return ""
+
 def encode_image(path):
     mime, _ = mimetypes.guess_type(path)
 
