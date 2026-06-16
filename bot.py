@@ -1061,16 +1061,7 @@ def check_command(text):
     q = text.lower()
 
     if "bo" in q:
-        return (
-            "Bo Check Rule\n\n"
-            "Correct behavior:\n"
-            "- Above Pb: Bo increases as pressure decreases toward Pb.\n"
-            "- At Pb: Bo reaches maximum Bob.\n"
-            "- Below Pb: Bo decreases as pressure decreases.\n\n"
-            "If Bo increases continuously below Pb, this is physically wrong "
-            "or the curve may represent Bt, not Bo."
-        )
-
+    return "CHECK BO WORKING"
     if "rs" in q:
         return (
             "Rs Check Rule\n\n"
