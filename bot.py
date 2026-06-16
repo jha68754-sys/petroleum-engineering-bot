@@ -263,7 +263,9 @@ TERMS = {
         "definition": "Laboratory study of reservoir fluid behavior under pressure and temperature.",
         "note": "Never define PVT as Pressuring Volume and Temperature."
     }
-}PVT_PLOTS = {
+}
+
+PVT_PLOTS = {
     "bo": {
         "title": "Bo vs Pressure",
         "trend": "Bo increases toward Pb, reaches maximum at Pb, then decreases below Pb.",
@@ -525,7 +527,10 @@ def extract_docx_text(path):
 
     except Exception as e:
         print("DOCX error:", e)
-        return ""def encode_image(path):
+                return ""
+
+
+def encode_image(path):
     mime, _ = mimetypes.guess_type(path)
 
     if not mime:
@@ -782,7 +787,10 @@ def export_simulation(fluid_type):
         "Gas Condensate\n"
         "Wet Gas\n"
         "Dry Gas"
-    )def calculate_command(text):
+      )
+
+
+def calculate_command(text):
 
     args = text.lower().split()
 
