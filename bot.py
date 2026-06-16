@@ -525,9 +525,9 @@ def extract_docx_text(path):
             if p.text.strip()
         )
 
-    except Exception as e:
+        except Exception as e:
         print("DOCX error:", e)
-                return ""
+        return ""
 
 
 def encode_image(path):
@@ -1047,7 +1047,10 @@ def check_command(text):
         "/check rs\n"
         "/check z\n"
         "/check dropout"
-    )def start_message():
+        )
+
+
+def start_message():
     return """
 Petroleum Engineering AI Bot
 
