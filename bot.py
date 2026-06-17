@@ -1916,13 +1916,22 @@ def ask_ai(user_text: str, file_context=None, max_retries: int = 2) -> str:
     for attempt in range(max_retries + 1):
         try:
             messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-            if file_context:
-                messages.append({
-                    "role": "user",
-                    "content": "Reference document context (PVT / engineering report, segmented):\n\n"
-                               + file_context[:20000]
-                })
-            messages.append({"role": "user", "content": user_text})
+
+if "/report" in user_text.lower():
+    template = load_pvt_template()
+    if template:
+        messages.append({
+            "role": "system",
+            "content": "Use this professional PVT report template:\n\n" + template
+        })
+
+if file_context:
+    messages.append({
+        "role": "user",
+        "content": "Reference document context:\n\n" + file_context[:20000]
+    })
+
+messages.append({"role": "user", "content": user_text})
 
             r = requests.post(
                 GROQ_URL,
