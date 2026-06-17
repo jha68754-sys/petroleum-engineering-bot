@@ -1920,10 +1920,15 @@ def ask_ai(user_text: str, file_context=None, max_retries: int = 2) -> str:
 if "/report" in user_text.lower():
     template = load_pvt_template()
     if template:
-        messages.append({
-            "role": "system",
-            "content": "Use this professional PVT report template:\n\n" + template
-        })
+        user_text = (
+            "Generate a professional PVT Laboratory Report using the exact structure below. "
+            "If no measured data is provided, still create the report skeleton and write "
+            "'Not provided' under missing fields. Do NOT respond with DATA REQUIRED.\n\n"
+            "REPORT TEMPLATE:\n"
+            + template
+            + "\n\nUSER REQUEST:\n"
+            + user_text
+        )
 
 if file_context:
     messages.append({
