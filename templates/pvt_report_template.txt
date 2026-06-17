@@ -1,1 +1,41 @@
-PVT REPORT TEMPLATE
+PVT LABORATORY REPORT
+
+1. Executive Summary
+
+2. Sample Information
+- Sample Type
+- Reservoir Temperature
+- Reservoir Pressure
+- API Gravity
+- Gas Gravity
+
+3. Fluid Classification
+
+4. Bubble Point / Dew Point Analysis
+
+5. CCE Test Results
+
+6. Differential Liberation Results
+
+7. Separator Test Results
+
+8. Oil Properties
+- Bo
+- Rs
+- Oil Density
+- Oil Viscosity
+
+9. Gas Properties
+- Bg
+- Z Factor
+- Gas Viscosity
+
+10. Engineering Interpretation
+
+11. Simulation Recommendations
+- PVTO
+- PVDO
+- PVTG
+- PVDG
+
+12. Conclusions
