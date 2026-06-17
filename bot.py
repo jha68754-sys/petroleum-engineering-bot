@@ -1917,11 +1917,11 @@ def ask_ai(user_text: str, file_context=None, max_retries: int = 2) -> str:
         try:
             messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
-                if file_context:
-                messages.append({
+            if file_context:
+              messages.append({
                     "role": "user",
                     "content": "Reference document context:\n\n" + file_context[:20000]
-                })
+              })
 
             messages.append({
                 "role": "user",
