@@ -1917,16 +1917,43 @@ def ask_ai(user_text: str, file_context=None, max_retries: int = 2) -> str:
         try:
             messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
+            def ask_ai(user_text: str, file_context=None, max_retries=3):
+    last_error = None
+    for attempt in range(max_retries + 1):
+        try:
+            messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+
             if file_context:
-              messages.append({
+                messages.append({
                     "role": "user",
                     "content": "Reference document context:\n\n" + file_context[:20000]
-              })
+                })
 
             messages.append({
                 "role": "user",
                 "content": user_text
             })
+
+            r = requests.post(
+                GROQ_URL,
+                headers={
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": TEXT_MODEL,
+                    "messages": messages,
+                    "temperature": 0.08,
+                    "max_tokens": 3000,
+                },
+                timeout=90
+            )
+
+            if r.status_code == 429:
+                last_error = "rate_limited"
+
+        except Exception as e:
+            last_error = str(e)
 
             r = requests.post(
                 GROQ_URL,
