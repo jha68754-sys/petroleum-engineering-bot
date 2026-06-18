@@ -1908,6 +1908,40 @@ def store_file_context(chat_id: int, text: str, filename: str) -> str:
     return f"تم قراءة الملف '{filename}' بنجاح ({original_len:,} حرف). أصبح مرجعاً لهذه المحادثة."
 
 
+
+def load_pvt_template():
+    """Load the professional PVT report template from templates/pvt_report_template.txt."""
+    try:
+        with open("templates/pvt_report_template.txt", "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        return """PVT LABORATORY REPORT
+
+1. Executive Summary
+2. Sample Information
+3. Fluid Classification
+4. Bubble Point / Dew Point Analysis
+5. CCE Test Results
+6. Differential Liberation Results
+7. Separator Test Results
+8. Oil Properties
+- Bo
+- Rs
+- Oil Density
+- Oil Viscosity
+9. Gas Properties
+- Bg
+- Z Factor
+- Gas Viscosity
+10. Engineering Interpretation
+11. Simulation Recommendations
+- PVTO
+- PVDO
+- PVTG
+- PVDG
+12. Conclusions"""
+
+
 # ─────────────────────────────────────────────
 #  AI CALLS  (with retry/backoff + differentiated error messages)
 # ─────────────────────────────────────────────
@@ -2783,6 +2817,23 @@ while True:
                 near_critical = "near_critical" in body or "near critical" in body
                 fluid_str = body.replace("near_critical", "").replace("near critical", "").strip()
                 send_message(chat_id, export_sim_decision(fluid_str, near_critical))
+                continue
+
+
+            # ── /report ──
+            if text.lower().startswith("/report"):
+                query = text[len("/report"):].strip()
+                template = load_pvt_template()
+                report_prompt = (
+                    (query if query else "Generate full PVT Laboratory Report") + "\n\n"
+                    "Use the following professional PVT report template exactly.\n"
+                    "If measured data is missing, do NOT stop and do NOT answer only DATA REQUIRED.\n"
+                    "Instead, write the full report skeleton and put 'Not provided' for missing fields.\n"
+                    "If a PDF/DOCX was uploaded, use the uploaded document context to fill the report.\n\n"
+                    "REPORT TEMPLATE:\n"
+                    + template
+                )
+                send_message(chat_id, ask_ai(report_prompt, context))
                 continue
 
             # ── /analyze ──
