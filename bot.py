@@ -1910,41 +1910,11 @@ def store_file_context(chat_id: int, text: str, filename: str) -> str:
 
 
 def load_pvt_template():
-    """Load the professional PVT report template from templates/pvt_report_template.txt."""
     try:
         with open("templates/pvt_report_template.txt", "r", encoding="utf-8") as f:
             return f.read()
     except Exception:
-        return """PVT LABORATORY REPORT
-
-1. Executive Summary
-2. Sample Information
-3. Fluid Classification
-4. Bubble Point / Dew Point Analysis
-5. CCE Test Results
-6. Differential Liberation Results
-7. Separator Test Results
-8. Oil Properties
-- Bo
-- Rs
-- Oil Density
-- Oil Viscosity
-9. Gas Properties
-- Bg
-- Z Factor
-- Gas Viscosity
-10. Engineering Interpretation
-11. Simulation Recommendations
-- PVTO
-- PVDO
-- PVTG
-- PVDG
-12. Conclusions"""
-
-
-# ─────────────────────────────────────────────
-#  AI CALLS  (with retry/backoff + differentiated error messages)
-# ─────────────────────────────────────────────
+        return "PVT LABORATORY REPORT"
 def ask_ai(user_text: str, file_context=None, max_retries=3):
     last_error = None
     for attempt in range(max_retries + 1):
