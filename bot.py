@@ -2635,12 +2635,12 @@ while True:
                     )
                     continue
                 value, from_u, to_u = float(m.group(1)), m.group(2), m.group(3)
-                send_message(chat_id, run_unit_conversion(value, from_u, to_u))
-                continue
-    
-          # ── /check ──
-          if is_check_cmd(text):
-                body = text[6:].strip()
+                        send_message(chat_id, run_unit_conversion(value, from_u, to_u))
+        continue
+
+    # — /check —
+    if is_check_cmd(text):
+        body = text[6:].strip()
                 p_match  = re.search(r"p=\[?([\d,\.\s]+)\]?", body)
                 v_match  = re.search(r"v=\[?([\d,\.\s]+)\]?", body)
                 pb_match = re.search(r"pb=([\d\.]+)", body)
