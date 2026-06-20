@@ -2635,18 +2635,18 @@ while True:
                     )
                     continue
                 value, from_u, to_u = float(m.group(1)), m.group(2), m.group(3)
-                        send_message(chat_id, run_unit_conversion(value, from_u, to_u))
-        continue
+                send_message(chat_id, run_unit_conversion(value, from_u, to_u))
+                continue
 
-    # — /check —
-    if is_check_cmd(text):
-        body = text[6:].strip()
-                p_match  = re.search(r"p=\[?([\d,\.\s]+)\]?", body)
-                v_match  = re.search(r"v=\[?([\d,\.\s]+)\]?", body)
-                pb_match = re.search(r"pb=([\d\.]+)", body)
-                rel_word = body.split()[0].lower() if body else None
+            # — /check —
+            if is_check_cmd(text):
+            body = text[6:].strip()
+                   p_match  = re.search(r"p=\[?([\d,\.\s]+)\]?", body)
+                   v_match  = re.search(r"v=\[?([\d,\.\s]+)\]?", body)
+                   pb_match = re.search(r"pb=([\d\.]+)", body)
+                   rel_word = body.split()[0].lower() if body else None
 
-                rel_key  = PLOT_ALIASES.get(rel_word) if rel_word else None
+                   rel_key  = PLOT_ALIASES.get(rel_word) if rel_word else None
 
                 if not rel_key or not p_match or not v_match:
                     send_message(
