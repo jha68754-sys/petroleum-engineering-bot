@@ -2670,22 +2670,9 @@ while True:
                     )
                     continue
 
-                base_response = format_plot_response(rel_key)
-                send_message(chat_id, base_response)
-
-                # Optional AI follow-up if a document is in context
-                if context:
-                    followup = ask_ai(
-                        f"The user was given the deterministic /plot description for "
-                        f"'{rel_key}' (physical shape per BLOCK 5). Now check the "
-                        f"uploaded document: does it contain actual measured data for "
-                        f"this relationship? If yes, summarize the values and compare "
-                        f"to the expected shape. If no, say so in one line.",
-                        context
-                    )
-                    send_message(chat_id, followup)
-                continue
-
+               base_response = format_plot_response(rel_key)
+               send_message(chat_id, base_response)
+               continue
             # ── /check ──
             if is_check_cmd(text):
                 body = text[6:].strip()
