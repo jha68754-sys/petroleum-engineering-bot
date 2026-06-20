@@ -2635,9 +2635,8 @@ while True:
                     )
                     continue
                 value, from_u, to_u = float(m.group(1)), m.group(2), m.group(3)
-                send_message(chat_id, run_unit_conversion(value, from_u, to_u))
-          ) 
-              continue
+                   send_message(chat_id, run_unit_conversion(value, from_u, to_u))
+                   continue
 
             # — /check —
             if is_check_cmd(text):
