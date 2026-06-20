@@ -2670,11 +2670,11 @@ while True:
                     )
                     continue
 
-               base_response = format_plot_response(rel_key)
-               send_message(chat_id, base_response)
-               continue
-            # ── /check ──
-            if is_check_cmd(text):
+                base_response = format_plot_response(rel_key)
+                send_message(chat_id, base_response)
+                continue
+          # ── /check ──
+          if is_check_cmd(text):
                 body = text[6:].strip()
                 p_match  = re.search(r"p=\[?([\d,\.\s]+)\]?", body)
                 v_match  = re.search(r"v=\[?([\d,\.\s]+)\]?", body)
