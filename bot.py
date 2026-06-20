@@ -2637,65 +2637,7 @@ while True:
                 value, from_u, to_u = float(m.group(1)), m.group(2), m.group(3)
                 send_message(chat_id, run_unit_conversion(value, from_u, to_u))
                 continue
-
-# ── /plot ──
-if is_plot_cmd(text):
-    query = text[5:].strip().lower()
-
-    if not query:
-        send_message(
-            chat_id,
-            "Usage: /plot <relationship>\n\n"
-            "Available:\n"
-            "bo, rs, bg, z/z-factor, viscosity, density\n"
-            "dropout/cvd (liquid dropout), cgr\n"
-            "phase envelope/pt (P-T diagram)\n"
-            "oil density, vrel/cce, gas viscosity"
-        )
-        continue
-
-    rel_key = PLOT_ALIASES.get(query)
-
-    if not rel_key:
-        for alias, key in PLOT_ALIASES.items():
-            if alias in query:
-                rel_key = key
-                break
-
-    if not rel_key:
-        send_message(
-            chat_id,
-            f"لم أتعرف على العلاقة '{query}'\n"
-            "الخيارات المتاحة:\n"
-            "bo, rs, bg, z, viscosity, density,\n"
-            "oil density, vrel, gas viscosity"
-        )
-        continue
-
-    base_response = format_plot_response(rel_key)
-
-    if not base_response:
-        send_message(
-            chat_id,
-            f"لا يوجد تعريف للرسم '{query}'"
-        )
-        continue
-
-    send_message(chat_id, base_response)
-
-    if context:
-        try:
-            followup = ask_ai(
-                f"The user requested plot relationship '{rel_key}'. "
-                f"Explain the physical meaning, expected trend, "
-                f"and common interpretation mistakes.",
-                context
-            )
-            send_message(chat_id, followup)
-        except Exception:
-            pass
-
-    continue
+    
           # ── /check ──
           if is_check_cmd(text):
                 body = text[6:].strip()
