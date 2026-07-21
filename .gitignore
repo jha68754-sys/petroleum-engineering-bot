@@ -1,0 +1,28 @@
+# Environment
+.env
+*.pyc
+__pycache__/
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp files
+pvt_upload_*
+offset_state.json
+*.tmp
+
+# Logs
+*.log
+
+# Virtual env
+venv/
+.venv/
+env/

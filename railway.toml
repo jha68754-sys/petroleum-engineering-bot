@@ -1,0 +1,13 @@
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+startCommand = "python main.py"
+healthcheckPath = "/"
+healthcheckTimeout = 100
+restartPolicyType = "ALWAYS"
+restartPolicyMaxRetries = 5
+
+[deploy.env]
+LOG_LEVEL = "INFO"
+POLLING_TIMEOUT = "30"

@@ -1,0 +1,1169 @@
+"""
+Domain constants for the Petroleum Engineering Bot.
+
+Contains all PVT rules, knowledge base entries, fluid classification,
+formulas, correlations, unit conversions, plot rules, ASCII sketches,
+and simulation decisions. Extracted from the original monolithic bot.py
+and organized into logically grouped constants.
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from models.pvt_models import (
+    FluidClassification,
+    FormulaSpec,
+    KnowledgeEntry,
+    PVTPlotRule,
+)
+
+# ═══════════════════════════════════════════════════════════════════════
+#  SYSTEM PROMPT  (loaded from file at runtime — see prompts/system_prompt.txt)
+# ═══════════════════════════════════════════════════════════════════════
+
+SYSTEM_PROMPT_FILE = "prompts/system_prompt.txt"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  KNOWLEDGE BASE
+# ═══════════════════════════════════════════════════════════════════════
+
+KNOWLEDGE_BASE: List[KnowledgeEntry] = [
+    {
+        "en": "Oil Formation Volume Factor (Bo)",
+        "ar": "معامل حجم تكوين الزيت",
+        "category": "PVT",
+        "unit": "rb/STB",
+        "def_ar": "نسبة حجم الزيت مع الغاز المذاب داخل المكمن الى حجمه في خزان التخزين السطحي. Bo = حجم الزيت في المكمن / حجم زيت خزان التخزين.",
+        "trend": "rises to max at Pb (above Pb), decreases below Pb",
+        "relationship_key": "bo_vs_p",
+        "typical_range": "1.0 - 2.0 rb/STB",
+    },
+    {
+        "en": "Solution Gas-Oil Ratio (Rs)",
+        "ar": "نسبة الغاز المذاب",
+        "category": "PVT",
+        "unit": "scf/STB",
+        "def_ar": "حجم الغاز الذائب في برميل واحد من زيت خزان التخزين عند ضغط وحرارة المكمن.",
+        "trend": "constant = Rsi above Pb, decreases below Pb",
+        "relationship_key": "rs_vs_p",
+        "typical_range": "100 - 2000+ scf/STB",
+    },
+    {
+        "en": "Bubble Point Pressure (Pb)",
+        "ar": "ضغط نقطة الفقاعة",
+        "category": "PVT",
+        "unit": "psia",
+        "def_ar": "الضغط الذي يبدأ عنده انفصال أول فقاعة غاز عن الزيت.",
+        "trend": "pivot point",
+        "relationship_key": "saturation_pressure_oil",
+        "typical_range": "100 - 5000+ psia",
+    },
+    {
+        "en": "Gas Formation Volume Factor (Bg)",
+        "ar": "معامل حجم تكوين الغاز",
+        "category": "PVT",
+        "unit": "rb/scf",
+        "def_ar": "نسبة حجم الغاز عند ظروف المكمن الى حجمه عند الظروف القياسية.",
+        "trend": "smooth hyperbolic decrease as pressure increases",
+        "relationship_key": "bg_vs_p",
+        "typical_range": "0.0005 - 0.02 rb/scf",
+    },
+    {
+        "en": "Gas Compressibility Factor (Z-factor)",
+        "ar": "معامل الانضغاطية للغاز",
+        "category": "PVT",
+        "unit": "dimensionless",
+        "def_ar": "معامل تصحيح في معادلة PV=ZnRT يعكس انحراف سلوك الغاز الحقيقي عن الغاز المثالي.",
+        "trend": "U-shaped: decreases from 1, reaches minimum, increases again",
+        "relationship_key": "z_vs_p",
+        "typical_range": "0.6 - 1.2",
+    },
+    {
+        "en": "Oil Viscosity",
+        "ar": "لزوجة الزيت",
+        "category": "PVT",
+        "unit": "cP",
+        "def_ar": "مقاومة الزيت للتدفق. تتأثر بكمية الغاز المذاب.",
+        "trend": "decreases to min at Pb (above Pb), increases below Pb",
+        "relationship_key": "oil_visc_vs_p",
+        "typical_range": "0.2 - 50+ cP",
+    },
+    {
+        "en": "Gas Viscosity",
+        "ar": "لزوجة الغاز",
+        "category": "PVT",
+        "unit": "cP",
+        "def_ar": "مقاومة الغاز للتدفق.",
+        "trend": "monotonically increases with pressure",
+        "relationship_key": "gas_visc_vs_p",
+        "typical_range": "0.01 - 0.05 cP",
+    },
+    {
+        "en": "Oil Density",
+        "ar": "كثافة الزيت",
+        "category": "PVT",
+        "unit": "lb/ft3",
+        "def_ar": "كتلة الزيت لكل وحدة حجم عند ظروف المكمن.",
+        "trend": "decreases to min at Pb, increases below Pb",
+        "relationship_key": "oil_density_vs_p",
+        "typical_range": "40 - 60 lb/ft3",
+    },
+    {
+        "en": "Relative Volume (CCE)",
+        "ar": "الحجم النسبي",
+        "category": "PVT",
+        "unit": "V/Vsat",
+        "def_ar": "حجم العينة عند ضغط معين منسوباً الى حجمها عند ضغط التشبع.",
+        "trend": "gentle slope above Pb, =1.0 at Pb, steep slope below Pb",
+        "relationship_key": "vrel_vs_p_cce",
+        "typical_range": "n/a",
+    },
+    {
+        "en": "Liquid Dropout (CVD)",
+        "ar": "نسبة تكثف السوائل",
+        "category": "PVT - Gas Condensate",
+        "unit": "% HC pore volume",
+        "def_ar": "نسبة السائل المتكثف من الغاز داخل المكمن عند ضغوط أقل من ضغط نقطة الندى.",
+        "trend": "0% above Pd, rises to peak (retrograde), then decreases",
+        "relationship_key": "liquid_dropout_vs_p",
+        "typical_range": "0 - 30%+",
+    },
+    {
+        "en": "Condensate-Gas Ratio (CGR)",
+        "ar": "نسبة المكثفات إلى الغاز",
+        "category": "Production - Gas Condensate",
+        "unit": "STB/MMscf",
+        "def_ar": "حجم المكثفات السطحية المنتجة لكل وحدة حجم من الغاز المنتج.",
+        "trend": "roughly constant above Pd, decreases below Pd",
+        "relationship_key": "cgr_vs_p",
+        "typical_range": "10 - 300 STB/MMscf",
+    },
+    {
+        "en": "Porosity",
+        "ar": "المسامية",
+        "category": "Reservoir",
+        "unit": "fraction or %",
+        "def_ar": "نسبة حجم الفراغات الى الحجم الكلي للصخرة.",
+        "trend": "static property",
+        "relationship_key": None,
+        "typical_range": "0.05 - 0.35",
+    },
+    {
+        "en": "Permeability",
+        "ar": "النفاذية",
+        "category": "Reservoir",
+        "unit": "mD",
+        "def_ar": "قدرة الصخرة على نقل الموائع تحت فرق ضغط.",
+        "trend": "static property",
+        "relationship_key": None,
+        "typical_range": "0.1 - 1000+ mD",
+    },
+    {
+        "en": "Original Oil In Place (OOIP)",
+        "ar": "النفط الأصلي في المكمن",
+        "category": "Reservoir",
+        "unit": "STB",
+        "def_ar": "OOIP = (7758 x A x h x phi x (1-Sw)) / Bo. ملاحظة: Bo في المقام.",
+        "trend": "static",
+        "relationship_key": None,
+        "typical_range": "varies widely",
+    },
+    {
+        "en": "Original Gas In Place (OGIP)",
+        "ar": "الغاز الأصلي في المكمن",
+        "category": "Reservoir",
+        "unit": "scf",
+        "def_ar": "OGIP = (43560 x A x h x phi x (1-Sw)) / Bgi.",
+        "trend": "static",
+        "relationship_key": None,
+        "typical_range": "varies widely",
+    },
+    {
+        "en": "Recovery Factor",
+        "ar": "عامل الاسترداد",
+        "category": "Reservoir",
+        "unit": "% or fraction",
+        "def_ar": "RF = Np / OOIP.",
+        "trend": "static",
+        "relationship_key": None,
+        "typical_range": "20% - 50% (oil), 50% - 90% (gas)",
+    },
+    {
+        "en": "Skin Factor",
+        "ar": "عامل الجلد",
+        "category": "Production",
+        "unit": "dimensionless",
+        "def_ar": "مقياس تأثير الضرر أو التحفيز حول البئر.",
+        "trend": "well condition indicator",
+        "relationship_key": None,
+        "typical_range": "-5 to +20",
+    },
+    {
+        "en": "Productivity Index (PI)",
+        "ar": "مؤشر الإنتاجية",
+        "category": "Production",
+        "unit": "STB/day/psi",
+        "def_ar": "PI = q / (Pr - Pwf).",
+        "trend": "well performance indicator",
+        "relationship_key": None,
+        "typical_range": "0.5 - 50 STB/day/psi",
+    },
+    {
+        "en": "Water Cut (WC)",
+        "ar": "نسبة الماء المنتج",
+        "category": "Production",
+        "unit": "%",
+        "def_ar": "WC = qw / (qo + qw) x 100.",
+        "trend": "increases over field life",
+        "relationship_key": None,
+        "typical_range": "0 - 98%",
+    },
+    {
+        "en": "Hydrostatic Pressure",
+        "ar": "الضغط الهيدروستاتيكي",
+        "category": "Drilling",
+        "unit": "psi",
+        "def_ar": "P = 0.052 x MW x TVD.",
+        "trend": "calculated from mud column",
+        "relationship_key": None,
+        "typical_range": "depends on MW, TVD",
+    },
+    {
+        "en": "Net Present Value (NPV)",
+        "ar": "صافي القيمة الحالية",
+        "category": "Economics",
+        "unit": "$",
+        "def_ar": "NPV = Sum[CFt/(1+r)^t] - C0.",
+        "trend": "n/a",
+        "relationship_key": None,
+        "typical_range": "n/a",
+    },
+]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  FLUID CLASSIFICATION TABLE
+# ═══════════════════════════════════════════════════════════════════════
+
+FLUID_CLASSIFICATION_TABLE: List[Dict[str, Any]] = [
+    {
+        "type_en": "Black Oil",
+        "type_ar": "الزيت الأسود التقليدي",
+        "gor_min": 0, "gor_max": 2000,
+        "api_min": 0, "api_max": 40,
+        "behavior": "سلوك Bo/Rs قياسي، لا يوجد تكثف رجعي.",
+    },
+    {
+        "type_en": "Volatile Oil",
+        "type_ar": "الزيت المتطاير",
+        "gor_min": 2000, "gor_max": 8000,
+        "api_min": 40, "api_max": 50,
+        "behavior": "تغير حاد في Bo و Rs قرب ضغط نقطة الفقاعة.",
+    },
+    {
+        "type_en": "Gas Condensate",
+        "type_ar": "الغاز المكثف",
+        "gor_min": 8000, "gor_max": 100000,
+        "api_min": 50, "api_max": 70,
+        "behavior": "تكثف رجعي (Retrograde) أسفل ضغط نقطة الندى.",
+    },
+    {
+        "type_en": "Wet Gas",
+        "type_ar": "الغاز الرطب",
+        "gor_min": 100000, "gor_max": 1e9,
+        "api_min": 60, "api_max": 200,
+        "behavior": "لا يوجد تكثف داخل المكمن، فقط على السطح.",
+    },
+    {
+        "type_en": "Dry Gas",
+        "type_ar": "الغاز الجاف",
+        "gor_min": 0, "gor_max": 0,
+        "api_min": 0, "api_max": 0,
+        "behavior": "لا يوجد تكثف على الإطلاق (شبه ميثان صافي).",
+    },
+]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  PVT PLOT RULES
+# ═══════════════════════════════════════════════════════════════════════
+
+PVT_PLOT_RULES: Dict[str, PVTPlotRule] = {
+    "bo_vs_p": {
+        "title_en": "Bo vs Pressure",
+        "title_ar": "معامل حجم تكوين الزيت مقابل الضغط",
+        "definition": "Bo = Reservoir Oil Volume / Stock Tank Oil Volume",
+        "x_axis": "Pressure (psia)",
+        "y_axis": "Bo (rb/STB)",
+        "above_saturation": "increases gently as P decreases toward Pb",
+        "at_saturation": "MAXIMUM value (Bob)",
+        "below_saturation": "decreases as P decreases (steeper than rise above Pb)",
+        "shape": "rises gently to a peak at Pb, then declines more steeply",
+        "pivot": "Pb (peak)",
+        "common_ai_mistakes": [
+            "Bo increases continuously as pressure decreases",
+            "Bo increases below Pb",
+            "Bo = Stock Tank Volume / Reservoir Volume (inverted)",
+            "higher Bo -> higher OOIP (Bo is in denominator: higher Bo = LOWER OOIP)",
+        ],
+        "plot_color": "#1A5276",
+        "y_label": "Bo (rb/STB)",
+    },
+    "rs_vs_p": {
+        "title_en": "Rs vs Pressure",
+        "title_ar": "نسبة الغاز المذاب مقابل الضغط",
+        "definition": "Rs = Solution Gas-Oil Ratio (scf/STB)",
+        "x_axis": "Pressure (psia)",
+        "y_axis": "Rs (scf/STB)",
+        "above_saturation": "CONSTANT at Rsi (no free gas exists)",
+        "at_saturation": "Rs = Rsi (maximum, start of decline)",
+        "below_saturation": "decreases toward 0 as P decreases",
+        "shape": "flat line above Pb, then declines below Pb",
+        "pivot": "Pb (elbow)",
+        "common_ai_mistakes": [
+            "Rs increasing as pressure decreases",
+            "Rs varying above Pb (must be constant = Rsi)",
+        ],
+        "plot_color": "#E67E22",
+        "y_label": "Rs (scf/STB)",
+    },
+    "bg_vs_p": {
+        "title_en": "Bg vs Pressure",
+        "title_ar": "معامل حجم تكوين الغاز مقابل الضغط",
+        "definition": "Bg = Reservoir Gas Volume / Standard Gas Volume",
+        "x_axis": "Pressure (psia)",
+        "y_axis": "Bg (rb/scf)",
+        "above_saturation": "n/a",
+        "at_saturation": "n/a",
+        "below_saturation": "n/a",
+        "shape": "smooth hyperbolic decrease as pressure increases",
+        "pivot": "none",
+        "common_ai_mistakes": ["Bg increasing with pressure"],
+        "plot_color": "#1E8449",
+        "y_label": "Bg (rb/scf)",
+    },
+    "z_vs_p": {
+        "title_en": "Z-factor vs Pressure",
+        "title_ar": "معامل الانضغاطية للغاز مقابل الضغط",
+        "definition": "Z = Gas Compressibility Factor (dimensionless)",
+        "x_axis": "Pressure (psia)",
+        "y_axis": "Z-factor (dimensionless)",
+        "above_saturation": "n/a",
+        "at_saturation": "n/a",
+        "below_saturation": "n/a",
+        "shape": "U-shaped: starts near 1, decreases to minimum, then increases",
+        "pivot": "minimum Z at intermediate P",
+        "common_ai_mistakes": ["Z decreasing monotonically", "Z=1 always"],
+        "plot_color": "#7D3C98",
+        "y_label": "Z-factor",
+    },
+    "oil_visc_vs_p": {
+        "title_en": "Oil Viscosity vs Pressure",
+        "title_ar": "لزوجة الزيت مقابل الضغط",
+        "definition": "Oil Viscosity (cP)",
+        "x_axis": "Pressure (psia)",
+        "y_axis": "Oil Viscosity (cP)",
+        "above_saturation": "decreases gently as P decreases toward Pb",
+        "at_saturation": "MINIMUM value (mu_ob)",
+        "below_saturation": "increases as P decreases",
+        "shape": "mirror image of Bo -- trough at Pb",
+        "pivot": "Pb (minimum)",
+        "common_ai_mistakes": [
+            "monotonic increase as pressure decreases everywhere",
+            "constant viscosity below Pb",
+        ],
+        "plot_color": "#C0392B",
+        "y_label": "Oil Viscosity (cP)",
+    },
+    "gas_visc_vs_p": {
+        "title_en": "Gas Viscosity vs Pressure",
+        "title_ar": "لزوجة الغاز مقابل الضغط",
+        "definition": "Gas Viscosity (cP) - monotonically increases with pressure",
+        "x_axis": "Pressure (psia)",
+        "y_axis": "Gas Viscosity (cP)",
+        "above_saturation": "n/a",
+        "at_saturation": "n/a",
+        "below_saturation": "n/a",
+        "shape": "monotonically increases with pressure",
+        "pivot": "none",
+        "common_ai_mistakes": ["Gas viscosity decreasing with pressure"],
+        "plot_color": "#884EA0",
+        "y_label": "Gas Viscosity (cP)",
+    },
+    "liquid_dropout_vs_p": {
+        "title_en": "Liquid Dropout vs Pressure (CVD)",
+        "title_ar": "نسبة تكثف السوائل مقابل الضغط",
+        "definition": "Liquid Dropout = % of HC pore volume condensed below Pd",
+        "x_axis": "Pressure (psia)",
+        "y_axis": "Liquid Dropout (% HC PV)",
+        "above_saturation": "0%",
+        "at_saturation": "0% by definition",
+        "below_saturation": "RISES sharply (retrograde), peaks, then DECREASES (re-vaporization)",
+        "shape": "rises from 0 at Pd, peaks, then declines",
+        "pivot": "Pd (start); peak at lower P",
+        "common_ai_mistakes": [
+            "monotonically increasing dropout with no peak",
+            "dropout starting above Pd",
+        ],
+        "plot_color": "#2E86C1",
+        "y_label": "Liquid Dropout (% HC PV)",
+    },
+    "cgr_vs_p": {
+        "title_en": "CGR vs Pressure",
+        "title_ar": "نسبة المكثفات إلى الغاز مقابل الضغط",
+        "definition": "CGR = Condensate-Gas Ratio (STB/MMscf)",
+        "x_axis": "Pressure (psia)",
+        "y_axis": "CGR (STB/MMscf)",
+        "above_saturation": "roughly constant",
+        "at_saturation": "constant",
+        "below_saturation": "DECREASES",
+        "shape": "flat then declining below Pd",
+        "pivot": "Pd (where decline begins)",
+        "common_ai_mistakes": ["CGR increasing as pressure depletes"],
+        "plot_color": "#117A65",
+        "y_label": "CGR (STB/MMscf)",
+    },
+    "pt_diagram": {
+        "title_en": "Phase Envelope (P-T Diagram)",
+        "title_ar": "المغلف الطوري (مخطط الضغط - درجة الحرارة)",
+        "definition": "Bubble-point and dew-point lines meeting at Critical Point",
+        "x_axis": "Temperature (F)",
+        "y_axis": "Pressure (psia)",
+        "above_saturation": "n/a",
+        "at_saturation": "n/a",
+        "below_saturation": "n/a",
+        "shape": "two-phase envelope bounded by Cricondenbar (max P) and Cricondentherm (max T)",
+        "pivot": "Critical Point",
+        "common_ai_mistakes": [
+            "single curve with no critical point",
+            "critical point at cricondenbar",
+        ],
+        "plot_color": "#1A5276",
+        "y_label": "Pressure (psia)",
+    },
+    "oil_density_vs_p": {
+        "title_en": "Oil Density vs Pressure",
+        "title_ar": "كثافة الزيت مقابل الضغط",
+        "definition": "Oil Density at reservoir conditions",
+        "x_axis": "Pressure (psia)",
+        "y_axis": "Oil Density (lb/ft3)",
+        "above_saturation": "decreases gently toward Pb",
+        "at_saturation": "MINIMUM value",
+        "below_saturation": "increases as P decreases",
+        "shape": "mirror image of Bo -- minimum at Pb",
+        "pivot": "Pb (minimum)",
+        "common_ai_mistakes": ["monotonic increase ignoring Pb minimum"],
+        "plot_color": "#6E2F8C",
+        "y_label": "Oil Density (lb/ft3)",
+    },
+    "vrel_vs_p_cce": {
+        "title_en": "Relative Volume vs Pressure (CCE)",
+        "title_ar": "الحجم النسبي مقابل الضغط",
+        "definition": "Vrel = V(P)/V(Pb), CCE test output for Pb identification",
+        "x_axis": "Pressure (psia)",
+        "y_axis": "Relative Volume (V/Vsat)",
+        "above_saturation": "gentle upward slope as P decreases",
+        "at_saturation": "Vrel = 1.0 (SLOPE BREAK)",
+        "below_saturation": "steep upward slope",
+        "shape": "two segments with a kink at Pb",
+        "pivot": "Pb (slope discontinuity)",
+        "common_ai_mistakes": ["single straight line through whole curve"],
+        "plot_color": "#1ABC9C",
+        "y_label": "Relative Volume (V/Vsat)",
+    },
+}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  ASCII SKETCHES
+# ═══════════════════════════════════════════════════════════════════════
+
+ASCII_SKETCHES: Dict[str, str] = {
+    "bo_vs_p": (
+        "Bo (rb/STB)\n"
+        "  ^\n"
+        "  |                    Bob (max)\n"
+        "  |                  ,-*\n"
+        "  |               ,-'    \\\n"
+        "  |            ,-'         \\\n"
+        "  |         ,-'               \\\n"
+        "  |      ,-'                     \\\n"
+        "  |   ,-'                            \\___\n"
+        "  |,-'\n"
+        "  +------------------------------------------------> Pressure\n"
+        "  (low P)              Pb                  (high P, Pi)\n"
+    ),
+    "rs_vs_p": (
+        "Rs (scf/STB)\n"
+        "  ^\n"
+        "  |  ______________________ Rsi (constant above Pb)\n"
+        "  | /\n"
+        "  |/\n"
+        "  |\\\n"
+        "  | \\\n"
+        "  |  \\\n"
+        "  |   \\___\n"
+        "  |       \\____\n"
+        "  |            \\________\n"
+        "  +------------------------------------------------> Pressure\n"
+        "  (low P)              Pb                  (high P, Pi)\n"
+    ),
+    "bg_vs_p": (
+        "Bg (rb/scf)\n"
+        "  ^\n"
+        "  |\\\n"
+        "  | \\\n"
+        "  |  \\___\n"
+        "  |      \\____\n"
+        "  |           \\_______\n"
+        "  |                    \\____________\n"
+        "  +------------------------------------------------> Pressure\n"
+        "  (low P)                                  (high P)\n"
+    ),
+    "z_vs_p": (
+        "Z-factor\n"
+        "  ^\n"
+        "1.0|\\____                                    ____\n"
+        "   |     \\                                 /\n"
+        "   |      \\___                      ______/\n"
+        "   |          \\___________\n"
+        "   |          (minimum Z, near Ppr ~ 1-2)\n"
+        "   +------------------------------------------------> Pressure\n"
+    ),
+    "oil_visc_vs_p": (
+        "Oil Viscosity (cP)\n"
+        "  ^\n"
+        "  |\\                                          /\n"
+        "  | \\                                       /\n"
+        "  |  \\                                    /\n"
+        "  |   \\___                          ____/\n"
+        "  |       \\__ mu_ob (min at Pb) ___/\n"
+        "  +------------------------------------------------> Pressure\n"
+        "  (low P)              Pb                  (high P, Pi)\n"
+    ),
+    "gas_visc_vs_p": (
+        "Gas Viscosity (cP)\n"
+        "  ^\n"
+        "  |                                          ____\n"
+        "  |                                    ____/\n"
+        "  |                              ____/\n"
+        "  |                        ____/\n"
+        "  |                  ____/\n"
+        "  |____/\n"
+        "  +------------------------------------------------> Pressure\n"
+        "  (low P)                                  (high P)\n"
+    ),
+    "liquid_dropout_vs_p": (
+        "Liquid Dropout (% HC pore volume)\n"
+        "  ^\n"
+        "  |              ___---___\n"
+        "  |           ,-'           '-.\n"
+        "  |         ,'                  '-.\n"
+        "  |        /                        '--.\n"
+        "  |       /                              '----___\n"
+        "  | 0% __/\n"
+        "  +------------------------------------------------> Pressure\n"
+        "  (low P)              Pd (dropout=0)       (high P)\n"
+    ),
+    "cgr_vs_p": (
+        "CGR (STB/MMscf)\n"
+        "  ^\n"
+        "  |______________\n"
+        "  |               \\\n"
+        "  |                \\___\n"
+        "  |                    \\____\n"
+        "  |                         \\________\n"
+        "  +------------------------------------------------> Pressure\n"
+        "  (low P, late life)   Pd            (high P, Pi)\n"
+    ),
+    "pt_diagram": (
+        "Pressure\n"
+        "  ^\n"
+        "  |        Cricondenbar\n"
+        "  |            *\n"
+        "  |         .'   '.\n"
+        "  |       .'  TWO   '.\n"
+        "  |     .'   PHASE     '.\n"
+        "  |   .'    REGION        '.\n"
+        "  |C <- Critical Pt           '.\n"
+        "  | '.                             '.\n"
+        "  +-------------------------------------> Temperature\n"
+    ),
+    "oil_density_vs_p": (
+        "Oil Density (lb/ft3)\n"
+        "  ^\n"
+        "  |\\                                        /\n"
+        "  | \\                                     /\n"
+        "  |  \\___                          ____/\n"
+        "  |      \\__ (min at Pb) _________/\n"
+        "  +------------------------------------------------> Pressure\n"
+    ),
+    "vrel_vs_p_cce": (
+        "Relative Volume (Vrel)\n"
+        "  ^\n"
+        "  |                                      /\n"
+        "  |                                    /  <- steep (below Pb)\n"
+        "  |                    ___,-'  1.0 at Pb (slope break)\n"
+        "  |    ______,-,-'\n"
+        "  |__,-'  <- gentle (above Pb)\n"
+        "  +------------------------------------------------> Pressure\n"
+    ),
+}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  PLOT ALIASES
+# ═══════════════════════════════════════════════════════════════════════
+
+PLOT_ALIASES: Dict[str, str] = {
+    "bo": "bo_vs_p", "fvf": "bo_vs_p", "oil fvf": "bo_vs_p",
+    "rs": "rs_vs_p", "solution gor": "rs_vs_p",
+    "bg": "bg_vs_p", "gas fvf": "bg_vs_p",
+    "z": "z_vs_p", "z-factor": "z_vs_p", "zfactor": "z_vs_p",
+    "oil viscosity": "oil_visc_vs_p", "viscosity": "oil_visc_vs_p",
+    "mu_o": "oil_visc_vs_p", "oilvisc": "oil_visc_vs_p",
+    "gas viscosity": "gas_visc_vs_p", "mu_g": "gas_visc_vs_p",
+    "gasvisc": "gas_visc_vs_p",
+    "liquid dropout": "liquid_dropout_vs_p", "dropout": "liquid_dropout_vs_p",
+    "cvd": "liquid_dropout_vs_p",
+    "cgr": "cgr_vs_p",
+    "phase envelope": "pt_diagram", "pt diagram": "pt_diagram",
+    "p-t": "pt_diagram", "envelope": "pt_diagram",
+    "oil density": "oil_density_vs_p", "density": "oil_density_vs_p",
+    "relative volume": "vrel_vs_p_cce", "vrel": "vrel_vs_p_cce",
+    "cce": "vrel_vs_p_cce", "cme": "vrel_vs_p_cce",
+}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  EXACT FORMULAS
+# ═══════════════════════════════════════════════════════════════════════
+
+EXACT_FORMULAS: Dict[str, FormulaSpec] = {
+    "api": {
+        "name_en": "API Gravity",
+        "name_ar": "درجة API",
+        "inputs": ["sg"],
+        "units": {"sg": "dimensionless (SG, water=1.0)"},
+        "formula_str": "API = (141.5 / SG) - 131.5",
+        "func": lambda sg: (141.5 / sg) - 131.5,
+        "output_unit": "deg API",
+        "validation": lambda sg: 0.5 < sg < 1.2,
+        "classify": lambda api: (
+            "نفط خفيف / Light Oil" if api > 35 else
+            "نفط متوسط / Medium Oil" if api > 22 else
+            "نفط ثقيل / Heavy Oil"
+        ),
+    },
+    "ooip": {
+        "name_en": "Original Oil In Place (Volumetric)",
+        "name_ar": "النفط الأصلي في المكمن",
+        "inputs": ["area", "h", "phi", "sw", "bo"],
+        "units": {"area": "acres", "h": "ft", "phi": "fraction",
+                  "sw": "fraction", "bo": "rb/STB"},
+        "formula_str": "OOIP = (7758 x A x h x phi x (1-Sw)) / Bo",
+        "func": lambda area, h, phi, sw, bo: (7758 * area * h * phi * (1 - sw)) / bo,
+        "output_unit": "STB",
+        "validation": lambda area, h, phi, sw, bo: (
+            0 < phi < 1 and 0 <= sw < 1 and bo > 0
+        ),
+        "note": "Bo في المقام: زيادة Bo تقلل OOIP المحسوب.",
+    },
+    "ogip": {
+        "name_en": "Original Gas In Place (Volumetric)",
+        "name_ar": "الغاز الأصلي في المكمن",
+        "inputs": ["area", "h", "phi", "sw", "bg"],
+        "units": {"area": "acres", "h": "ft", "phi": "fraction",
+                  "sw": "fraction", "bg": "rb/scf"},
+        "formula_str": "OGIP = (43560 x A x h x phi x (1-Sw)) / Bg",
+        "func": lambda area, h, phi, sw, bg: (
+            43560 * area * h * phi * (1 - sw)
+        ) / bg,
+        "output_unit": "scf",
+        "validation": lambda area, h, phi, sw, bg: (
+            0 < phi < 1 and 0 <= sw < 1 and bg > 0
+        ),
+    },
+    "darcy": {
+        "name_en": "Darcy Linear Flow Rate",
+        "name_ar": "معدل التدفق الخطي",
+        "inputs": ["k", "area", "dp", "mu", "length"],
+        "units": {"k": "mD", "area": "ft2", "dp": "psi", "mu": "cP", "length": "ft"},
+        "formula_str": "q = 0.001127 x k x A x dP / (mu x L)",
+        "func": lambda k, area, dp, mu, length: (
+            0.001127 * k * area * dp
+        ) / (mu * length),
+        "output_unit": "bbl/day",
+        "validation": lambda k, area, dp, mu, length: (
+            all(v > 0 for v in [k, area, dp, mu, length])
+        ),
+    },
+    "recovery_factor": {
+        "name_en": "Recovery Factor",
+        "name_ar": "عامل الاسترداد",
+        "inputs": ["np", "ooip"],
+        "units": {"np": "STB", "ooip": "STB"},
+        "formula_str": "RF = NP / OOIP x 100",
+        "func": lambda np_val, ooip: (np_val / ooip) * 100,
+        "output_unit": "%",
+        "validation": lambda np_val, ooip: 0 <= np_val <= ooip,
+    },
+    "productivity_index": {
+        "name_en": "Productivity Index",
+        "name_ar": "مؤشر الإنتاجية",
+        "inputs": ["q", "pr", "pwf"],
+        "units": {"q": "STB/day", "pr": "psi", "pwf": "psi"},
+        "formula_str": "PI = q / (Pr - Pwf)",
+        "func": lambda q, pr, pwf: q / (pr - pwf),
+        "output_unit": "STB/day/psi",
+        "validation": lambda q, pr, pwf: pr > pwf and q > 0,
+    },
+    "hydrostatic": {
+        "name_en": "Hydrostatic Pressure",
+        "name_ar": "الضغط الهيدروستاتيكي",
+        "inputs": ["mw", "tvd"],
+        "units": {"mw": "ppg", "tvd": "ft"},
+        "formula_str": "P (psi) = 0.052 x MW x TVD",
+        "func": lambda mw, tvd: 0.052 * mw * tvd,
+        "output_unit": "psi",
+        "validation": lambda mw, tvd: 6 < mw < 25 and tvd > 0,
+    },
+    "mud_weight_required": {
+        "name_en": "Required Mud Weight",
+        "name_ar": "وزن الطين المطلوب",
+        "inputs": ["p_target", "tvd"],
+        "units": {"p_target": "psi", "tvd": "ft"},
+        "formula_str": "MW (ppg) = P_target / (0.052 x TVD)",
+        "func": lambda p_target, tvd: p_target / (0.052 * tvd),
+        "output_unit": "ppg",
+        "validation": lambda p_target, tvd: p_target > 0 and tvd > 0,
+        "note": "Add 0.2-0.5 ppg overbalance safety margin.",
+    },
+    "ecd": {
+        "name_en": "Equivalent Circulating Density (ECD)",
+        "name_ar": "الكثافة المكافئة للدوران",
+        "inputs": ["mw", "app", "tvd"],
+        "units": {"mw": "ppg", "app": "psi (annular pressure loss)", "tvd": "ft"},
+        "formula_str": "ECD (ppg) = MW + (APL / (0.052 x TVD))",
+        "func": lambda mw, app, tvd: mw + (app / (0.052 * tvd)),
+        "output_unit": "ppg",
+        "validation": lambda mw, app, tvd: mw > 0 and tvd > 0 and app >= 0,
+    },
+    "water_cut": {
+        "name_en": "Water Cut",
+        "name_ar": "نسبة الماء المنتج",
+        "inputs": ["qw", "qo"],
+        "units": {"qw": "bbl/day", "qo": "bbl/day"},
+        "formula_str": "WC = qw / (qo + qw) x 100",
+        "func": lambda qw, qo: (qw / (qo + qw)) * 100,
+        "output_unit": "%",
+        "validation": lambda qw, qo: qw >= 0 and qo >= 0 and (qw + qo) > 0,
+    },
+    "wor": {
+        "name_en": "Water-Oil Ratio (WOR)",
+        "name_ar": "نسبة الماء إلى الزيت",
+        "inputs": ["qw", "qo"],
+        "units": {"qw": "bbl/day", "qo": "bbl/day"},
+        "formula_str": "WOR = qw / qo",
+        "func": lambda qw, qo: qw / qo,
+        "output_unit": "bbl/bbl",
+        "validation": lambda qw, qo: qw >= 0 and qo > 0,
+    },
+    "gor_produced": {
+        "name_en": "Produced GOR",
+        "name_ar": "نسبة الغاز إلى الزيت المنتجة",
+        "inputs": ["qg", "qo"],
+        "units": {"qg": "scf/day", "qo": "STB/day"},
+        "formula_str": "GOR = qg / qo",
+        "func": lambda qg, qo: qg / qo,
+        "output_unit": "scf/STB",
+        "validation": lambda qg, qo: qg >= 0 and qo > 0,
+    },
+    "npv": {
+        "name_en": "Net Present Value (single cash flow)",
+        "name_ar": "صافي القيمة الحالية",
+        "inputs": ["cf", "rate", "t"],
+        "units": {"cf": "$", "rate": "fraction", "t": "years"},
+        "formula_str": "PV = CF / (1+r)^t",
+        "func": lambda cf, rate, t: cf / (1 + rate) ** t,
+        "output_unit": "$",
+        "validation": lambda cf, rate, t: rate > -1 and t >= 0,
+    },
+}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  CORRELATIONS (Expanded)
+# ═══════════════════════════════════════════════════════════════════════
+
+CORRELATIONS: Dict[str, CorrelationSpec] = {
+    "pb_standing": {
+        "name_en": "Bubble Point Pressure (Standing, 1947)",
+        "name_ar": "ضغط نقطة الفقاعة (معادلة ستاندينغ)",
+        "inputs": ["rs", "gas_sg", "tres", "api"],
+        "units": {"rs": "scf/STB", "gas_sg": "dimensionless",
+                  "tres": "deg F", "api": "deg API"},
+        "formula_str": "Pb = 18.2 * [(Rs/gamma_g)^0.83 * 10^(0.00091*T - 0.0125*API) - 1.4]",
+        "func": lambda rs, gas_sg, tres, api: 18.2 * (
+            (rs / gas_sg) ** 0.83 * 10 ** (0.00091 * tres - 0.0125 * api) - 1.4
+        ),
+        "output_unit": "psia",
+        "applicability": {"rs": (20, 1425), "api": (16.5, 63.8), "tres": (100, 258)},
+    },
+    "rs_standing": {
+        "name_en": "Solution GOR (Standing, 1947)",
+        "name_ar": "نسبة الغاز المذاب (معادلة ستاندينغ)",
+        "inputs": ["p", "gas_sg", "tres", "api"],
+        "units": {"p": "psia", "gas_sg": "dimensionless",
+                  "tres": "deg F", "api": "deg API"},
+        "formula_str": "Rs = gamma_g * [(P/18.2 + 1.4) * 10^(0.0125*API - 0.00091*T)]^1.2048",
+        "func": lambda p, gas_sg, tres, api: gas_sg * (
+            (p / 18.2 + 1.4) * 10 ** (0.0125 * api - 0.00091 * tres)
+        ) ** 1.2048,
+        "output_unit": "scf/STB",
+        "applicability": {"p": (130, 7000), "api": (16.5, 63.8), "tres": (100, 258)},
+    },
+    # --- Vasquez-Beggs (1980) ---
+    "pb_vasquez_beggs": {
+        "name_en": "Bubble Point Pressure (Vasquez-Beggs, 1980)",
+        "name_ar": "ضغط نقطة الفقاعة (فاسكيز-بيغز)",
+        "inputs": ["rs", "gas_sg", "tres", "api", "p_sep"],
+        "units": {"rs": "scf/STB", "gas_sg": "dimensionless",
+                  "tres": "deg F", "api": "deg API", "p_sep": "psia"},
+        "formula_str": "Pb = [(111.726 * Rs / gamma_g_sc) / (10^(0.00091*T - 0.0125*API))]^0.83",
+        "func": lambda rs, gas_sg, tres, api, p_sep: (
+            (111.726 * rs / gas_sg) / (10 ** (0.00091 * tres - 0.0125 * api))
+        ) ** 0.83,
+        "output_unit": "psia",
+        "applicability": {"rs": (20, 2070), "api": (15.2, 60), "tres": (70, 300)},
+    },
+    "rs_vasquez_beggs": {
+        "name_en": "Solution GOR (Vasquez-Beggs, 1980)",
+        "name_ar": "نسبة الغاز المذاب (فاسكيز-بيغز)",
+        "inputs": ["p", "gas_sg", "tres", "api", "p_sep"],
+        "units": {"p": "psia", "gas_sg": "dimensionless",
+                  "tres": "deg F", "api": "deg API", "p_sep": "psia"},
+        "formula_str": "Rs = C1 * gamma_g_sc * P^C2 * 10^C3  (P<Pb)",
+        "func": lambda p, gas_sg, tres, api, p_sep: gas_sg * (
+            p ** 1.0937 * 10 ** (0.0125 * api - 0.00091 * tres)
+        ),
+        "output_unit": "scf/STB",
+        "applicability": {"p": (100, 7000), "api": (15.2, 60), "tres": (70, 300)},
+    },
+    # --- Standing Bo ---
+    "bo_standing": {
+        "name_en": "Oil FVF (Standing, 1947)",
+        "name_ar": "معامل حجم تكوين الزيت (ستاندينغ)",
+        "inputs": ["rs", "gas_sg", "tres", "api"],
+        "units": {"rs": "scf/STB", "gas_sg": "dimensionless",
+                  "tres": "deg F", "api": "deg API"},
+        "formula_str": "Bob = 0.9759 + 0.000120 * [(Rs*sqrt(gamma_g/sg_o) + 1.25*T)^1.2]^0.5",
+        "func": lambda rs, gas_sg, tres, api: (
+            0.9759 + 0.000120 * (
+                rs * (gas_sg / (141.5 / (api + 131.5))) ** 0.5
+                + 1.25 * tres
+            ) ** 1.2
+        ) ** 0.5,
+        "output_unit": "rb/STB",
+        "applicability": {"rs": (0, 1425), "api": (16.5, 63.8), "tres": (100, 258)},
+    },
+    # --- Z-factor (Standing-Katz approximation) ---
+    "z_standing_katz": {
+        "name_en": "Z-factor (Standing-Katz, 1942)",
+        "name_ar": "معامل الانضغاطية (ستاندينغ-كاتز)",
+        "inputs": ["tpr", "ppr"],
+        "units": {"tpr": "dimensionless (T/Tpc)", "ppr": "dimensionless (P/Ppc)"},
+        "formula_str": "Standing-Katz chart approximation (simplified Dranchuk-Abou-Kassem)",
+        "func": lambda tpr, ppr: _standing_katz_approx(tpr, ppr),
+        "output_unit": "dimensionless",
+        "applicability": {"tpr": (1.0, 3.0), "ppr": (0.0, 15.0)},
+    },
+}
+
+
+def _standing_katz_approx(tpr: float, ppr: float) -> float:
+    """
+    Simplified Standing-Katz Z-factor approximation.
+
+    Uses a Hall-Yarborough style approximation for quick estimates.
+    For production-quality work, always use lab-measured Z-factor data.
+
+    Args:
+        tpr: Pseudo-reduced temperature (T / Tpc)
+        ppr: Pseudo-reduced pressure (P / Ppc)
+
+    Returns:
+        Estimated Z-factor (dimensionless)
+    """
+    import math
+    if tpr <= 0:
+        return 1.0
+    a = 0.06125 * tpr * math.exp(-1.2 * (1 - 1 / tpr) ** 2)
+    b = 14.76 * tpr - 9.76 * tpr ** 2 + 4.58 * tpr ** 3
+    c = 90.7 * tpr - 242.2 * tpr ** 2 + 42.4 * tpr ** 3
+    y = a * ppr / (1 + b * ppr + c * ppr ** 2)
+    return 1 + y + y ** 2 - y ** 3 / (3 * tpr)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  UNIT CONVERSIONS
+# ═══════════════════════════════════════════════════════════════════════
+
+UNIT_CONVERSIONS: Dict[Tuple[str, str], Callable[[float], float]] = {
+    ("psi", "bar"):      lambda v: v * 0.0689476,
+    ("bar", "psi"):      lambda v: v / 0.0689476,
+    ("psi", "kpa"):      lambda v: v * 6.89476,
+    ("kpa", "psi"):      lambda v: v / 6.89476,
+    ("ppg", "lb/ft3"):   lambda v: v * 7.4805,
+    ("lb/ft3", "ppg"):   lambda v: v / 7.4805,
+    ("ppg", "sg"):       lambda v: v / 8.345,
+    ("sg", "ppg"):       lambda v: v * 8.345,
+    ("scf/stb", "m3/m3"): lambda v: v * 0.1781,
+    ("m3/m3", "scf/stb"): lambda v: v / 0.1781,
+    ("bbl", "m3"):       lambda v: v * 0.158987,
+    ("m3", "bbl"):       lambda v: v / 0.158987,
+    ("ft", "m"):         lambda v: v * 0.3048,
+    ("m", "ft"):         lambda v: v / 0.3048,
+    ("cp", "pa.s"):      lambda v: v * 0.001,
+    ("pa.s", "cp"):      lambda v: v / 0.001,
+    ("degf", "degc"):    lambda v: (v - 32) * 5 / 9,
+    ("degc", "degf"):    lambda v: v * 9 / 5 + 32,
+    ("acre", "m2"):      lambda v: v * 4046.86,
+    ("m2", "acre"):      lambda v: v / 4046.86,
+}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  PVTO / PVDO / PVTG / PVDG SKELETONS
+# ═══════════════════════════════════════════════════════════════════════
+
+PVTO_SKELETON = (
+    "PVTO Table (Live Oil -- Eclipse Black Oil)\n\n"
+    "When to use: Black Oil or Volatile Oil with Rs > 0\n"
+    "If Rs ~ 0 (dead/heavy oil): use PVDO instead\n\n"
+    "Eclipse format:\n"
+    "  PVTO\n"
+    "  -- Rs(scf/STB)  Pb(psia)  Bo(rb/STB)  Viscosity(cP)  -- saturated\n"
+    "                  P>Pb      Bo<Bob       Visc>Visc_ob   -- undersaturated\n"
+    "  /\n\n"
+    "Rule: For each Rs (0 to Rsi):\n"
+    "  Saturated row: Rs, Pb(Rs), Bo_sat, mu_o_sat\n"
+    "  Undersaturated rows (same Rs, P>Pb): Bo decreases, mu_o increases\n\n"
+    "DATA REQUIRED:\n"
+    "  From DV Test (below Pb):\n"
+    "    Rs(P)   [scf/STB]\n"
+    "    Bo(P)   [rb/STB]\n"
+    "    mu_o(P) [cP]\n"
+    "  From CCE (above Pb):\n"
+    "    Co (oil compressibility) [1/psi]\n"
+    "    d(mu_o)/dP above Pb\n\n"
+    "Important Eclipse rule:\n"
+    "  Bo in PVTO must be from DV Test, NOT from CCE.\n"
+    "  Apply Separator Test correction:\n"
+    "  Bo_field = Bo_DV x (Bo_sep / Bo_DV_at_Pb)"
+)
+
+PVDO_SKELETON = (
+    "PVDO Table (Dead Oil -- Eclipse Black Oil)\n\n"
+    "When to use: Heavy/Dead Oil with Rs ~ 0\n\n"
+    "Eclipse format:\n"
+    "  PVDO\n"
+    "  -- P(psia)  Bo(rb/STB)  Viscosity(cP)\n"
+    "  /\n\n"
+    "DATA REQUIRED:\n"
+    "  P(P)    [psia]\n"
+    "  Bo(P)   [rb/STB]  -- decreases with increasing P\n"
+    "  mu_o(P) [cP]      -- increases with increasing P"
+)
+
+PVTG_SKELETON = (
+    "PVTG Table (Live/Wet Gas -- Eclipse Black Oil)\n\n"
+    "When to use: Gas Condensate or Wet Gas with Rv > 0\n"
+    "If Rv ~ 0 (dry gas): use PVDG instead\n\n"
+    "Eclipse format:\n"
+    "  PVTG\n"
+    "  -- P(psia)  Rv(STB/scf)  Bg(rb/scf)  Gas_Visc(cP)\n"
+    "  /\n\n"
+    "DATA REQUIRED:\n"
+    "  From CVD:\n"
+    "    Bg(P)   [rb/scf]\n"
+    "    mu_g(P) [cP]\n"
+    "  From Compositional Analysis:\n"
+    "    Rv(P)   [STB/scf]  (= CGR x Bg_initial, or from EOS)\n\n"
+    "Note: For rich/near-critical Gas Condensate, use Compositional\n"
+    "  simulation (Eclipse E300 / CMG GEM + EOS) for best accuracy."
+)
+
+PVDG_SKELETON = (
+    "PVDG Table (Dry Gas -- Eclipse Black Oil)\n\n"
+    "When to use: Dry Gas or Wet Gas with Rv ~ 0\n\n"
+    "Eclipse format:\n"
+    "  PVDG\n"
+    "  -- P(psia)  Bg(rb/scf)  Gas_Visc(cP)\n"
+    "  /\n\n"
+    "DATA REQUIRED:\n"
+    "  P(P)    [psia]\n"
+    "  Bg(P)   [rb/scf]  -- decreases with increasing P\n"
+    "  mu_g(P) [cP]      -- increases with increasing P\n\n"
+    "Calculate Bg:\n"
+    "  Bg (rb/scf) = 0.005615 x (Z x T_R) / P\n"
+    "  T_R = T(F) + 459.67 [Rankine]"
+)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  SIMULATION EXPORT DECISIONS
+# ═══════════════════════════════════════════════════════════════════════
+
+EXPORT_SIM_DECISIONS: Dict[str, Dict[str, Optional[str]]] = {
+    "black_oil": {
+        "table": "PVTO (if Rs > 0) or PVDO (if Rs ~ 0)",
+        "simulator": "Eclipse Black Oil (E100) or CMG IMEX",
+        "reason": "Black-Oil model sufficient. Phase composition changes slowly.",
+        "warning": None,
+    },
+    "volatile_oil": {
+        "table": "PVTO with dense data near Pb",
+        "simulator": "Eclipse E100 or CMG IMEX -- with caution",
+        "reason": "Volatile Oil can use Black-Oil but sharp Bo/Rs changes near Pb require dense data.",
+        "warning": "If near-critical: switch to Compositional (Eclipse E300 / CMG GEM + EOS).",
+    },
+    "gas_condensate": {
+        "table": "PVTG with Rv from compositional analysis",
+        "simulator": "Eclipse E100 with PVTG or CMG IMEX",
+        "reason": "Lean Gas Condensate: Black-Oil with PVTG acceptable.",
+        "warning": "Rich/near-critical Gas Condensate: Compositional (E300/CMG GEM + EOS) preferred.",
+    },
+    "wet_gas": {
+        "table": "PVTG with approximately constant Rv",
+        "simulator": "Eclipse E100 or CMG IMEX",
+        "reason": "No reservoir condensation. PVTG sufficient.",
+        "warning": None,
+    },
+    "dry_gas": {
+        "table": "PVDG (no Rv)",
+        "simulator": "Eclipse E100 or CMG IMEX",
+        "reason": "Simplest case. No condensate. PVDG with Bg and gas viscosity only.",
+        "warning": None,
+    },
+}
+
+EXPORT_SIM_ALIASES: Dict[str, str] = {
+    "black oil": "black_oil", "black_oil": "black_oil",
+    "زيت أسود": "black_oil", "زيت تقليدي": "black_oil",
+    "volatile oil": "volatile_oil", "volatile_oil": "volatile_oil",
+    "زيت متطاير": "volatile_oil",
+    "gas condensate": "gas_condensate", "condensate": "gas_condensate",
+    "gas_condensate": "gas_condensate", "غاز مكثف": "gas_condensate",
+    "wet gas": "wet_gas", "wet_gas": "wet_gas", "غاز رطب": "wet_gas",
+    "dry gas": "dry_gas", "dry_gas": "dry_gas", "غاز جاف": "dry_gas",
+}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  PDF SECTION HEADERS
+# ═══════════════════════════════════════════════════════════════════════
+
+PVT_SECTION_HEADERS: List[str] = [
+    "Differential Liberation", "Differential Vaporization",
+    "Constant Composition Expansion", "CCE",
+    "Constant Volume Depletion", "CVD",
+    "Separator Test", "Compositional Analysis",
+    "Viscosity", "Recombination", "Reservoir Fluid Properties",
+    "Sample Information", "PVT Summary", "Well Test", "Fluid Analysis",
+]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  TEXT CLEANER DICTIONARY
+# ═══════════════════════════════════════════════════════════════════════
+
+TEXT_FIXES: Dict[str, str] = {
+    "**": "", "###": "", "##": "", "[": "", "]": "",
+    "Pressuring Volume and Temperature": "Pressure-Volume-Temperature",
+    "الضغط البيني": "معامل حجم التكوين",
+    "المعامل البيني": "معامل حجم التكوين",
+    "الترشيح": "نسبة الغاز المذاب",
+    "النسبة المئوية للغاز": "نسبة الغاز إلى الزيت",
+    "الويسكوزية": "اللزوجة",
+    "الليزج": "اللزوجة",
+    "الحفرة": "المكمن",
+}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  STATIC RESPONSES
+# ═══════════════════════════════════════════════════════════════════════
+
+START_MESSAGE = (
+    "Petroleum Engineering AI Bot v4 (Professional Refactor)\n\n"
+    "Covers: PVT Lab | Reservoir Engineering | Simulation (Eclipse/CMG) "
+    "| Drilling | Production | Economics\n\n"
+    "=== DETERMINISTIC COMMANDS (100% accurate, no AI hallucination) ===\n\n"
+    "/classify gor=<val> api=<val>\n"
+    "  Classify fluid type (Black Oil / Volatile Oil / Gas Condensate ...)\n\n"
+    "/calc <type> key=value ...\n"
+    "  Exact formulas. Types: api, ooip, ogip, darcy, recovery_factor,\n"
+    "  productivity_index, hydrostatic, mud_weight_required, ecd,\n"
+    "  water_cut, wor, gor_produced, npv\n"
+    "  Example: /calc ooip area=500 h=50 phi=0.2 sw=0.3 bo=1.3\n\n"
+    "/estimate <type> key=value ...\n"
+    "  Correlation estimates. Types: pb_standing, rs_standing,\n"
+    "  pb_vasquez_beggs, rs_vasquez_beggs, bo_standing, z_standing_katz\n"
+    "  Example: /estimate pb_standing rs=650 gas_sg=0.75 tres=180 api=35\n\n"
+    "/convert <value> <from> to <to>\n"
+    "  Example: /convert 5000 psi to bar\n\n"
+    "/plot <type> [p=p1,p2,.. v=v1,v2,..] [pb=<val>] [well=<name>]\n"
+    "  Show ASCII reference + generate PNG chart if data provided.\n"
+    "  Types: bo, rs, bg, z, viscosity, mu_g, dropout, cgr, density, vrel, cce\n"
+    "  Example: /plot bo p=500,1000,1500,2000 v=1.15,1.18,1.20,1.17 pb=1500\n"
+    "  Or upload a CSV/Excel file first, then: /plot bo pb=2500\n\n"
+    "/check <rel> p=p1,p2,.. v=v1,v2,.. [pb=<val>]\n"
+    "  Validate PVT data against BLOCK 5 physical rules.\n"
+    "  Example: /check rs p=500,1000,1500,2000 v=300,300,250,180 pb=1500\n\n"
+    "/pvto  /pvdo  /pvtg  /pvdg\n"
+    "  Eclipse simulator table skeletons and data requirements.\n\n"
+    "/export_sim <fluid_type> [near_critical]\n"
+    "  Decide Black-Oil vs Compositional simulation.\n"
+    "  Example: /export_sim gas condensate near_critical\n\n"
+    "=== AI-ASSISTED COMMANDS ===\n\n"
+    "/glossary  -- Full interactive HTML glossary (terms + PVT plots)\n"
+    "/analyze   -- Analyze uploaded PDF/DOCX report\n"
+    "/graph     -- Analyze uploaded engineering chart\n"
+    "/report    -- Generate PVT report skeleton\n"
+    "/eclipse   -- Eclipse simulation guidance\n"
+    "/cmg       -- CMG simulation guidance (IMEX vs GEM)\n"
+    "/reset     -- Clear all uploaded files for this chat\n\n"
+    "Upload: PDF, DOCX, Excel (.xlsx/.xls), CSV (for /plot data), or images (PNG/JPG)\n"
+    "Or just type your question in Arabic or English."
+)
+
+SURFACE_SEPARATOR_ANSWER = (
+    "Engineering Analysis -- Surface Separator Oil + Gas Samples\n\n"
+    "Sample Type\n"
+    "These are surface samples, NOT direct reservoir fluid.\n"
+    "Oil and gas separated at surface separator conditions.\n"
+    "RECOMBINATION is required first before any PVT test or property (Bo, Rs, Pb).\n\n"
+    "Data Required Before Proceeding\n"
+    "- Separator Pressure and Temperature\n"
+    "- Oil Rate [STB/day] and Gas Rate [scf/day]\n"
+    "- Producing GOR [scf/STB]\n"
+    "- Gas Composition and Stock Tank Oil Composition\n"
+    "- API Gravity and Gas Specific Gravity\n"
+    "- Water Cut and H2S/CO2 content\n\n"
+    "Correct Lab Workflow\n"
+    "1. Sample QC\n"
+    "2. Recombination -- reconstruct reservoir fluid\n"
+    "3. Validation of recombined sample\n"
+    "4. Compositional Analysis (C1 to C12+)\n"
+    "5. CCE/CME -- determine saturation pressure\n"
+    "6. DV (oil) or CVD (gas condensate)\n"
+    "7. Separator Test -- convert DV data to field data\n"
+    "8. Viscosity Test\n"
+    "9. EOS Tuning if compositional simulation planned\n\n"
+    "Use /classify after getting GOR and API to identify fluid type.\n"
+    "Use /pvto or /pvtg for simulation table requirements."
+)

@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Petroleum Engineering Glossary</title>
+<style>{{CSS}}</style>
+</head>
+<body>
+<header>
+  <h1>Petroleum Engineering <span>Glossary</span></h1>
+  <p>PVT | Reservoir | Drilling | Production | Economics</p>
+</header>
+<nav>
+  <button class="active" onclick="show('terms',this)">Terms / المصطلحات</button>
+  <button onclick="show('plots',this)">PVT Relationships / علاقات PVT</button>
+</nav>
+<main>
+  <div id="terms" class="sec active">
+    <div class="search">
+      <input id="q" placeholder="Search terms (AR/EN)..." oninput="filterTerms()"/>
+    </div>
+    <div class="grid" id="tgrid"></div>
+    <div class="nr" id="nr" style="display:none">No results found</div>
+  </div>
+  <div id="plots" class="sec">
+    <p class="ftitle">PVT Properties vs Pressure -- Correct Physical Behavior (BLOCK 5)</p>
+    <div id="pgrid"></div>
+  </div>
+</main>
+<script>
+const TERMS = {{TERMS_JSON}};
+const PLOTS = {{PLOTS_JSON}};
+{{JS}}
+</script>
+</body>
+</html>
