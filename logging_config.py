@@ -61,13 +61,26 @@ class TokenRedactionFilter(logging.Filter):
             except Exception:
                 pass  # Don't break logging on redaction errors
 
-        # Redact from args
+        # Redact from args -- only touch STRING args. Converting every arg to
+        # str() unconditionally (as this used to do) silently breaks any %d
+        # placeholder once its argument is coerced to text, raising
+        # "TypeError: %d format: a real number is required, not str" at
+        # record.getMessage() time. Redaction is only meaningful for strings
+        # anyway (a bot token/API key can't be encoded in an int/float), so
+        # non-string args (PID, offset, counts, timeouts, ...) must pass
+        # through unchanged.
         if record.args:
             try:
                 if isinstance(record.args, tuple):
-                    record.args = tuple(self._redact(str(a)) for a in record.args)
+                    record.args = tuple(
+                        self._redact(a) if isinstance(a, str) else a
+                        for a in record.args
+                    )
                 elif isinstance(record.args, dict):
-                    record.args = {k: self._redact(str(v)) for k, v in record.args.items()}
+                    record.args = {
+                        k: (self._redact(v) if isinstance(v, str) else v)
+                        for k, v in record.args.items()
+                    }
             except Exception:
                 pass
 
