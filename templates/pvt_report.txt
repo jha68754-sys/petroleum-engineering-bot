@@ -1,0 +1,112 @@
+============================================================
+          PVT LABORATORY REPORT
+============================================================
+
+1. EXECUTIVE SUMMARY
+------------------------------------------------------------
+- Fluid Type: [Black Oil / Volatile Oil / Gas Condensate / Wet Gas / Dry Gas]
+- Source: [Surface Separator / Subsurface Sample]
+- Key Finding: [1-2 sentences]
+- Data Quality: [Good / Fair / Needs Review]
+
+2. SAMPLE INFORMATION
+------------------------------------------------------------
+- Sample Type: [Recombined / Direct]
+- Reservoir Temperature: [___ deg F]
+- Reservoir Pressure: [___ psia]
+- API Gravity: [___ deg API]
+- Gas Gravity: [___ dimensionless]
+- Bubble Point Pressure: [___ psia]
+- Separator Conditions: [___ psia, ___ deg F]
+
+3. FLUID CLASSIFICATION
+------------------------------------------------------------
+- Classification: [___]
+- GOR Range: [___ scf/STB]
+- API Range: [___ deg API]
+- Basis: [Lab Data / Correlation / User Input]
+
+4. BUBBLE POINT / DEW POINT ANALYSIS
+------------------------------------------------------------
+- Determination Method: [CCE / CME / Graphical]
+- Bubble Point Pressure: [___ psia]
+- Dew Point Pressure: [___ psia] (if applicable)
+- Confidence: [High / Medium / Low]
+
+5. CCE/CME TEST RESULTS
+------------------------------------------------------------
+- Pressure Range: [___ - ___ psia]
+- Number of Data Points: [___]
+- Saturation Pressure: [___ psia]
+- Fluid Expansion Factor: [___]
+
+6. DIFFERENTIAL LIBERATION RESULTS (Oil)
+------------------------------------------------------------
+- Pressure Range: [___ - ___ psia]
+- Rs Range: [___ - ___ scf/STB]
+- Bo Range: [___ - ___ rb/STB]
+- Separator Correction Applied: [Yes / No]
+  - Bo_field = Bo_DV x (Bo_sep / Bo_DV_at_Pb)
+
+7. CVD RESULTS (Gas Condensate)
+------------------------------------------------------------
+- Pressure Range: [___ - ___ psia]
+- Liquid Dropout Range: [___ - ___ %]
+- Peak Dropout Pressure: [___ psia]
+- CGR Range: [___ - ___ STB/MMscf]
+
+8. SEPARATOR TEST RESULTS
+------------------------------------------------------------
+- Separator Pressure: [___ psia]
+- Separator Temperature: [___ deg F]
+- Stock Tank API: [___ deg API]
+- Bo Correction Factor: [___]
+- Rs Correction Factor: [___]
+
+9. OIL PROPERTIES
+------------------------------------------------------------
+- Bo (at Pb): [___ rb/STB]
+- Rs (at Pb): [___ scf/STB]
+- Oil Density (at Pb): [___ lb/ft3]
+- Oil Viscosity (at Pb): [___ cP]
+- Oil Viscosity (at Pi): [___ cP]
+- Oil Compressibility (above Pb): [___ 1/psi]
+
+10. GAS PROPERTIES
+------------------------------------------------------------
+- Bg (at Pb): [___ rb/scf]
+- Z-factor (at Pb): [___ dimensionless]
+- Gas Viscosity (at Pb): [___ cP]
+- Gas Viscosity (at Pi): [___ cP]
+
+11. ENGINEERING INTERPRETATION
+------------------------------------------------------------
+- PVT Trend Validation: [All trends consistent / Discrepancies found]
+- Data Quality Assessment: [___]
+- Correlation Validation: [___]
+- Key Observations:
+  [___]
+
+12. SIMULATION RECOMMENDATIONS
+------------------------------------------------------------
+- Simulation Type: [Black Oil / Compositional]
+- Recommended Tables:
+  - PVTO: [Recommended / Not needed]
+  - PVDO: [Recommended / Not needed]
+  - PVTG: [Recommended / Not needed]
+  - PVDG: [Recommended / Not needed]
+- Simulator: [Eclipse E100 / Eclipse E300 / CMG IMEX / CMG GEM]
+- EOS Tuning Required: [Yes / No]
+
+13. CONCLUSIONS
+------------------------------------------------------------
+[2-3 sentences summarizing key findings and recommendations]
+
+14. MISSING DATA / RECOMMENDATIONS
+------------------------------------------------------------
+[List any data gaps or recommended additional tests]
+
+============================================================
+Report Generated: [Timestamp]
+PVT Engineer Analysis Tool v4
+============================================================

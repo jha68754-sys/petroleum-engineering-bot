@@ -1,0 +1,51 @@
+INVESTIGATION NOTES - 409 Conflict Diagnosis
+=============================================
+
+FILE: main.py
+- Line 406-407: tg.delete_webhook() is called BEFORE polling starts (good)
+- Line 427-446: Single polling loop using tg.get_updates()
+- Line 470-471: Only runs if __name__ == "__main__"
+- Line 398: TelegramService() created ONCE
+- Line 399: AIService() created ONCE
+- NO other getUpdates calls in main.py
+- NO threading or asyncio for polling
+- NO run_polling() call (uses manual loop)
+- CONCLUSION: Only ONE polling source in main.py
+
+FILE: telegram_service.py
+- get_updates() is the ONLY method that calls Telegram API for updates
+- NO other polling mechanism
+- delete_webhook() is available but NOT called on every error
+- CONCLUSION: Single API endpoint, no duplicate polling within service
+
+FILE: Procfile
+- Only: worker: python3 main.py
+- CONCLUSION: Only ONE process defined
+
+FILE: railway.toml
+- startCommand = "python3 main.py"
+- restartPolicyType = "ALWAYS"
+- restartPolicyMaxRetries = 5
+- healthcheckPath = "/"
+- CONCLUSION: Could cause overlap during rolling deploy (old + new container)
+
+FILE: config.py
+- TELEGRAM_API_BASE includes token in URL (line 34)
+- TelegramService.base_url = TELEGRAM_API_BASE (line 41)
+- ALL requests use self.base_url which CONTAINS THE TOKEN
+- When exceptions occur, the full URL with token is logged
+- CONCLUSION: Token exposure risk in error logs
+
+FILE: logging_config.py
+- No token redaction filter
+- Uses standard formatter
+- logger.exception() will log full traceback with URLs
+- CONCLUSION: Token can leak through exception traces
+
+KEY FINDINGS:
+1. Code has SINGLE polling source (no duplicate in code)
+2. Procfile has SINGLE process
+3. railway.toml restartPolicy=ALWAYS could cause transient overlap during deploy
+4. Token IS exposed in logs via TELEGRAM_API_BASE in error messages
+5. No single-instance lock mechanism exists
+6. No identity logging (PID, hostname, commit SHA, etc.)

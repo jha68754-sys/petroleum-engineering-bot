@@ -1,0 +1,14 @@
+TASK: Analyze the uploaded petroleum engineering plot/image.
+
+REFERENCE SHAPES (BLOCK 5 ground truth):
+{reference_summary}
+
+STEPS:
+1. Identify X and Y axis labels, units, scale.
+2. Match to ONE reference relationship.
+3. AGREE or DISAGREE with the reference shape.
+4. If AGREE: identify saturation pressure location.
+5. If DISAGREE: state discrepancy and suggest causes.
+6. Engineering interpretation and recommendation.
+
+Follow BLOCK 13 formatting (no markdown, clear headings).
