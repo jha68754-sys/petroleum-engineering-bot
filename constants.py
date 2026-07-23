@@ -714,9 +714,9 @@ EXACT_FORMULAS: Dict[str, FormulaSpec] = {
         "inputs": ["np", "ooip"],
         "units": {"np": "STB", "ooip": "STB"},
         "formula_str": "RF = NP / OOIP x 100",
-        "func": lambda np_val, ooip: (np_val / ooip) * 100,
+        "func": lambda np, ooip: (np / ooip) * 100,
         "output_unit": "%",
-        "validation": lambda np_val, ooip: 0 <= np_val <= ooip,
+        "validation": lambda np, ooip: 0 <= np <= ooip,
     },
     "productivity_index": {
         "name_en": "Productivity Index",
