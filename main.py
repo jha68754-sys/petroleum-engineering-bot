@@ -241,6 +241,22 @@ def save_offset(offset: int) -> None:
 #  TEXT CLEANER
 # ═══════════════════════════════════════════════════════════════════════
 
+# Vietnamese-specific diacritic characters. A word containing any of these in
+# an Arabic/English response is a language-consistency glitch (observed live,
+# e.g. the AI outputting "nên" mid-sentence) rather than legitimate content --
+# this is a narrow, defense-in-depth backstop on top of the system prompt's
+# "Arabic or English only" rule, deliberately NOT touching Greek/scientific
+# symbols (gamma, mu, etc.) that legitimately appear in engineering text.
+_VIETNAMESE_DIACRITICS = (
+    "ạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹđ"
+    "ẠẢẤẦẨẪẬẮẰẲẴẶẸẺẼẾỀỂỄỆỈỊỌỎỐỒỔỖỘỚỜỞỠỢỤỦỨỪỬỮỰỲỴỶỸĐ"
+    "ăâêôơưĂÂÊÔƠƯ"
+)
+_VIETNAMESE_WORD_RE = re.compile(
+    r"\S*[" + _VIETNAMESE_DIACRITICS + r"]\S*"
+)
+
+
 def clean_text(text: str) -> str:
     """
     Clean and normalize text by replacing non-standard Arabic terms
@@ -257,6 +273,10 @@ def clean_text(text: str) -> str:
     text = text.replace("**", "")
     text = text.replace("###", "")
     text = text.replace("##", "")
+    # Defense-in-depth: strip stray Vietnamese-diacritic words (a language-
+    # consistency glitch, not legitimate content in an Arabic/English reply).
+    text = _VIETNAMESE_WORD_RE.sub("", text)
+    text = re.sub(r" {2,}", " ", text)
     return text.strip()
 
 
@@ -611,7 +631,7 @@ def run() -> None:
 
     # Load persisted offset
     offset = load_offset()
-    logger.info("Telegram bot polling starting (PID: %d)", identity["pid"])
+    logger.info("Telegram bot polling starting (PID: %s)", identity["pid"])
 
     # Graceful shutdown handler
     running = True
