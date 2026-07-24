@@ -18,6 +18,8 @@ openpyxl==3.1.5
 # Visualization
 matplotlib==3.9.2
 Pillow==10.4.0
+arabic-reshaper==3.0.0
+python-bidi==0.6.3
 
 # Optional: for future async support
 # aiohttp

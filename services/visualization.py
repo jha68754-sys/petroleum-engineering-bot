@@ -33,6 +33,44 @@ from logging_config import get_logger
 logger = get_logger(__name__)
 
 
+def _fix_arabic_text(text: str) -> str:
+    """
+    Reshape and reorder Arabic text for correct rendering in matplotlib.
+
+    Matplotlib (via its underlying font-rendering engine) draws Arabic
+    characters in their isolated forms and in logical storage order, not
+    their correct joined/contextual letterforms in right-to-left visual
+    order -- which is why Arabic titles previously appeared garbled/reversed
+    in generated charts. `arabic_reshaper` joins letters into their correct
+    contextual forms; `python-bidi` then reorders the text for correct
+    right-to-left visual display. Falls back to the original text (English
+    parts of a mixed title are unaffected either way) if the libraries
+    aren't installed, so a missing dependency degrades gracefully rather
+    than crashing plot generation.
+    """
+    try:
+        import arabic_reshaper
+        from bidi.algorithm import get_display
+    except ImportError:
+        logger.warning(
+            "arabic_reshaper/python-bidi not installed -- Arabic chart "
+            "titles will render without RTL correction. Add "
+            "'arabic-reshaper' and 'python-bidi' to requirements.txt."
+        )
+        return text
+
+    # Reshape+reorder line by line so any English lines in a mixed
+    # multi-line title (e.g. "Arabic title\nEnglish title") aren't disturbed.
+    fixed_lines = []
+    for line in text.split("\n"):
+        if any("\u0600" <= ch <= "\u06FF" for ch in line):
+            reshaped = arabic_reshaper.reshape(line)
+            fixed_lines.append(get_display(reshaped))
+        else:
+            fixed_lines.append(line)
+    return "\n".join(fixed_lines)
+
+
 def generate_pvt_plot(
     relationship_key: str,
     pressures: List[float],
@@ -104,7 +142,7 @@ def generate_pvt_plot(
     title = f"{rule['title_ar']}\n{rule['title_en']}"
     if well_name:
         title += f"\nWell: {well_name}"
-    ax.set_title(title, color=PLOT_TITLE_COLOR, fontsize=14, fontweight="bold", pad=15)
+    ax.set_title(_fix_arabic_text(title), color=PLOT_TITLE_COLOR, fontsize=14, fontweight="bold", pad=15)
 
     # Style axes
     for spine in ax.spines.values():

@@ -891,7 +891,7 @@ CORRELATIONS: Dict[str, CorrelationSpec] = {
         "name_ar": "معامل الانضغاطية (ستاندينغ-كاتز)",
         "inputs": ["tpr", "ppr"],
         "units": {"tpr": "dimensionless (T/Tpc)", "ppr": "dimensionless (P/Ppc)"},
-        "formula_str": "Standing-Katz chart approximation (simplified Dranchuk-Abou-Kassem)",
+        "formula_str": "Dranchuk-Abou-Kassem (1975) -- numerical fit to Standing-Katz chart, solved iteratively",
         "func": lambda tpr, ppr: _standing_katz_approx(tpr, ppr),
         "output_unit": "dimensionless",
         "applicability": {"tpr": (1.0, 3.0), "ppr": (0.0, 15.0)},
@@ -949,10 +949,13 @@ def _vasquez_beggs_pb(rs: float, gas_sg: float, tres: float, api: float, p_sep: 
 
 def _standing_katz_approx(tpr: float, ppr: float) -> float:
     """
-    Simplified Standing-Katz Z-factor approximation.
+    Gas Z-factor via the Dranchuk-Abou-Kassem (1975) correlation -- the
+    standard numerical fit to the original Standing-Katz (1942) chart.
 
-    Uses a Hall-Yarborough style approximation for quick estimates.
-    For production-quality work, always use lab-measured Z-factor data.
+    Solved iteratively (fixed-point) since Z appears on both sides of the
+    equation through the reduced gas density rho_r = 0.27*Ppr/(Z*Tpr).
+
+    Valid range (per the original paper): 1.0 <= Tpr <= 3.0, 0.2 <= Ppr <= 30.
 
     Args:
         tpr: Pseudo-reduced temperature (T / Tpc)
@@ -964,11 +967,25 @@ def _standing_katz_approx(tpr: float, ppr: float) -> float:
     import math
     if tpr <= 0:
         return 1.0
-    a = 0.06125 * tpr * math.exp(-1.2 * (1 - 1 / tpr) ** 2)
-    b = 14.76 * tpr - 9.76 * tpr ** 2 + 4.58 * tpr ** 3
-    c = 90.7 * tpr - 242.2 * tpr ** 2 + 42.4 * tpr ** 3
-    y = a * ppr / (1 + b * ppr + c * ppr ** 2)
-    return 1 + y + y ** 2 - y ** 3 / (3 * tpr)
+
+    a1, a2, a3, a4, a5 = 0.3265, -1.0700, -0.5339, 0.01569, -0.05165
+    a6, a7, a8, a9, a10, a11 = 0.5475, -0.7361, 0.1844, 0.1056, 0.6134, 0.7210
+
+    z = 1.0
+    for _ in range(100):
+        rho_r = 0.27 * ppr / (z * tpr)
+        term1 = (a1 + a2 / tpr + a3 / tpr ** 3 + a4 / tpr ** 4 + a5 / tpr ** 5) * rho_r
+        term2 = (a6 + a7 / tpr + a8 / tpr ** 2) * rho_r ** 2
+        term3 = -a9 * (a7 / tpr + a8 / tpr ** 2) * rho_r ** 5
+        term4 = (
+            a10 * (1 + a11 * rho_r ** 2) * (rho_r ** 2 / tpr ** 3)
+            * math.exp(-a11 * rho_r ** 2)
+        )
+        z_new = 1 + term1 + term2 + term3 + term4
+        if abs(z_new - z) < 1e-8:
+            return z_new
+        z = z_new
+    return z
 
 
 # ═══════════════════════════════════════════════════════════════════════
