@@ -1217,7 +1217,6 @@ HELP_MESSAGE = (
     "=== AI-ASSISTED COMMANDS ===\n\n"
     "/glossary  -- Full interactive HTML glossary (terms + PVT plots)\n"
     "/analyze   -- Analyze uploaded PDF/DOCX report\n"
-    "/graph     -- Analyze uploaded engineering chart\n"
     "/report    -- Generate PVT report skeleton\n"
     "/eclipse   -- Eclipse simulation guidance\n"
     "/cmg       -- CMG simulation guidance (IMEX vs GEM)\n"
