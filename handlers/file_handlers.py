@@ -179,5 +179,5 @@ def handle_photo_upload(
 
     return (
         f"Photo received: {file_size / 1024:.1f} KB\n"
-        f"Use /graph to analyze this engineering chart."
+        f"Ask your question about this chart and I'll analyze it."
     ), None
