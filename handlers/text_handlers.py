@@ -32,7 +32,6 @@ from services.pvt_engine import (
 )
 from services.calculation_engine import parse_kv_args
 from services.visualization import format_plot_response
-from services.glossary import generate_glossary_html
 from logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -187,7 +186,7 @@ def handle_convert(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], O
     return result if result else f"Unknown conversion: {from_unit} -> {to_unit}", None, None
 
 
-@registry.register("plot", aliases=["pvt_plot", "graph"])
+@registry.register("plot", aliases=["pvt_plot"])
 def handle_plot(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
     """Handle /plot <type> [p=v1,v2 v=v1,v2] [pb=val] [well=name] command."""
     text = message.get("text", "")
@@ -395,8 +394,11 @@ def handle_report(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Op
 @registry.register("glossary")
 def handle_glossary(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
     """Handle /glossary command."""
-    html_bytes = generate_glossary_html()
-    return "Glossary generated. Sending as HTML document...", html_bytes, "glossary.html"
+    # Note: don't pass the HTML bytes in the png_bytes slot -- main.py's
+    # dispatch checks `if png_bytes:` before `if doc_filename:`, so any
+    # truthy value there gets wrongly sent as a photo instead of a document.
+    # main.py's document-send path regenerates the HTML bytes itself.
+    return "Glossary generated. Sending as HTML document...", None, "glossary.html"
 
 
 @registry.register("analyze", aliases=["document", "doc"])
