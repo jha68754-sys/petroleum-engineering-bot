@@ -247,13 +247,10 @@ def save_offset(offset: int) -> None:
 # this is a narrow, defense-in-depth backstop on top of the system prompt's
 # "Arabic or English only" rule, deliberately NOT touching Greek/scientific
 # symbols (gamma, mu, etc.) that legitimately appear in engineering text.
-_VIETNAMESE_DIACRITICS = (
-    "ạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹđ"
-    "ẠẢẤẦẨẪẬẮẰẲẴẶẸẺẼẾỀỂỄỆỈỊỌỎỐỒỔỖỘỚỜỞỠỢỤỦỨỪỬỮỰỲỴỶỸĐ"
-    "ăâêôơưĂÂÊÔƠƯ"
-)
-_VIETNAMESE_WORD_RE = re.compile(
-    r"\S*[" + _VIETNAMESE_DIACRITICS + r"]\S*"
+_STRAY_WORD_RE = re.compile(
+    r"\S*[^\x00-\x7F\u0370-\u03FF"  # ASCII (plain English/digits/punctuation), Greek (gamma, mu, etc.)
+    r"\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF"  # Arabic (all blocks)
+    r"\u2000-\u206F\u2200-\u22FF\s]\S*"  # general punctuation, math operators, whitespace
 )
 
 
@@ -273,9 +270,11 @@ def clean_text(text: str) -> str:
     text = text.replace("**", "")
     text = text.replace("###", "")
     text = text.replace("##", "")
-    # Defense-in-depth: strip stray Vietnamese-diacritic words (a language-
+    # Defense-in-depth: strip stray foreign-script words (a language-
     # consistency glitch, not legitimate content in an Arabic/English reply).
-    text = _VIETNAMESE_WORD_RE.sub("", text)
+    # Uses a whitelist of Arabic/Greek/Latin/punctuation ranges, so it
+    # catches ANY stray script (Vietnamese, Cyrillic, CJK, etc.) generically.
+    text = _STRAY_WORD_RE.sub("", text)
     text = re.sub(r" {2,}", " ", text)
     return text.strip()
 
@@ -304,7 +303,7 @@ def process_message(
 
     Routes to the appropriate handler based on message type:
     - Document upload -> file handler -> optional AI analysis
-    - Photo upload -> store for /graph analysis
+    - Photo upload -> stored for automatic vision analysis on next message
     - Text command -> command registry dispatch
     - Free text -> AI-assisted response
 
@@ -350,18 +349,14 @@ def process_message(
                 result_text, png_bytes, doc_filename = handler(message, tg)
 
                 # Sentinel (None, None, None) means the command handler validated
-                # that context exists (file/image already uploaded) and wants the
-                # AI to actually produce the analysis (used by /analyze, /graph).
+                # that context exists (file already uploaded) and wants the
+                # AI to actually produce the analysis (used by /analyze).
                 if result_text is None and png_bytes is None and doc_filename is None:
-                    cmd_name = text.split()[0].lower().lstrip("/")
-                    if cmd_name in ("graph", "image", "photo"):
-                        ai_prompt = build_graph_prompt()
-                    else:
-                        ai_prompt = (
-                            "Analyze the uploaded engineering document/report in the FILE CONTEXT below. "
-                            "Summarize key PVT/reservoir data, flag any inconsistencies, and follow BLOCK 5 "
-                            "ground truth rules and BLOCK 13 formatting (no markdown, clear headings)."
-                        )
+                    ai_prompt = (
+                        "Analyze the uploaded engineering document/report in the FILE CONTEXT below. "
+                        "Summarize key PVT/reservoir data, flag any inconsistencies, and follow BLOCK 5 "
+                        "ground truth rules and BLOCK 13 formatting (no markdown, clear headings)."
+                    )
                     _handle_free_text(message, ai_prompt, tg, ai)
                     return
 
@@ -516,51 +511,6 @@ def _handle_free_text(
         logger.exception("AI processing error")
         error_msg = get_user_safe_error(exc)
         tg.send_message(chat_id, f"Error: {error_msg}", reply_to_message_id=message_id)
-
-
-# ═══════════════════════════════════════════════════════════════════════
-#  GRAPH PROMPT BUILDER
-# ═══════════════════════════════════════════════════════════════════════
-
-def build_graph_prompt(
-    reference_summary: Optional[str] = None,
-) -> str:
-    """
-    Build the graph analysis prompt for the vision AI.
-
-    Args:
-        reference_summary: Optional pre-formatted reference text.
-
-    Returns:
-        The complete prompt string.
-    """
-    if reference_summary:
-        return f"""TASK: Analyze the uploaded petroleum engineering plot/image.
-
-REFERENCE SHAPES (BLOCK 5 ground truth):
-{reference_summary}
-
-STEPS:
-1. Identify X and Y axis labels, units, scale.
-2. Match to ONE reference relationship.
-3. AGREE or DISAGREE with the reference shape.
-4. If AGREE: identify saturation pressure location.
-5. If DISAGREE: state discrepancy and suggest causes.
-6. Engineering interpretation and recommendation.
-
-Follow BLOCK 13 formatting (no markdown, clear headings)."""
-
-    return (
-        "TASK: Analyze the uploaded petroleum engineering plot/image.\n\n"
-        "STEPS:\n"
-        "1. Identify X and Y axis labels, units, scale.\n"
-        "2. Match to PVT reference relationship (BLOCK 5).\n"
-        "3. AGREE or DISAGREE with the reference shape.\n"
-        "4. If AGREE: identify saturation pressure location.\n"
-        "5. If DISAGREE: state discrepancy and suggest causes.\n"
-        "6. Engineering interpretation and recommendation.\n\n"
-        "Follow BLOCK 13 formatting (no markdown, clear headings)."
-    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
