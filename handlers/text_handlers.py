@@ -3,7 +3,7 @@ Text command handlers for the Petroleum Engineering Bot.
 
 Handles all text-based commands: /classify, /calc, /estimate, /convert,
 /plot, /check, /pvto, /pvdo, /pvtg, /pvdg, /export_sim, /eclipse,
-/cmg, /report, /glossary, /reset, /start, /analyze, /graph.
+/cmg, /report, /glossary, /reset, /start, /analyze.
 
 Each handler receives the Telegram message dict and the TelegramService
 instance, and returns a response string (and optionally file bytes).
@@ -339,91 +339,4 @@ def handle_eclipse(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], O
         "  .DATA -- main deck file\n"
         "  PVT section: PVTO/PVDO/PVTG/PVDG tables\n"
         "  SCAL section: Relative permeability curves\n\n"
-        "PVT Table Selection:\n"
-        "  Black Oil Rs>0 -> PVTO\n"
-        "  Dead Oil Rs~0 -> PVDO\n"
-        "  Gas Condensate -> PVTG\n"
-        "  Dry Gas -> PVDG\n\n"
-        "Use /pvto, /pvdo, /pvtg, /pvdg for table format details."
-    )
-    return result, None, None
-
-
-@registry.register("cmg")
-def handle_cmg(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
-    """Handle /cmg command."""
-    result = (
-        "CMG Simulation Guidance\n"
-        + "=" * 50
-        + "\n\n"
-        "CMG IMEX -- Compositional / Black Oil\n"
-        "Use for: Most reservoir simulation cases\n"
-        "Supports: Black Oil, Compositional, Thermal\n"
-        "PVT Tables: Similar format to Eclipse\n\n"
-        "CMG GEM -- Advanced Compositional\n"
-        "Use for: Complex EOS, EOR, Gas Injection, SAGD\n"
-        "Requires: Full EOS characterization\n"
-        "PVT: EOS-based (no tables needed)\n\n"
-        "CMG STARS -- Thermal / Heavy Oil\n"
-        "Use for: SAGD, CSS, In-situ combustion\n"
-        "Heavy Oil PVT: Requires viscosity models\n\n"
-        "PVT Table Compatibility:\n"
-        "  CMG IMEX accepts Eclipse-format PVTO/PVDO tables\n"
-        "  CMG GEM uses EOS directly (less table-dependent)\n\n"
-        "Workflow:\n"
-        "  1. PVT Lab Data\n"
-        "  2. EOS Tuning (GEM) or Table Generation (IMEX)\n"
-        "  3. History Matching\n"
-        "  4. Prediction"
-    )
-    return result, None, None
-
-
-@registry.register("report", aliases=["pvt_report"])
-def handle_report(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
-    """Handle /report command."""
-    from pathlib import Path
-    template_path = Path("templates/pvt_report.txt")
-    if template_path.exists():
-        result = template_path.read_text(encoding="utf-8")
-    else:
-        result = "PVT Report template not found. Using default structure.\n\nUse /analyze after uploading a PVT report for detailed analysis."
-    return result, None, None
-
-
-@registry.register("glossary")
-def handle_glossary(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
-    """Handle /glossary command."""
-    # Note: don't pass the HTML bytes in the png_bytes slot -- main.py's
-    # dispatch checks `if png_bytes:` before `if doc_filename:`, so any
-    # truthy value there gets wrongly sent as a photo instead of a document.
-    # main.py's document-send path regenerates the HTML bytes itself.
-    return "Glossary generated. Sending as HTML document...", None, "glossary.html"
-
-
-@registry.register("analyze", aliases=["document", "doc"])
-def handle_analyze(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
-    """Handle /analyze command."""
-    chat_id = message.get("chat", {}).get("id", "")
-    from main import FILE_CONTEXT
-    context = FILE_CONTEXT.get(chat_id)
-    if not context:
-        return "No document uploaded. Upload a PDF, DOCX, Excel, or CSV file first.", None, None
-    return None, None, None  # Signal that AI analysis is needed
-
-
-@registry.register("graph", aliases=["image", "photo"])
-def handle_graph(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
-    """Handle /graph command."""
-    chat_id = message.get("chat", {}).get("id", "")
-    from main import IMAGE_CONTEXT
-    image_path = IMAGE_CONTEXT.get(chat_id)
-    if not image_path:
-        return "No image uploaded. Upload a PNG/JPG chart first.", None, None
-    return None, None, None  # Signal that AI vision analysis is needed
-
-
-@registry.register("surface_separator", aliases=["separator"])
-def handle_surface_separator(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
-    """Handle /surface_separator command."""
-    return SURFACE_SEPARATOR_ANSWER, None, None
+        
