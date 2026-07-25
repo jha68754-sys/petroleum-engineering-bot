@@ -72,63 +72,19 @@ import handlers.text_handlers  # noqa: F401
 logger = get_logger("main")
 
 # ═══════════════════════════════════════════════════════════════════════
-#  GLOBAL STATE (per-chat) -- bounded LRU dicts to prevent unbounded memory/
-#  disk growth on a long-running process serving many distinct chats.
+#  GLOBAL STATE (per-chat)
 # ═══════════════════════════════════════════════════════════════════════
 
-from collections import OrderedDict
-
-MAX_TRACKED_CHATS = 500  # cap on number of distinct chat_ids retained in memory
-
-
-class _BoundedChatDict(OrderedDict):
-    """
-    LRU-bounded dict for per-chat state.
-
-    Evicts the least-recently-used chat_id once more than `maxsize` distinct
-    chats are tracked. Optionally runs `on_evict(value)` for cleanup (used to
-    delete the on-disk temp file backing an evicted IMAGE_CONTEXT entry).
-    """
-
-    def __init__(self, maxsize: int, on_evict=None):
-        super().__init__()
-        self.maxsize = maxsize
-        self.on_evict = on_evict
-
-    def __setitem__(self, key, value):
-        if key in self:
-            self.move_to_end(key)
-        super().__setitem__(key, value)
-        while len(self) > self.maxsize:
-            oldest_key, oldest_value = self.popitem(last=False)
-            if self.on_evict:
-                try:
-                    self.on_evict(oldest_value)
-                except Exception:
-                    logger.warning("Cleanup failed while evicting state for chat %s", oldest_key)
-
-    def get(self, key, default=None):
-        if key in self:
-            self.move_to_end(key)
-        return super().get(key, default)
-
-
-def _delete_temp_image(path: str) -> None:
-    """Best-effort deletion of a temp image file when its chat state is evicted."""
-    try:
-        if path and os.path.exists(path):
-            os.unlink(path)
-    except OSError:
-        pass
-
-
-FILE_CONTEXT: Dict[int, str] = _BoundedChatDict(MAX_TRACKED_CHATS)
-IMAGE_CONTEXT: Dict[int, str] = _BoundedChatDict(MAX_TRACKED_CHATS, on_evict=_delete_temp_image)
-CONVERSATION_HISTORY: Dict[int, List[Dict[str, str]]] = _BoundedChatDict(MAX_TRACKED_CHATS)
+from state import (
+    FILE_CONTEXT,
+    IMAGE_CONTEXT,
+    CONVERSATION_HISTORY,
+    _LAST_AI_CALL_TIME,
+    _delete_temp_image
+)
 
 # Per-chat AI-call rate limiting (basic abuse/cost protection)
 AI_CALL_MIN_INTERVAL_SECONDS = float(os.environ.get("AI_CALL_MIN_INTERVAL_SECONDS", "2.0"))
-_LAST_AI_CALL_TIME: Dict[int, float] = _BoundedChatDict(MAX_TRACKED_CHATS)
 
 # ═══════════════════════════════════════════════════════════════════════
 #  TOKEN REDACTION
