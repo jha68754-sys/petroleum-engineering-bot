@@ -54,7 +54,7 @@ from services.pvt_engine import (
 )
 from services.calculation_engine import parse_kv_args
 from services.visualization import format_plot_response
-from services.glossary import generate_glossary_html
+# Glossary service removed
 from services.file_processing import (
     detect_file_type,
     extract_file_content,
@@ -324,11 +324,6 @@ def process_message(
                 if png_bytes:
                     tg.send_photo_bytes(chat_id, png_bytes, caption="PVT Plot", reply_to_message_id=message_id)
 
-                if doc_filename and png_bytes is None:
-                    # Send HTML glossary as document
-                    if doc_filename.endswith(".html"):
-                        html_bytes = generate_glossary_html()
-                        tg.send_document(chat_id, html_bytes, doc_filename, reply_to_message_id=message_id)
                 return
 
             # Command not found

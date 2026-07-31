@@ -1215,7 +1215,6 @@ HELP_MESSAGE = (
     "  Decide Black-Oil vs Compositional simulation.\n"
     "  Example: /export_sim gas condensate near_critical\n\n"
     "=== AI-ASSISTED COMMANDS ===\n\n"
-    "/glossary  -- Full interactive HTML glossary (terms + PVT plots)\n"
     "/analyze   -- Analyze uploaded PDF/DOCX report\n"
     "/report    -- Generate PVT report skeleton\n"
     "/eclipse   -- Eclipse simulation guidance\n"
