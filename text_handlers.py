@@ -394,6 +394,28 @@ def handle_report(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Op
 # Glossary command removed
 
 
+def handle_graph(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
+    """Handle /graph command."""
+    chat_id = message.get("chat", {}).get("id", "")
+    from state import FILE_CONTEXT
+    context = FILE_CONTEXT.get(chat_id)
+    if not context:
+        return "No document uploaded for graphing. Upload a file first.", None, None
+    return None, None, None
+
+def handle_graph(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
+    """Handle /graph command."""
+    chat_id = message.get("chat", {}).get("id", "")
+    from state import FILE_CONTEXT
+    context = FILE_CONTEXT.get(chat_id)
+    if not context:
+        return "No document uploaded for graphing. Upload a file first.", None, None
+    return None, None, None
+
+@registry.register("graph", aliases=["plot"])
+def handle_graph_cmd(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
+    return handle_graph(message, tg)
+
 @registry.register("analyze", aliases=["document", "doc"])
 def handle_analyze(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
     """Handle /analyze command."""

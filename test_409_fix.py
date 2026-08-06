@@ -277,7 +277,8 @@ def test_analyze_graph_dispatch():
     """Regression test: /analyze and /graph must not silently no-op anymore."""
     print("\n=== TEST 7: /analyze and /graph Dispatch ===")
 
-    from handlers.text_handlers import handle_analyze, handle_graph
+    from handlers.text_handlers import handle_analyze
+    from text_handlers import handle_graph_cmd as handle_graph
 
     # With no file/image context uploaded, handlers should still return a
     # helpful message (not the AI-delegation sentinel).
