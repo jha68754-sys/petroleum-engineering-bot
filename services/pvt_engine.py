@@ -772,9 +772,33 @@ def get_ascii_sketch(relationship_key: str) -> Optional[str]:
 def generate_professional_pvt_report(context: Optional[str] = None) -> str:
     """
     Generate a professional engineering PVT report adhering strictly to petroleum engineering standards,
-    distinguishing between Measured Input and Calculated Results, incorporating data quality checks,
-    fluid classification confidence, and simulation model justifications.
+    ensuring NO hallucinated or fallback laboratory data, PVT tables, or separator conditions are generated
+    when not provided in the input context. Unprovided data is explicitly marked as 'Not Provided' or 
+    'Additional Laboratory Data Required'.
     """
+    ctx_lower = (context or "").lower()
+    
+    def extract_value(keyword: str, default: str = "Not Provided") -> str:
+        if not context:
+            return default
+        for line in context.splitlines():
+            if keyword.lower() in line.lower():
+                parts = line.split(":", 1)
+                if len(parts) > 1 and parts[1].strip():
+                    return parts[1].strip()
+        return default
+
+    api_gravity = extract_value("api") if "api" in ctx_lower else "Not Provided"
+    reservoir_temp = extract_value("temperature") if "temperature" in ctx_lower or "tr" in ctx_lower else "Not Provided"
+    reservoir_press = extract_value("pressure") if "pressure" in ctx_lower or "pi" in ctx_lower else "Not Provided"
+    bubble_press = extract_value("bubble point") if "bubble point" in ctx_lower or "pb" in ctx_lower else "Not Provided"
+    separator_press = extract_value("separator pressure") if "separator pressure" in ctx_lower else "Not Provided"
+    separator_temp = extract_value("separator temperature") if "separator temperature" in ctx_lower else "Not Provided"
+    separator_gor = extract_value("separator gor") if "separator gor" in ctx_lower or "gor" in ctx_lower else "Not Provided"
+    gas_sg = extract_value("gas specific gravity") if "gas specific gravity" in ctx_lower or "sg" in ctx_lower else "Not Provided"
+
+    has_pvt_table = "pvt" in ctx_lower or "pvto" in ctx_lower or "pvdo" in ctx_lower or "table" in ctx_lower
+
     report_lines = []
     report_lines.append("============================================================")
     report_lines.append("          ENTERPRISE PETROLEUM AI - PVT ENGINEERING REPORT")
@@ -782,80 +806,86 @@ def generate_professional_pvt_report(context: Optional[str] = None) -> str:
     report_lines.append("")
     report_lines.append("1. EXECUTIVE SUMMARY")
     report_lines.append("-" * 60)
-    report_lines.append("- Fluid Type: Black Oil / Volatile Oil (Evaluation pending lab verification)")
-    report_lines.append("- Sample Source: Surface Separator / Recombined Sample [Provided / Measured Input]")
-    report_lines.append("- Key Finding: Reservoir pressure exceeds bubble point pressure, indicating undersaturated oil condition.")
-    report_lines.append("- Data Quality Level: Good / Consistent (Based on available parameter bounds)")
-    report_lines.append("- Confidence Level: Medium Confidence (Additional lab data recommended for definitive EOS tuning)")
+    report_lines.append(f"- Fluid Type: {'Pending Lab/Input Classification' if api_gravity == 'Not Provided' else 'Classified via Provided Input'}")
+    report_lines.append(f"- Sample Source: {'Not Provided' if not context else 'Provided User Input / Document'}")
+    report_lines.append(f"- Key Finding: {'Insufficient input parameters for definitive saturation pressure or reservoir condition assessment.' if reservoir_press == 'Not Provided' or bubble_press == 'Not Provided' else 'Initial reservoir pressure and bubble point parameters evaluated from input.'}")
+    report_lines.append("- Data Quality Level: Dependent on provided input completeness")
+    report_lines.append("- Confidence Level: Low to Medium (Additional laboratory data required for definitive evaluation)")
     report_lines.append("")
     report_lines.append("2. INPUT DATA (PROVIDED / MEASURED)")
     report_lines.append("-" * 60)
-    report_lines.append("- Sample Type: Recombined Bottomhole Sample [Provided / Measured Input]")
-    report_lines.append("- Reservoir Temperature (Tr): 215.0 degF [Provided / Measured Input]")
-    report_lines.append("- Initial Reservoir Pressure (Pi): 4500.0 psia [Provided / Measured Input]")
-    report_lines.append("- Oil API Gravity: 36.5 deg API [Provided / Measured Input]")
-    report_lines.append("- Gas Specific Gravity (Sg): 0.72 dimensionless [Provided / Measured Input]")
-    report_lines.append("- Bubble Point Pressure (Pb): 3200.0 psia [Provided / Measured Input]")
-    report_lines.append("- Separator Pressure: 150.0 psia [Provided / Measured Input]")
-    report_lines.append("- Separator Temperature: 110.0 deg F [Provided / Measured Input]")
+    report_lines.append(f"- Sample Type: {'Not Provided' if not context else 'User Provided Context / Document'}")
+    report_lines.append(f"- Reservoir Temperature (Tr): {reservoir_temp}")
+    report_lines.append(f"- Initial Reservoir Pressure (Pi): {reservoir_press}")
+    report_lines.append(f"- Oil API Gravity: {api_gravity}")
+    report_lines.append(f"- Gas Specific Gravity (Sg): {gas_sg}")
+    report_lines.append(f"- Bubble Point Pressure (Pb): {bubble_press}")
+    report_lines.append(f"- Separator Pressure: {separator_press}")
+    report_lines.append(f"- Separator Temperature: {separator_temp}")
+    report_lines.append(f"- Separator GOR: {separator_gor}")
     report_lines.append("")
     report_lines.append("3. RESERVOIR CONDITIONS & SATURATION STATE")
     report_lines.append("-" * 60)
-    report_lines.append("- Initial Reservoir Pressure (Pi = 4500.0 psia) > Bubble Point Pressure (Pb = 3200.0 psia)")
-    report_lines.append("- Saturation Condition: Undersaturated Oil")
-    report_lines.append("- Engineering Reason: Operating pressure remains above bubble point, ensuring single liquid phase in the reservoir matrix at initial conditions; no free gas release expected until pressure declines below Pb.")
+    if reservoir_press != "Not Provided" and bubble_press != "Not Provided":
+        report_lines.append(f"- Initial Reservoir Pressure (Pi) vs Bubble Point Pressure (Pb): Pi = {reservoir_press}, Pb = {bubble_press}")
+        report_lines.append("- Saturation Condition: Evaluated from provided pressure differential.")
+    else:
+        report_lines.append("- Saturation Condition: Additional Laboratory Data Required (Pi and/or Pb not provided in input).")
+    report_lines.append("- Engineering Reason: Determining saturation state requires explicit initial reservoir pressure and bubble point pressure measurements.")
     report_lines.append("")
     report_lines.append("4. FLUID CLASSIFICATION")
     report_lines.append("-" * 60)
-    report_lines.append("- Classification: Black Oil (Consistent with API gravity between 30-45 and moderate GOR)")
-    report_lines.append("- Classification Confidence: Medium Confidence")
-    report_lines.append("- Basis: Provided API gravity and estimated solution GOR; definitive classification requires complete Differential Liberation and CVD test data.")
+    report_lines.append(f"- Classification: {'Additional Laboratory Data Required (API gravity and GOR required for standard classification)' if api_gravity == 'Not Provided' else 'Evaluated from provided API/GOR'}")
+    report_lines.append("- Classification Confidence: Low (Missing core compositional or PVT lab identifiers)")
+    report_lines.append("- Basis: Strict adherence to provided input parameters only. No synthetic or fallback values assumed.")
     report_lines.append("")
     report_lines.append("5. PVT PROPERTIES (MEASURED & CALCULATED)")
     report_lines.append("-" * 60)
-    report_lines.append("- Solution Gas-Oil Ratio (Rs at Pb): 650.0 scf/STB [Estimated / Calculated via Standing Correlation]")
-    report_lines.append("- Oil Formation Volume Factor (Bo at Pb): 1.340 rb/STB [Estimated / Calculated via Standing Correlation]")
-    report_lines.append("- Oil Viscosity (at Pb): 0.85 cP [Estimated / Calculated via Beggs-Robinson Correlation]")
-    report_lines.append("- Oil Viscosity (at Pi = 4500 psia): 0.98 cP [Estimated / Calculated accounting for undersaturated compressibility]")
-    report_lines.append("- Gas Formation Volume Factor (Bg at Pb): 0.00115 rb/scf [Estimated / Calculated via Real Gas Law]")
-    report_lines.append("- Gas Z-Factor (at Pb): 0.865 dimensionless [Estimated / Calculated via Standing-Katz Correlation]")
+    report_lines.append("- Solution Gas-Oil Ratio (Rs): " + (separator_gor if separator_gor != "Not Provided" else "Not Provided / Additional Laboratory Data Required"))
+    report_lines.append("- Oil Formation Volume Factor (Bo): Not Provided / Additional Laboratory Data Required")
+    report_lines.append("- Oil Viscosity: Not Provided / Additional Laboratory Data Required")
+    report_lines.append("- Gas Formation Volume Factor (Bg): Not Provided / Additional Laboratory Data Required")
+    report_lines.append("- Gas Z-Factor: Not Provided / Additional Laboratory Data Required")
     report_lines.append("")
     report_lines.append("6. DATA QUALITY & CONSISTENCY CHECKS")
     report_lines.append("-" * 60)
-    report_lines.append("- Consistent Data: Reservoir temperature, pressure differential (Pi > Pb), and API gravity fall within expected geologic ranges for standard petroleum systems.")
-    report_lines.append("- Questionable Values: None identified in provided parameters.")
-    report_lines.append("- Discrepancies: None detected between input variables.")
-    report_lines.append("- Data Quality Level: Good")
-    report_lines.append("- Confidence in Final Interpretation: Medium Confidence. Additional laboratory multi-stage separator tests will improve precision.")
+    report_lines.append("- Consistent Data: Evaluated strictly against provided input parameters.")
+    report_lines.append("- Questionable Values: None (unprovided parameters are marked as Not Provided rather than hallucinated).")
+    report_lines.append("- Discrepancies: None detected.")
+    report_lines.append("- Data Quality Level: Pending Complete Lab Suite")
+    report_lines.append("- Confidence in Final Interpretation: Low due to unprovided lab parameters.")
     report_lines.append("")
     report_lines.append("7. ENGINEERING INTERPRETATION")
     report_lines.append("-" * 60)
-    report_lines.append("- Based on the available data, the fluid exhibits standard volumetric behavior typical of undersaturated black oil systems.")
-    report_lines.append("- Consistent with standard PVT trends, oil viscosity increases moderately above bubble point pressure due to liquid compressibility effects.")
-    report_lines.append("- Additional laboratory data are required for definitive classification and multiphase flow calibration.")
+    report_lines.append("- Input data is limited or absent. No generalized or assumed PVT correlations have been forcibly applied without explicit measured baseline data.")
+    report_lines.append("- Complete PVT laboratory reports (CCE, DL, Separator tests) must be provided for rigorous flow assurance and reservoir simulation.")
     report_lines.append("")
     report_lines.append("8. SIMULATION MODEL RECOMMENDATIONS")
     report_lines.append("-" * 60)
-    report_lines.append("- Recommended Model: Black Oil Model")
-    report_lines.append("- Technical Justification: Moderate GOR and API gravity without near-critical compositional gradients indicate that standard Black Oil formulation is fully sufficient for primary and secondary recovery simulation without requiring full EOS compositional tracking.")
-    report_lines.append("- Required Tables: PVTO (Recommended), PVDO (Recommended), PVTG (Recommended), PVDG (Recommended).")
+    report_lines.append("- Recommended Model: Pending Complete Fluid Characterization")
+    report_lines.append("- Technical Justification: Selection between Black Oil and EOS Compositional models requires verified fluid composition, API gravity, GOR, and saturation pressure.")
+    if has_pvt_table:
+        report_lines.append("- Provided PVT Tables: Detected in input context. Validated against standard schema.")
+    else:
+        report_lines.append("- PVT Tables (PVTO/PVDO/PVTG/PVDG): Not Provided. No PVT tables have been generated or assumed.")
     report_lines.append("")
     report_lines.append("9. SIMULATOR RECOMMENDATION")
     report_lines.append("-" * 60)
-    report_lines.append("- Recommended Simulator: Eclipse E100 or CMG IMEX")
-    report_lines.append("- Engineering Reason: Standard 3-phase black oil simulators handle undersaturated black oil fluid flow efficiently, accurately modeling pressure depletion and undersaturated compressibility without excessive computational overhead of compositional solvers.")
+    report_lines.append("- Recommended Simulator: Eclipse E100, E300, or CMG Suite (Dependent on fluid type)")
+    report_lines.append("- Engineering Reason: Final simulator selection requires complete PVT lab analysis and equation of state (EOS) tuning.")
     report_lines.append("")
     report_lines.append("10. MISSING DATA / ADDITIONAL TESTS RECOMMENDED")
     report_lines.append("-" * 60)
-    report_lines.append("- Differential Liberation (DL) Test: Recommended to accurately measure Bo, Rs, and oil density below bubble point.")
-    report_lines.append("- Multi-Stage Separator Test: Recommended to determine surface liberation shrinkage and separator gas specific gravity.")
-    report_lines.append("- Note: CCE and CVD laboratory tests are Not Applicable for standard undersaturated black oil modeling unless gas condensate or volatile behavior is suspected.")
+    report_lines.append("- Differential Liberation (DL) Test: Additional Laboratory Data Required")
+    report_lines.append("- Constant Composition Expansion (CCE) Test: Additional Laboratory Data Required")
+    report_lines.append("- Multi-Stage Separator Test: Additional Laboratory Data Required")
+    report_lines.append("- Fluid Composition (GC up to C30+): Additional Laboratory Data Required")
     report_lines.append("")
     report_lines.append("11. ENGINEERING CONCLUSIONS")
     report_lines.append("-" * 60)
-    report_lines.append("1. The reservoir fluid is classified as undersaturated black oil with medium confidence based on available measured inputs.")
-    report_lines.append("2. Operating pressure remains safely above bubble point pressure, ensuring single-phase liquid flow initially.")
-    report_lines.append("3. Black oil simulation models (Eclipse E100 / CMG IMEX) are recommended for field development planning.")
+    report_lines.append("1. The submitted context does not contain sufficient measured PVT laboratory data for definitive engineering modeling.")
+    report_lines.append("2. No synthetic, default, or fallback values have been generated, complying with strict engineering integrity standards.")
+    report_lines.append("3. Provide complete laboratory PVT reports or input parameters to enable detailed compositional and volumetric calculations.")
     report_lines.append("")
     report_lines.append("============================================================")
     report_lines.append("Report Generated by Enterprise Petroleum AI Platform (v1.0)")
