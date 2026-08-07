@@ -381,13 +381,12 @@ def handle_cmg(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optio
 
 @registry.register("report", aliases=["pvt_report"])
 def handle_report(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
-    """Handle /report command."""
-    from pathlib import Path
-    template_path = Path("templates/pvt_report.txt")
-    if template_path.exists():
-        result = template_path.read_text(encoding="utf-8")
-    else:
-        result = "PVT Report template not found. Using default structure.\n\nUse /analyze after uploading a PVT report for detailed analysis."
+    """Handle /report command with professional engineering PVT report generator."""
+    from services.pvt_engine import generate_professional_pvt_report
+    chat_id = message.get("chat", {}).get("id", "")
+    from main import FILE_CONTEXT
+    context = FILE_CONTEXT.get(chat_id)
+    result = generate_professional_pvt_report(context)
     return result, None, None
 
 
