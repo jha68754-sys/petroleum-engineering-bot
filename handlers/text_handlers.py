@@ -188,44 +188,95 @@ def handle_convert(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], O
 
 @registry.register("plot", aliases=["pvt_plot"])
 def handle_plot(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
-    """Handle /plot <type> [p=v1,v2 v=v1,v2] [pb=val] [well=name] command."""
+    """
+    Handle /plot command for direct data plotting or file-based analysis.
+    Supports multi-series plotting and professional engineering styling.
+    """
+    import re
     text = message.get("text", "")
     parts = text.split(None, 1)
+    
+    # Base usage message
+    usage = (
+        "Usage: /plot <type> [p=v1,v2,... v=v1,v2,...] [pb=val] [well=name]\n\n"
+        "Supported Types: bo, rs, bg, z, viscosity, mu_g, dropout, cgr, "
+        "density, vrel, gor, wor, watercut, pressure, production, kr\n\n"
+        "Direct Plotting Example:\n"
+        "  /plot bo p=500,1000,1500,2000 v=1.15,1.18,1.20,1.17 pb=1500\n\n"
+        "Multi-Series Example:\n"
+        "  /plot kr p=0.2,0.4,0.6,0.8 v1=0.8,0.4,0.1,0 v2=0,0.1,0.3,0.7 labels=Kro,Krw"
+    )
+
     if len(parts) < 2:
-        return (
-            "Usage: /plot <type> [p=v1,v2,... v=v1,v2,...] [pb=val] [well=name]\n\n"
-            "Types: bo, rs, bg, z, viscosity, mu_g, dropout, cgr,\n"
-            "  density, vrel, cce, phase_envelope\n\n"
-            "Example: /plot bo p=500,1000,1500,2000 v=1.15,1.18,1.20,1.17 pb=1500"
-        ), None, None
+        return usage, None, None
+
+    # Resolve relationship key first
+    cmd_args = parts[1].split()
+    type_alias = cmd_args[0].lower()
+    rel_key = resolve_relationship_key(type_alias)
+    
+    if not rel_key:
+        return f"Unknown plot type: {type_alias}\n\n{usage}", None, None
 
     # Parse arguments
-    args_str = parts[1]
-    pressures: Optional[List[float]] = None
-    values: Optional[List[float]] = None
+    x_values: Optional[List[float]] = None
+    y_series: List[List[float]] = []
+    labels: Optional[List[str]] = None
     pb: Optional[float] = None
     well_name: Optional[str] = None
 
-    for token in args_str.split():
+    for token in cmd_args[1:]:
         if token.startswith("p="):
-            pressures = [float(x) for x in token[2:].split(",")]
-        elif token.startswith("v="):
-            values = [float(x) for x in token[2:].split(",")]
+            try:
+                x_values = [float(x) for x in token[2:].split(",") if x.strip()]
+            except ValueError:
+                return "Error: X-axis values (p=) must be numeric.", None, None
+        elif token.startswith("v=") or re.match(r"v\d+=", token):
+            try:
+                val_str = token.split("=", 1)[1]
+                y_series.append([float(x) for x in val_str.split(",") if x.strip()])
+            except ValueError:
+                return "Error: Y-axis values (v=) must be numeric.", None, None
         elif token.startswith("pb="):
-            pb = float(token[3:])
+            try:
+                pb = float(token[3:])
+            except ValueError:
+                pass
         elif token.startswith("well="):
             well_name = token[5:]
+        elif token.startswith("labels="):
+            labels = token[7:].split(",")
 
-    # Resolve relationship key
-    rel_key = resolve_relationship_key(parts[1].split()[0] if " " not in args_str else parts[1].split()[0])
-    if not rel_key:
-        return (
-            f"Unknown plot type: {parts[1].split()[0]}\n"
-            f"Available: bo, rs, bg, z, viscosity, mu_g, dropout, cgr,\n"
-            f"  density, vrel, cce, phase_envelope"
-        ), None, None
+    # Validation
+    if x_values is not None:
+        if not y_series:
+            return f"Missing Y-axis values (v=).\n\nExample: /plot {type_alias} p=500,1000 v=1.1,1.2", None, None
+        
+        for i, series in enumerate(y_series):
+            if len(series) != len(x_values):
+                return (
+                    f"Error: Array length mismatch for series {i+1}.\n"
+                    f"X-axis has {len(x_values)} points, but Y-axis has {len(series)} points."
+                ), None, None
 
-    text_response, png_bytes = format_plot_response(rel_key, pressures, values, pb, well_name)
+    # Fallback to file-based context if no direct data provided
+    if x_values is None and not y_series:
+        chat_id = message.get("chat", {}).get("id", "")
+        # Accessing FILE_CONTEXT from main is tricky due to circular imports, 
+        # but it's already done in handle_reset. 
+        from state import FILE_CONTEXT
+        context = FILE_CONTEXT.get(chat_id, {})
+        
+        # If there's context, we could extract data, but the task says 
+        # "Preserve existing file-based plotting as backward compatibility."
+        # The original code just called format_plot_response with None values.
+        text_response, png_bytes = format_plot_response(rel_key, well_name=well_name)
+        return text_response, png_bytes, None
+
+    # Direct plotting
+    text_response, png_bytes = format_plot_response(
+        rel_key, x_values, y_series, pb, well_name, labels
+    )
     return text_response, png_bytes, None
 
 

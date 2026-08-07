@@ -481,6 +481,60 @@ PVT_PLOT_RULES: Dict[str, PVTPlotRule] = {
         "plot_color": "#1ABC9C",
         "y_label": "Relative Volume (V/Vsat)",
     },
+    "gor_vs_p": {
+        "title_en": "GOR vs Pressure",
+        "title_ar": "نسبة الغاز إلى الزيت مقابل الضغط",
+        "definition": "GOR = Gas-Oil Ratio (scf/STB)",
+        "x_axis": "Pressure (psia)",
+        "y_axis": "GOR (scf/STB)",
+        "plot_color": "#E67E22",
+        "y_label": "GOR (scf/STB)",
+    },
+    "wor_vs_p": {
+        "title_en": "WOR vs Pressure",
+        "title_ar": "نسبة الماء إلى الزيت مقابل الضغط",
+        "definition": "WOR = Water-Oil Ratio (bbl/bbl)",
+        "x_axis": "Pressure (psia)",
+        "y_axis": "WOR (bbl/bbl)",
+        "plot_color": "#2E86C1",
+        "y_label": "WOR (bbl/bbl)",
+    },
+    "wc_vs_p": {
+        "title_en": "Water Cut vs Pressure",
+        "title_ar": "نسبة الماء المنتج مقابل الضغط",
+        "definition": "Water Cut (%)",
+        "x_axis": "Pressure (psia)",
+        "y_axis": "Water Cut (%)",
+        "plot_color": "#2E86C1",
+        "y_label": "Water Cut (%)",
+    },
+    "p_vs_t": {
+        "title_en": "Pressure vs Time",
+        "title_ar": "الضغط مقابل الزمن",
+        "definition": "Pressure evolution over time",
+        "x_axis": "Time (days)",
+        "y_axis": "Pressure (psia)",
+        "plot_color": "#C0392B",
+        "y_label": "Pressure (psia)",
+    },
+    "q_vs_t": {
+        "title_en": "Production vs Time",
+        "title_ar": "الإنتاج مقابل الزمن",
+        "definition": "Production rate over time",
+        "x_axis": "Time (days)",
+        "y_axis": "Rate (STB/day)",
+        "plot_color": "#1E8449",
+        "y_label": "Production Rate (STB/day)",
+    },
+    "kr_vs_sw": {
+        "title_en": "Relative Permeability vs Sw",
+        "title_ar": "النفاذية النسبية مقابل تشبع الماء",
+        "definition": "Kro and Krw relative permeability",
+        "x_axis": "Water Saturation (Sw)",
+        "y_axis": "Relative Permeability",
+        "plot_color": "#1A5276",
+        "y_label": "Kr",
+    },
 }
 
 
@@ -642,6 +696,10 @@ PLOT_ALIASES: Dict[str, str] = {
     "oil density": "oil_density_vs_p", "density": "oil_density_vs_p",
     "relative volume": "vrel_vs_p_cce", "vrel": "vrel_vs_p_cce",
     "cce": "vrel_vs_p_cce", "cme": "vrel_vs_p_cce",
+    "gor": "gor_vs_p", "wor": "wor_vs_p",
+    "watercut": "wc_vs_p", "wc": "wc_vs_p",
+    "pressure": "p_vs_t", "production": "q_vs_t",
+    "kr": "kr_vs_sw", "kro": "kr_vs_sw", "krw": "kr_vs_sw",
 }
 
 
@@ -1206,6 +1264,9 @@ HELP_MESSAGE = (
     "  Run Enterprise Intelligence Fabric (EIF) multi-module reasoning workflow.\n\n"
     "/report\n"
     "  Generate professional enterprise engineering reports with ERF and EIF.\n\n"
+    "/plot <type> [p=x1,x2 v=y1,y2] [pb=val]\n"
+    "  Direct-data plotting tool. Supports multi-series (v1=, v2=).\n"
+    "  Example: /plot bo p=500,1000 v=1.1,1.2 pb=1500\n\n"
     "/convert <value> <from> to <to>\n"
     "  Universal petroleum unit conversion.\n\n"
     "/reset     -- Clear active session context.\n\n"

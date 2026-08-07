@@ -17,6 +17,7 @@ from typing import Dict, List, Optional, Tuple
 
 from config import (
     PLOT_DEFAULT_DPI,
+    PLOT_HIGH_DPI,
     PLOT_FIGURE_WIDTH,
     PLOT_FIGURE_HEIGHT,
     PLOT_BG_COLOR,
@@ -73,29 +74,30 @@ def _fix_arabic_text(text: str) -> str:
 
 def generate_pvt_plot(
     relationship_key: str,
-    pressures: List[float],
-    values: List[float],
+    x_values: List[float],
+    y_values: List[float] | List[List[float]],
     saturation_pressure: Optional[float] = None,
     well_name: Optional[str] = None,
+    labels: Optional[List[str]] = None,
 ) -> Optional[bytes]:
     """
-    Generate a PVT property vs pressure plot.
+    Generate a professional petroleum engineering plot.
 
     Args:
-        relationship_key: The PVT relationship key (e.g., "bo_vs_p").
-        pressures: List of pressure values (psia), sorted ascending.
-        values: List of corresponding property values.
-        saturation_pressure: Optional Pb or Pd value for annotation.
+        relationship_key: The relationship key (e.g., "bo_vs_p").
+        x_values: List of X-axis values (usually pressure or time).
+        y_values: Single list or list of lists for multiple series.
+        saturation_pressure: Optional Pb or Pd value for reference line.
         well_name: Optional well name for the title.
+        labels: Optional labels for multi-series legend.
 
     Returns:
-        PNG image bytes, or None on failure.
+        PNG image bytes (300 DPI), or None on failure.
     """
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        import matplotlib.patches as mpatches
     except ImportError as exc:
         logger.error("matplotlib not available: %s", exc)
         return None
@@ -105,33 +107,55 @@ def generate_pvt_plot(
         logger.warning("Unknown plot type: %s", relationship_key)
         return None
 
-    # Sort data by pressure
-    sorted_data = sorted(zip(pressures, values))
-    sorted_p = [p for p, _ in sorted_data]
-    sorted_v = [v for _, v in sorted_data]
+    # Standardize y_values to a list of lists
+    series_list = y_values if isinstance(y_values[0], list) else [y_values]
+    series_labels = labels if labels else [rule.get("y_label", "Value")]
+    if len(series_labels) < len(series_list):
+        series_labels += [f"Series {i+1}" for i in range(len(series_labels), len(series_list))]
 
-    # Create figure
+    # Create figure with high DPI (300)
     fig, ax = plt.subplots(
         figsize=(PLOT_FIGURE_WIDTH, PLOT_FIGURE_HEIGHT),
-        dpi=PLOT_DEFAULT_DPI,
+        dpi=PLOT_HIGH_DPI,
         facecolor=PLOT_BG_COLOR,
     )
     ax.set_facecolor(PLOT_AXES_BG_COLOR)
 
-    # Plot data
-    color = rule.get("plot_color", "#F39C12")
-    ax.plot(sorted_p, sorted_v, "o-", color=color, linewidth=2.5, markersize=7, zorder=5)
+    # Professional color palette for multi-series
+    colors = [rule.get("plot_color", "#F39C12"), "#3498DB", "#E74C3C", "#2ECC71", "#F1C40F"]
 
-    # Saturation pressure marker
+    for i, series in enumerate(series_list):
+        # Sort data by X-axis
+        sorted_data = sorted(zip(x_values, series))
+        sorted_x = [d[0] for d in sorted_data]
+        sorted_y = [d[1] for d in sorted_data]
+        
+        color = colors[i % len(colors)]
+        ax.plot(
+            sorted_x, sorted_y, "o-", 
+            color=color, linewidth=2.5, markersize=6, 
+            label=series_labels[i], zorder=5
+        )
+
+    # Reference line (Pb/Pd)
     if saturation_pressure:
+        label = f"Reference P = {saturation_pressure:.0f} psia"
+        if "bo" in relationship_key or "rs" in relationship_key:
+            label = f"Pb = {saturation_pressure:.0f} psia"
+        elif "dropout" in relationship_key or "cgr" in relationship_key:
+            label = f"Pd = {saturation_pressure:.0f} psia"
+            
         ax.axvline(
             x=saturation_pressure,
             color="#F39C12",
             linestyle="--",
             linewidth=2,
             alpha=0.8,
-            label=f"P{'b' if 'bo' in relationship_key or 'rs' in relationship_key else 'd'} = {saturation_pressure:.0f} psia",
+            label=label,
         )
+
+    # Legend only if multiple series or reference line
+    if len(series_list) > 1 or saturation_pressure:
         ax.legend(loc="best", fontsize=10, framealpha=0.7)
 
     # Axis labels
@@ -174,7 +198,7 @@ def generate_pvt_plot(
 
     # Save to bytes
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=PLOT_DEFAULT_DPI, bbox_inches="tight")
+    fig.savefig(buf, format="png", dpi=PLOT_HIGH_DPI, bbox_inches="tight")
     plt.close(fig)
     buf.seek(0)
 
@@ -269,20 +293,22 @@ def generate_bo_rs_composite_plot(
 
 def format_plot_response(
     relationship_key: str,
-    pressures: Optional[List[float]] = None,
-    values: Optional[List[float]] = None,
+    x_values: Optional[List[float]] = None,
+    y_values: Optional[List[float] | List[List[float]]] = None,
     pb: Optional[float] = None,
     well_name: Optional[str] = None,
+    labels: Optional[List[str]] = None,
 ) -> Tuple[str, Optional[bytes]]:
     """
     Format a complete plot response (text + optional PNG).
 
     Args:
-        relationship_key: The PVT relationship key.
-        pressures: Optional pressure data.
-        values: Optional property values.
-        pb: Optional saturation pressure.
+        relationship_key: The relationship key.
+        x_values: Optional X-axis data.
+        y_values: Optional Y-axis data (single or multiple series).
+        pb: Optional reference pressure.
         well_name: Optional well name.
+        labels: Optional series labels.
 
     Returns:
         Tuple of (text_response, png_bytes_or_none).
@@ -300,28 +326,33 @@ def format_plot_response(
         f"X-axis: {rule['x_axis']}",
         f"Y-axis: {rule['y_axis']}",
         "",
-        f"Shape: {rule['shape']}",
-        f"Pivot: {rule['pivot']}",
-        "",
     ]
 
-    if rule.get("above_saturation"):
-        lines.append(f"Above saturation: {rule['above_saturation']}")
-    if rule.get("at_saturation"):
-        lines.append(f"At saturation: {rule['at_saturation']}")
-    if rule.get("below_saturation"):
-        lines.append(f"Below saturation: {rule['below_saturation']}")
+    if rule.get("shape"):
+        lines.append(f"Shape: {rule['shape']}")
+    if rule.get("pivot"):
+        lines.append(f"Pivot: {rule['pivot']}")
+    
+    if any(k in rule for k in ["above_saturation", "at_saturation", "below_saturation"]):
+        lines.append("")
+        if rule.get("above_saturation"):
+            lines.append(f"Above saturation: {rule['above_saturation']}")
+        if rule.get("at_saturation"):
+            lines.append(f"At saturation: {rule['at_saturation']}")
+        if rule.get("below_saturation"):
+            lines.append(f"Below saturation: {rule['below_saturation']}")
 
-    lines.append("")
-    lines.append("Common Mistakes:")
-    for mistake in rule.get("common_ai_mistakes", []):
-        lines.append(f"  ! {mistake}")
+    if rule.get("common_ai_mistakes"):
+        lines.append("")
+        lines.append("Common Mistakes:")
+        for mistake in rule.get("common_ai_mistakes", []):
+            lines.append(f"  ! {mistake}")
 
     text_response = "\n".join(lines)
 
     # Generate PNG if data provided
     png_bytes = None
-    if pressures and values:
-        png_bytes = generate_pvt_plot(relationship_key, pressures, values, pb, well_name)
+    if x_values and y_values:
+        png_bytes = generate_pvt_plot(relationship_key, x_values, y_values, pb, well_name, labels)
 
     return text_response, png_bytes
