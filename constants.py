@@ -535,6 +535,33 @@ PVT_PLOT_RULES: Dict[str, PVTPlotRule] = {
         "plot_color": "#1A5276",
         "y_label": "Kr",
     },
+    "ipr_plot": {
+        "title_en": "Inflow Performance Relationship (IPR)",
+        "title_ar": "علاقة أداء التدفق الداخل (IPR)",
+        "definition": "IPR = Rate vs Bottomhole Pressure",
+        "x_axis": "Production Rate (STB/day)",
+        "y_axis": "BHP (psia)",
+        "plot_color": "#1E8449",
+        "y_label": "Pressure (psia)",
+    },
+    "vlp_plot": {
+        "title_en": "Vertical Lift Performance (VLP)",
+        "title_ar": "أداء الرفع العمودي (VLP)",
+        "definition": "VLP = Rate vs Required BHP",
+        "x_axis": "Production Rate (STB/day)",
+        "y_axis": "BHP (psia)",
+        "plot_color": "#C0392B",
+        "y_label": "Pressure (psia)",
+    },
+    "nodal_plot": {
+        "title_en": "Nodal Analysis (IPR vs VLP)",
+        "title_ar": "التحليل العقدي (IPR مقابل VLP)",
+        "definition": "Intersection of IPR and VLP curves",
+        "x_axis": "Production Rate (STB/day)",
+        "y_axis": "BHP (psia)",
+        "plot_color": "#2E86C1",
+        "y_label": "Pressure (psia)",
+    },
 }
 
 
@@ -700,6 +727,7 @@ PLOT_ALIASES: Dict[str, str] = {
     "watercut": "wc_vs_p", "wc": "wc_vs_p",
     "pressure": "p_vs_t", "production": "q_vs_t",
     "kr": "kr_vs_sw", "kro": "kr_vs_sw", "krw": "kr_vs_sw",
+    "ipr": "ipr_plot", "vlp": "vlp_plot", "nodal": "nodal_plot",
 }
 
 
