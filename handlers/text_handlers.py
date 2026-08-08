@@ -208,14 +208,17 @@ def handle_plot(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Opti
     parts = text.split(None, 1)
 
     usage = (
-        "Usage: /plot <type> p=<x1>,<x2>,... v=<y1>,<y2>,... [pb=val] [well=name]\n\n"
-        "Supported Types: bo, rs, bg, z, viscosity, mu_g, dropout, cgr, "
-        "density, vrel, gor, wor, watercut, pressure, production, kr, "
-        "ipr, vlp, nodal\n\n"
-        "Examples:\n"
-        "  /plot bo p=500,1000,1500,2000 v=2.5,2.0,1.8,2.2 pb=1500\n"
-        "  /plot ipr x=0,500,1000,1500,2000 v=3000,2500,1800,900,0\n"
-        "  /plot kr x=0.2,0.4,0.6,0.8 v1=0.8,0.4,0.1,0 v2=0,0.1,0.3,0.7 labels=Kro,Krw"
+        "📊 Plot Engineering Data\n\n"
+        "Choose a plot type:\n\n"
+        "Bo   Rs   Bg   Z\n"
+        "Viscosity   Density\n"
+        "GOR   WOR   Water Cut\n"
+        "Pressure   Production\n"
+        "Kr   IPR   VLP   Nodal\n\n"
+        "Example:\n"
+        "/plot bo p=500,1000,1500,2000 v=1.15,1.25,1.35,1.30 pb=1500\n\n"
+        "Send the command with your data and the bot will generate "
+        "the engineering plot."
     )
 
     if len(parts) < 2:
