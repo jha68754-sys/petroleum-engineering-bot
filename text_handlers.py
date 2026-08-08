@@ -412,7 +412,7 @@ def handle_graph(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Opt
         return "No document uploaded for graphing. Upload a file first.", None, None
     return None, None, None
 
-@registry.register("graph", aliases=["plot"])
+@registry.register("graph")
 def handle_graph_cmd(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
     return handle_graph(message, tg)
 
