@@ -541,6 +541,17 @@ def run_exact_calculation(formula_key: str, kwargs: Dict[str, float]) -> str:
     # Extract required inputs
     required_inputs = formula["inputs"]
     provided = {k: v for k, v in kwargs.items() if k in required_inputs}
+    # Optional (defaulted) inputs -- e.g. bg_rb for the OGIP unit selection --
+    # are passed through if supplied, parsed as float when numeric.
+    _func = formula["func"]
+    try:
+        import inspect
+        _sig = inspect.signature(_func)
+        for k, v in kwargs.items():
+            if k in required_inputs or k in _sig.parameters:
+                provided[k] = float(v) if str(v).replace(".", "", 1).replace("-", "", 1).isdigit() else v
+    except Exception:
+        pass
     missing = set(required_inputs) - set(provided.keys())
 
     if missing:
@@ -554,20 +565,93 @@ def run_exact_calculation(formula_key: str, kwargs: Dict[str, float]) -> str:
             + "\n".join([f"• {k}: {v}" for k, v in formula['units'].items() if k in missing])
         )
 
-    # Validate inputs
+    # Validate inputs -- with SPECIFIC, parameter-level failure messages
+    # so the user knows exactly which input to correct (never a generic
+    # "validation failed" line).
+    _field_descriptions = {
+        "area": "reservoir area (acres, > 0)",
+        "h": "net pay thickness (ft, > 0)",
+        "phi": "porosity (fraction strictly between 0 and 1)",
+        "sw": "water saturation (fraction, 0 <= Sw < 1)",
+        "bo": "oil FVF (rb/STB, > 0)",
+        "bg": "gas FVF (ft3/scf by default, > 0)",
+        "bg_rb": "set bg_rb=1 only if Bg was given in rb/scf",
+        "k": "permeability (mD, > 0)",
+        "dp": "pressure differential (psi, > 0)",
+        "mu": "viscosity (cP, > 0)",
+        "length": "flow length (ft, > 0)",
+        "np": "cumulative production (STB, 0 <= Np <= OOIP)",
+        "ooip": "oil in place (STB, > 0)",
+        "q": "flow rate (STB/day, > 0)",
+        "pr": "reservoir pressure (psi, must exceed Pwf)",
+        "pwf": "flowing bottomhole pressure (psi, must be less than Pr)",
+        "mw": "mud weight (ppg, realistic range 6-25)",
+        "tvd": "true vertical depth (ft, > 0)",
+        "app": "annular pressure loss (psi, >= 0)",
+        "p_target": "target pressure (psi, > 0)",
+        "qw": "water rate (bbl/day, >= 0)",
+        "qo": "oil rate (bbl/day, > 0)",
+        "qg": "gas rate (scf/day, >= 0)",
+        "cf": "cash flow amount ($)",
+        "rate": "discount rate (fraction, > -1)",
+        "t": "time (years, >= 0)",
+    }
     try:
         if "validation" in formula:
             valid = formula["validation"](**provided)
             if not valid:
-                return f"Input validation failed for {formula['name_en']}. Check ranges and constraints."
+                # Identify the specific failing field(s) with per-field
+                # constraint checks, then fall back to the joint constraint
+                # so coupled conditions (e.g. Pr > Pwf) still name both sides.
+                bad = []
+                for key, val in provided.items():
+                    if key == "phi" and not (0 < val < 1):
+                        bad.append(key)
+                    elif key == "sw" and not (0 <= val < 1):
+                        bad.append(key)
+                    elif key in ("area", "h", "bo", "bg", "k", "dp", "mu",
+                                 "length", "ooip", "q", "pr", "pwf", "tvd",
+                                 "p_target") and val <= 0:
+                        bad.append(key)
+                    elif key == "mw" and not (6 < val < 25):
+                        bad.append(key)
+                    elif key == "np" and not (0 <= val <= provided.get("ooip", val)):
+                        bad.append(key)
+                    elif key == "app" and val < 0:
+                        bad.append(key)
+                    elif key == "qo" and val <= 0:
+                        bad.append(key)
+                    elif key in ("qw", "qg") and val < 0:
+                        bad.append(key)
+                    elif key == "cf" and not (isinstance(val, float) or isinstance(val, int)):
+                        bad.append(key)
+                    elif key == "rate" and val <= -1:
+                        bad.append(key)
+                    elif key == "t" and val < 0:
+                        bad.append(key)
+                # Joint/coupled constraints: name the pair explicitly.
+                if not bad and "pr" in provided and "pwf" in provided:
+                    if provided["pr"] <= provided["pwf"]:
+                        bad = ["pr", "pwf"]
+                if not bad and formula_key == "ogip" and provided.get("bg", 0) <= 0:
+                    bad = ["bg"]
+                if not bad:
+                    bad = list(provided.keys())
+                msg = f"Invalid input for {formula['name_en']}: " + ", ".join(
+                    f"{k} = {provided[k]} does not satisfy {_field_descriptions.get(k, 'valid range')}" for k in bad
+                )
+                return msg
     except TypeError:
         pass  # Validation function signature mismatch -- skip
 
     # Calculate
     try:
         result = formula["func"](**provided)
-    except (ZeroDivisionError, ValueError, OverflowError) as exc:
+    except (ZeroDivisionError, OverflowError) as exc:
         return f"Calculation error for {formula['name_en']}: {exc}. Check input values."
+    except ValueError as exc:
+        # Hard rejection of physically invalid inputs (e.g. DAK with ppr<0)
+        return f"REJECTED: {exc}"
 
     # Format output
     output_lines = [
@@ -634,8 +718,12 @@ def run_correlation(correlation_key: str, kwargs: Dict[str, float]) -> str:
     # Calculate
     try:
         result = corr["func"](**provided)
-    except (ZeroDivisionError, ValueError, OverflowError) as exc:
+    except (ZeroDivisionError, OverflowError) as exc:
         return f"Calculation error for {corr['name_en']}: {exc}."
+    except ValueError as exc:
+        # Hard rejection of physically invalid inputs (e.g. DAK with ppr<0 or
+        # tpr<=0). Do not attempt a numeric workaround -- reject outright.
+        return f"REJECTED: {exc}"
 
     # Format output
     output_lines = [

@@ -176,7 +176,7 @@ KNOWLEDGE_BASE: List[KnowledgeEntry] = [
         "ar": "الغاز الأصلي في المكمن",
         "category": "Reservoir (Group A - Volumetric)",
         "unit": "scf",
-        "def_ar": "OGIP = (43560 x A x h x phi x (1-Sw)) / Bgi. مرجع: Craft & Hawkins, Applied Petroleum Reservoir Engineering. مستوى الثقة: High.",
+        "def_ar": "OGIP = (43560 x A x h x phi x (1-Sw)) / Bg بوحدة ft3/scf، أو (7758 x A x h x phi x (1-Sw)) / Bg بوحدة rb/scf. مرجع: Craft & Hawkins, Applied Petroleum Reservoir Engineering. مستوى الثقة: High.",
         "trend": "static",
         "relationship_key": None,
         "typical_range": "varies widely",
@@ -770,14 +770,21 @@ EXACT_FORMULAS: Dict[str, FormulaSpec] = {
         "name_ar": "الغاز الأصلي في المكمن",
         "inputs": ["area", "h", "phi", "sw", "bg"],
         "units": {"area": "acres", "h": "ft", "phi": "fraction",
-                  "sw": "fraction", "bg": "rb/scf"},
-        "formula_str": "OGIP = (43560 x A x h x phi x (1-Sw)) / Bg",
-        "func": lambda area, h, phi, sw, bg: (
-            43560 * area * h * phi * (1 - sw)
-        ) / bg,
+                  "sw": "fraction", "bg": "ft3/scf (default)"},
+        "formula_str": "OGIP = (43560 x A x h x phi x (1-Sw)) / Bg  [Bg in ft3/scf] "
+                       "OR (7758 x A x h x phi x (1-Sw)) / Bg  [Bg in rb/scf]",
+        "func": lambda area, h, phi, sw, bg, bg_rb=0.0: (
+            (7758.0 if bg_rb else 43560.0) * area * h * phi * (1.0 - sw) / bg
+        ),
         "output_unit": "scf",
-        "validation": lambda area, h, phi, sw, bg: (
+        "validation": lambda area, h, phi, sw, bg, bg_rb=0.0: (
             0 < phi < 1 and 0 <= sw < 1 and bg > 0
+        ),
+        "note": (
+            "Bg unit is explicit: default is ft3/scf with constant 43560 "
+            "(1 acre-ft = 43,560 ft3). Provide bg_rb=1 to declare Bg in rb/scf, "
+            "which uses constant 7758 (1 acre-ft = 7,758 bbl). "
+            "Reference: Craft & Hawkins, Applied Petroleum Reservoir Engineering."
         ),
     },
     "darcy": {
@@ -833,7 +840,11 @@ EXACT_FORMULAS: Dict[str, FormulaSpec] = {
         "func": lambda p_target, tvd: p_target / (0.052 * tvd),
         "output_unit": "ppg",
         "validation": lambda p_target, tvd: p_target > 0 and tvd > 0,
-        "note": "Add 0.2-0.5 ppg overbalance safety margin.",
+        "note": (
+            "Any overbalance margin must be selected per the approved drilling program and the "
+            "pore-pressure / fracture-gradient window, considering ECD, well-control requirements, and "
+            "applicable operating procedures. No margin is prescribed without an approved design basis."
+        ),
     },
     "ecd": {
         "name_en": "Equivalent Circulating Density (ECD)",
@@ -875,15 +886,35 @@ EXACT_FORMULAS: Dict[str, FormulaSpec] = {
         "output_unit": "scf/STB",
         "validation": lambda qg, qo: qg >= 0 and qo > 0,
     },
-    "npv": {
-        "name_en": "Net Present Value (single cash flow)",
-        "name_ar": "صافي القيمة الحالية",
+    "pv": {
+        "name_en": "Present Value (single cash flow)",
+        "name_ar": "القيمة الحالية (دفقة نقدية واحدة)",
         "inputs": ["cf", "rate", "t"],
         "units": {"cf": "$", "rate": "fraction", "t": "years"},
         "formula_str": "PV = CF / (1+r)^t",
         "func": lambda cf, rate, t: cf / (1 + rate) ** t,
         "output_unit": "$",
         "validation": lambda cf, rate, t: rate > -1 and t >= 0,
+        "note": "Single-cash-flow present value. NOT a project NPV -- see /calc npv for multiple cash flows.",
+    },
+    "npv": {
+        "name_en": "Net Present Value (multi cash flow)",
+        "name_ar": "صافي القيمة الحالية (تعدد الدفعات)",
+        "inputs": ["cf", "rate"],
+        "units": {"cf": "$ (comma-separated: cf0,cf1,...,cfN for t=0..N)",
+                  "rate": "fraction"},
+        "formula_str": "NPV = sum(CF_t / (1+r)^t) for t = 0..N",
+        "func": lambda cf, rate: sum(
+            c / (1 + rate) ** t
+            for t, c in enumerate(float(v) for v in str(cf).split(","))
+        ),
+        "output_unit": "$",
+        "validation": lambda cf, rate: rate > -1 and "," in str(cf),
+        "note": (
+            "True multi-cash-flow NPV: provide cf as a comma-separated list starting at t=0, "
+            "e.g. cf=-1000000,300000,350000,400000. Only supplied values are discounted -- no "
+            "cash flows are invented. For a single cash flow use /calc pv instead."
+        ),
     },
 }
 
@@ -927,30 +958,32 @@ CORRELATIONS: Dict[str, CorrelationSpec] = {
     "pb_vasquez_beggs": {
         "name_en": "Bubble Point Pressure (Vasquez-Beggs, 1980)",
         "name_ar": "ضغط نقطة الفقاعة (فاسكيز-بيغز)",
-        "inputs": ["rs", "gas_sg", "tres", "api", "p_sep"],
+        "inputs": ["rs", "gas_sg", "tres", "api", "p_sep", "t_sep"],
         "units": {"rs": "scf/STB", "gas_sg": "dimensionless",
-                  "tres": "deg F", "api": "deg API", "p_sep": "psia"},
+                  "tres": "deg F", "api": "deg API", "p_sep": "psia",
+                  "t_sep": "deg F (REQUIRED -- separator temperature)"},
         "formula_str": (
             "Pb = [Rs / (C1 * gamma_gs * exp(C3*API/(T+460)))]^(1/C2), "
             "gamma_gs = gamma_g*[1 + 5.912e-5*API*Tsep*log10(Psep/114.7)], "
             "(C1,C2,C3) = (0.0362,1.0937,25.724) if API<=30 else (0.0178,1.1870,23.931)"
         ),
-        "func": lambda rs, gas_sg, tres, api, p_sep: _vasquez_beggs_pb(rs, gas_sg, tres, api, p_sep),
+        "func": lambda rs, gas_sg, tres, api, p_sep, t_sep: _vasquez_beggs_pb(rs, gas_sg, tres, api, p_sep, t_sep),
         "output_unit": "psia",
         "applicability": {"rs": (20, 2070), "api": (15.2, 60), "tres": (70, 300)},
     },
     "rs_vasquez_beggs": {
         "name_en": "Solution GOR (Vasquez-Beggs, 1980)",
         "name_ar": "نسبة الغاز المذاب (فاسكيز-بيغز)",
-        "inputs": ["p", "gas_sg", "tres", "api", "p_sep"],
+        "inputs": ["p", "gas_sg", "tres", "api", "p_sep", "t_sep"],
         "units": {"p": "psia", "gas_sg": "dimensionless",
-                  "tres": "deg F", "api": "deg API", "p_sep": "psia"},
+                  "tres": "deg F", "api": "deg API", "p_sep": "psia",
+                  "t_sep": "deg F (REQUIRED -- separator temperature)"},
         "formula_str": (
             "Rs = C1 * gamma_gs * P^C2 * exp(C3*API/(T+460)), "
             "gamma_gs = gamma_g*[1 + 5.912e-5*API*Tsep*log10(Psep/114.7)], "
             "(C1,C2,C3) = (0.0362,1.0937,25.724) if API<=30 else (0.0178,1.1870,23.931)"
         ),
-        "func": lambda p, gas_sg, tres, api, p_sep: _vasquez_beggs_rs(p, gas_sg, tres, api, p_sep),
+        "func": lambda p, gas_sg, tres, api, p_sep, t_sep: _vasquez_beggs_rs(p, gas_sg, tres, api, p_sep, t_sep),
         "output_unit": "scf/STB",
         "applicability": {"p": (100, 7000), "api": (15.2, 60), "tres": (70, 300)},
     },
@@ -993,7 +1026,7 @@ def _vb_coefficients(api: float) -> Tuple[float, float, float]:
 
 
 def _vb_gas_gravity_at_ref_sep(
-    gas_sg: float, api: float, p_sep: float, t_sep: float = 100.0
+    gas_sg: float, api: float, p_sep: float, t_sep: float
 ) -> float:
     """
     Correct gas specific gravity to the Vasquez-Beggs reference separator
@@ -1003,8 +1036,8 @@ def _vb_gas_gravity_at_ref_sep(
         gas_sg: Gas specific gravity at actual separator conditions.
         api: Stock-tank oil API gravity.
         p_sep: Actual separator pressure (psia).
-        t_sep: Actual separator temperature (deg F). Defaults to 100 F when
-            not measured, per common field practice.
+        t_sep: Separator temperature in deg F. REQUIRED explicit input of
+            the correlation -- no default is ever assumed.
 
     Returns:
         Gas gravity normalized to the 100 psig reference separator pressure.
@@ -1016,19 +1049,29 @@ def _vb_gas_gravity_at_ref_sep(
     )
 
 
-def _vasquez_beggs_rs(p: float, gas_sg: float, tres: float, api: float, p_sep: float) -> float:
-    """Vasquez-Beggs (1980) solution GOR (Rs) at pressure P < Pb."""
+def _vasquez_beggs_rs(p: float, gas_sg: float, tres: float, api: float, p_sep: float, t_sep: float) -> float:
+    """Vasquez-Beggs (1980) solution GOR (Rs) at pressure P < Pb.
+
+    t_sep (separator temperature, deg F) is a REQUIRED input of the
+    correlation (Vasquez & Beggs, JPT 1980, pp. 968-970). It must be
+    supplied explicitly; no default value is ever assumed.
+    """
     import math
     c1, c2, c3 = _vb_coefficients(api)
-    gamma_gs = _vb_gas_gravity_at_ref_sep(gas_sg, api, p_sep)
+    gamma_gs = _vb_gas_gravity_at_ref_sep(gas_sg, api, p_sep, t_sep)
     return c1 * gamma_gs * (p ** c2) * math.exp(c3 * api / (tres + 460))
 
 
-def _vasquez_beggs_pb(rs: float, gas_sg: float, tres: float, api: float, p_sep: float) -> float:
-    """Vasquez-Beggs (1980) bubble point pressure, by inverting the Rs equation at Rs=Rsb."""
+def _vasquez_beggs_pb(rs: float, gas_sg: float, tres: float, api: float, p_sep: float, t_sep: float) -> float:
+    """Vasquez-Beggs (1980) bubble point pressure, by inverting the Rs equation at Rs=Rsb.
+
+    t_sep (separator temperature, deg F) is a REQUIRED input of the
+    correlation (Vasquez & Beggs, JPT 1980, pp. 968-970). It must be
+    supplied explicitly; no default value is ever assumed.
+    """
     import math
     c1, c2, c3 = _vb_coefficients(api)
-    gamma_gs = _vb_gas_gravity_at_ref_sep(gas_sg, api, p_sep)
+    gamma_gs = _vb_gas_gravity_at_ref_sep(gas_sg, api, p_sep, t_sep)
     denom = c1 * gamma_gs * math.exp(c3 * api / (tres + 460))
     return (rs / denom) ** (1 / c2)
 
@@ -1051,7 +1094,13 @@ def _standing_katz_approx(tpr: float, ppr: float) -> float:
         Estimated Z-factor (dimensionless)
     """
     import math
-    if tpr <= 0:
+    if tpr <= 0 or ppr < 0:
+        raise ValueError(
+            f"Physically invalid input: tpr={tpr}, ppr={ppr}. "
+            "Tpr must be > 0 and Ppr must be >= 0; the DAK iteration is not "
+            "defined for non-positive reduced conditions."
+        )
+    if ppr == 0:
         return 1.0
 
     a1, a2, a3, a4, a5 = 0.3265, -1.0700, -0.5339, 0.01569, -0.05165

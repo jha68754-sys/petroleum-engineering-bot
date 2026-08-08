@@ -197,6 +197,21 @@ class AIService:
                 )
                 context_parts.append(f"    Validity: {ranges}")
 
+        # --- ENGINE-FIRST POLICY (deterministic routing) ---
+        context_parts.append("\n--- ENGINE-FIRST POLICY ---")
+        context_parts.append(
+            "ENGINE-FIRST: when a question can be answered by a deterministic "
+            "engine, ALWAYS direct the user to the exact command instead of "
+            "computing or estimating in prose: "
+            "/calc ooip|ogip|pv|npv|darcy|hydrostatic|mud_weight_required|ecd|water_cut|wor|gor_produced|productivity_index|recovery_factor|api "
+            "for exact formulas; "
+            "/estimate pb_standing|rs_standing|pb_vasquez_beggs|rs_vasquez_beggs|bo_standing|z_standing_katz "
+            "for correlations; '/plot ...' for plots; /convert for units. "
+            "Never invent equations, constants, or missing input values in "
+            "conversation. If required inputs are missing, list exactly what is "
+            "needed. Correlation results are ESTIMATES, not lab-measured values."
+        )
+
         context_parts.append(
             "\n=== END ENGINEERING KNOWLEDGE BASE ==="
         )
