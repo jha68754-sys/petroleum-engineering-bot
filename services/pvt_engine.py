@@ -549,7 +549,13 @@ def run_exact_calculation(formula_key: str, kwargs: Dict[str, float]) -> str:
         _sig = inspect.signature(_func)
         for k, v in kwargs.items():
             if k in required_inputs or k in _sig.parameters:
-                provided[k] = float(v) if str(v).replace(".", "", 1).replace("-", "", 1).isdigit() else v
+                if isinstance(v, list):
+                    provided[k] = v
+                elif isinstance(v, (int, float)):
+                    provided[k] = v
+                else:
+                    s = str(v).replace(".", "", 1).replace("-", "", 1)
+                    provided[k] = float(v) if s.isdigit() else v
     except Exception:
         pass
     missing = set(required_inputs) - set(provided.keys())

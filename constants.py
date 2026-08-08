@@ -905,14 +905,20 @@ EXACT_FORMULAS: Dict[str, FormulaSpec] = {
                   "rate": "fraction"},
         "formula_str": "NPV = sum(CF_t / (1+r)^t) for t = 0..N",
         "func": lambda cf, rate: sum(
-            c / (1 + rate) ** t
-            for t, c in enumerate(float(v) for v in str(cf).split(","))
+            float(c) / (1 + rate) ** t
+            for t, c in enumerate((cf if isinstance(cf, (list, tuple)) else str(cf).split(",")))
         ),
         "output_unit": "$",
-        "validation": lambda cf, rate: rate > -1 and "," in str(cf),
+        "validation": lambda cf, rate: (
+            rate > -1
+            and isinstance(cf, (list, tuple))
+            and len(cf) >= 2
+            and all(isinstance(v, (int, float)) for v in cf)
+        ),
         "note": (
             "True multi-cash-flow NPV: provide cf as a comma-separated list starting at t=0, "
-            "e.g. cf=-1000000,300000,350000,400000. Only supplied values are discounted -- no "
+            "e.g. cf=-1000000,300000,350000,400000. Each value must be a finite number "
+            "(negative and positive allowed). Only supplied values are discounted -- no "
             "cash flows are invented. For a single cash flow use /calc pv instead."
         ),
     },
@@ -1094,14 +1100,15 @@ def _standing_katz_approx(tpr: float, ppr: float) -> float:
         Estimated Z-factor (dimensionless)
     """
     import math
-    if tpr <= 0 or ppr < 0:
+    if tpr <= 0 or ppr <= 0:
         raise ValueError(
             f"Physically invalid input: tpr={tpr}, ppr={ppr}. "
-            "Tpr must be > 0 and Ppr must be >= 0; the DAK iteration is not "
-            "defined for non-positive reduced conditions."
+            "Tpr must be > 0 and Ppr must be > 0; the DAK iteration is not "
+            "defined for zero or negative reduced conditions (at the limit "
+            "Ppr -> 0, Z approaches the ideal-gas value of 1.0, but the "
+            "DAK correlation itself is defined only for strictly positive "
+            "reduced pressure)."
         )
-    if ppr == 0:
-        return 1.0
 
     a1, a2, a3, a4, a5 = 0.3265, -1.0700, -0.5339, 0.01569, -0.05165
     a6, a7, a8, a9, a10, a11 = 0.5475, -0.7361, 0.1844, 0.1056, 0.6134, 0.7210

@@ -84,20 +84,58 @@ def execute_conversion(
         return f"Conversion error: {exc}"
 
 
-def parse_kv_args(args_str: str) -> Dict[str, float]:
+def _parse_numeric_list(val_str: str):
+    """
+    Parse a value that may be a single number or a comma-separated numeric
+    list (e.g. cf=-1000000,300000,350000,400000).
+
+    Returns:
+        A float for a single value, or a list of floats for a
+        comma-separated sequence. Returns None if the value is not valid
+        numeric data (with the caller expected to raise/report).
+    """
+    val_str = val_str.strip()
+    if "," in val_str:
+        values = []
+        for tok in val_str.split(","):
+            tok = tok.strip()
+            if not tok:
+                return None  # malformed: trailing/leading/double comma
+            try:
+                v = float(tok)
+            except ValueError:
+                return None  # malformed: non-numeric token in the list
+            if not (v == v) or v in (float("inf"), float("-inf")):  # non-finite
+                return None
+            values.append(v)
+        if len(values) < 2:
+            return None  # malformed: e.g. "500," yielded fewer than 2 values
+        return values
+    v = float(val_str)
+    if not (v == v) or v in (float("inf"), float("-inf")):
+        return None
+    return v
+
+
+def parse_kv_args(args_str: str) -> Dict[str, Any]:
     """
     Parse key=value arguments from a command string.
 
     Supports formats like:
         area=500 h=50 phi=0.2 sw=0.3 bo=1.3
+        cf=-1000000,300000,350000,400000   (comma-separated numeric list)
 
     Args:
         args_str: Space-separated key=value pairs.
 
     Returns:
-        Dictionary mapping string keys to float values.
+        Dictionary mapping string keys to float values, or to lists of
+        floats when the value is a comma-separated numeric sequence.
+        Comma-separated lists are only accepted for fully valid finite
+        numeric sequences; malformed lists cause the key to be rejected
+        with a warning so the engine can report a specific error.
     """
-    result: Dict[str, float] = {}
+    result: Dict[str, Any] = {}
     if not args_str or not args_str.strip():
         return result
 
@@ -107,10 +145,14 @@ def parse_kv_args(args_str: str) -> Dict[str, float]:
             logger.warning("Skipping malformed argument: %s", part)
             continue
         key, _, val_str = part.partition("=")
-        try:
-            result[key.strip().lower()] = float(val_str.strip())
-        except ValueError:
-            logger.warning("Cannot parse float from: %s (key=%s)", val_str, key)
+        parsed = _parse_numeric_list(val_str)
+        if parsed is None:
+            logger.warning(
+                "Cannot parse valid numeric data from: %s (key=%s) -- "
+                "malformed or non-finite numeric sequence",
+                val_str, key,
+            )
             continue
+        result[key.strip().lower()] = parsed
 
     return result

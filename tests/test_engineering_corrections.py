@@ -43,12 +43,14 @@ class TestEngineeringCorrections(unittest.TestCase):
 
     def test_dak_ppr_zero_is_ideal_gas(self):
         r = run_correlation("z_standing_katz", {"tpr":1.5,"ppr":0})
-        self.assertIn("1.0000", r)
+        self.assertTrue(r.startswith("REJECTED:"), r)
+        self.assertIn("Ppr must be > 0", r)
+        self.assertIn("Tpr must be > 0", r)
 
     def test_pv_vs_npv_separation(self):
         r_pv = run_exact_calculation("pv", {"cf":1000,"rate":0.1,"t":5})
         self.assertAlmostEqual(float(re.search(r"RESULT: ([\d.]+)", r_pv).group(1)), 1000/1.1**5, places=3)
-        r_npv = run_exact_calculation("npv", {"cf":"-1000000,300000,350000,400000","rate":0.1})
+        r_npv = run_exact_calculation("npv", {"cf":[-1000000.0,300000.0,350000.0,400000.0],"rate":0.1})
         exp = -1e6 + 300e3/1.1 + 350e3/1.1**2 + 400e3/1.1**3
         self.assertAlmostEqual(float(re.search(r"RESULT: ([\d.-]+)", r_npv).group(1)), exp, delta=1)
         r_bad = run_exact_calculation("npv", {"cf":"1000","rate":0.1})
