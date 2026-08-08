@@ -154,7 +154,10 @@ class AIService:
         )
         for key, rule in PVT_PLOT_RULES.items():
             context_parts.append(f"\n  [{key}] {rule['title_en']} ({rule['title_ar']})")
-            context_parts.append(f"    Shape: {rule['shape']}")
+            if "shape" in rule:
+                context_parts.append(f"    Shape: {rule['shape']}")
+            if rule.get("pivot"):
+                context_parts.append(f"    Pivot: {rule['pivot']}")
             context_parts.append(f"    Above Sat: {rule.get('above_saturation', 'n/a')}")
             context_parts.append(f"    At Sat: {rule.get('at_saturation', 'n/a')}")
             context_parts.append(f"    Below Sat: {rule.get('below_saturation', 'n/a')}")
