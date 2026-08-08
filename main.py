@@ -249,6 +249,63 @@ def is_surface_separator(text: str) -> bool:
 #  MESSAGE HANDLING
 # ═══════════════════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════════════════
+#  DYNAMIC PLOT CAPTIONS (Telegram photo captions per plot type)
+# ═══════════════════════════════════════════════════════════════════════
+
+# Professional caption per plot type (from rule key to Telegram caption).
+# Falls back to the rule's English title when the key is not listed here,
+# so new plot types are captioned automatically.
+_PLOT_CAPTIONS: Dict[str, str] = {
+    "bo_vs_p": "Oil Formation Volume Factor (Bo) Plot",
+    "rs_vs_p": "Solution Gas-Oil Ratio (Rs) Plot",
+    "bg_vs_p": "Gas Formation Volume Factor (Bg) Plot",
+    "z_vs_p": "Gas Compressibility Factor (Z) Plot",
+    "mu_o_vs_p": "Oil Viscosity Plot",
+    "mu_g_vs_p": "Gas Viscosity Plot",
+    "dropout_vs_p": "Liquid Dropout Plot",
+    "cgr_vs_p": "Condensate-Gas Ratio (CGR) Plot",
+    "density_vs_p": "Density vs Pressure Plot",
+    "vrel_vs_p": "Relative Volume Plot",
+    "gor_vs_p": "Gas-Oil Ratio (GOR) Plot",
+    "wor_vs_p": "Water-Oil Ratio (WOR) Plot",
+    "wc_vs_p": "Water Cut Plot",
+    "p_vs_t": "Pressure Plot",
+    "q_vs_t": "Production Performance Plot",
+    "kr_vs_sw": "Relative Permeability Plot",
+    "ipr_plot": "Inflow Performance Relationship (IPR) Plot",
+    "vlp_plot": "Vertical Lift Performance (VLP) Plot",
+    "nodal_plot": "Nodal Analysis (IPR vs VLP)",
+}
+
+
+def _plot_caption_for(command_text: str) -> str:
+    """
+    Return a dynamic Telegram photo caption based on the plot type requested
+    in the command text (e.g. "/plot Bo p=... v=..."). Falls back to "PVT
+    Plot" only when no plot type could be resolved.
+    """
+    try:
+        from services.pvt_engine import PLOT_ALIASES
+        from constants import PVT_PLOT_RULES
+    except ImportError:
+        return "PVT Plot"
+
+    parts = command_text.strip().split()
+    if len(parts) < 2 or not parts[0].startswith("/"):
+        return "PVT Plot"
+
+    rel_key = resolve_relationship_key(parts[1])
+    if rel_key:
+        caption = _PLOT_CAPTIONS.get(rel_key, "")
+        if caption:
+            return caption
+        title_en = PVT_PLOT_RULES.get(rel_key, {}).get("title_en", "")
+        if title_en:
+            return f"{title_en} Plot"
+    return "PVT Plot"
+
+
 def process_message(
     message: Dict[str, Any],
     tg: TelegramService,
@@ -322,8 +379,8 @@ def process_message(
                     tg.send_message(chat_id, msg_to_send, reply_to_message_id=message_id)
 
                 if png_bytes:
-                    tg.send_photo_bytes(chat_id, png_bytes, caption="PVT Plot", reply_to_message_id=message_id)
-
+                    caption = _plot_caption_for(text)
+                    tg.send_photo_bytes(chat_id, png_bytes, caption=caption, reply_to_message_id=message_id)
                 return
 
             # Command not found
