@@ -111,7 +111,13 @@ def _parse_numeric_list(val_str: str):
         if len(values) < 2:
             return None  # malformed: e.g. "500," yielded fewer than 2 values
         return values
-    v = float(val_str)
+    # Scalar value: skip non-numeric strings instead of raising ValueError,
+    # so that string keys (e.g. model=vogel) are silently dropped rather
+    # than crashing the whole command parser.
+    try:
+        v = float(val_str)
+    except ValueError:
+        return None
     if not (v == v) or v in (float("inf"), float("-inf")):
         return None
     return v

@@ -31,7 +31,8 @@ from services.pvt_engine import (
     export_sim_decision,
 )
 from services.calculation_engine import parse_kv_args
-from services.visualization import format_plot_response
+from services.visualization import format_plot_response, generate_pvt_plot
+from services.production_engine import IPREngine, MODEL_DISPLAY
 from logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -132,10 +133,293 @@ def handle_calc(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Opti
 
     formula_key = parts[1]
     args_str = parts[2] if len(parts) > 2 else ""
+
+    if formula_key.lower() == "ipr":
+        # Deterministic Production IPR engine (Phase 1); handled separately
+        # from EXACT_FORMULAS so that IPR model selection/guardrails apply.
+        # NOTE: do NOT pre-parse with parse_kv_args — handle_calc_ipr keeps
+        # the string keys (model=, plot=) that the generic numeric parser
+        # would otherwise drop.
+        text, png, caption = handle_calc_ipr(
+            {"text": "/ipr " + args_str}, tg
+        )
+        return text, png, caption
+
     kwargs = parse_kv_args(args_str)
 
     result = run_exact_calculation(formula_key, kwargs)
     return result, None, None
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  /calc ipr  —  Deterministic IPR Engine (Phase 1: IPR only)
+# ═══════════════════════════════════════════════════════════════════════
+
+_IPR_USAGE = (
+    "Usage: /calc ipr [model=auto|linear|vogel|composite] [plot=1] key=value ...\n\n"
+    "All pressures in psia (psi); rates in STB/day; J in STB/day/psi.\n\n"
+    "Saturated reservoir (Pr <= Pb) or no Pb given:\n"
+    "  /calc ipr pr=3000 qmax=1500 pwf=1200\n"
+    "  /calc ipr model=vogel pr=3000 q_test=600 pwf_test=1500\n\n"
+    "Undersaturated, single-phase inflow (Pwf >= Pb):\n"
+    "  /calc ipr model=linear pr=3000 j=1.5 pwf=2000\n"
+    "  /calc ipr model=linear pr=3000 q_test=900 pwf_test=2400\n\n"
+    "Undersaturated reservoir, inflow crosses bubble point (Composite IPR):\n"
+    "  /calc ipr model=composite pr=3000 pb=2200 q_test=900 pwf_test=2400 pwf=1200\n\n"
+    "Automatic model selection by reservoir conditions:\n"
+    "  /calc ipr model=auto pr=3000 pb=2200 q_test=900 pwf_test=2400 pwf=1200\n\n"
+    "Add plot=1 for a calculated IPR model plot:\n"
+    "  /calc ipr model=auto pr=3000 pb=2200 q_test=900 pwf_test=2400 plot=1"
+)
+
+_IPR_REQUIRED_HINTS = {
+    "pr": "Reservoir pressure Pr (psia) — defines the start of the IPR curve",
+    "pb": "Bubble-point pressure Pb (psia) — needed to split linear/Vogel regimes",
+    "qmax": "Maximum Vogel rate qmax (STB/day) — anchors the Vogel curve",
+    "j": "Productivity index J (STB/day/psi) — anchors the linear inflow line",
+    "q_test": "Measured test rate q_test (STB/day) — calibrates the IPR slope",
+    "pwf_test": "Test flowing pressure Pwf_test (psia) — pairs with q_test",
+    "pwf": "Requested flowing pressure Pwf (psia) — rate is evaluated at this pressure",
+    "model": "IPR model: auto (default), linear, vogel, or composite",
+    "plot": "Set plot=1 to also return the calculated IPR model plot as PNG",
+}
+
+
+def _ipr_missing_message(missing: List[str]) -> str:
+    """Engineering Data Requirement message for insufficient IPR data."""
+    lines = ["Engineering Data Requirement — insufficient data for IPR calculation.", ""]
+    lines.append("Missing parameters:")
+    for m in missing:
+        lines.append(f"  • {m}: {_IPR_REQUIRED_HINTS.get(m, '')}")
+    lines.append("")
+    lines.append("Units: pressures in psia (psi), rates in STB/day, J in STB/day/psi.")
+    lines.append("")
+    lines.append("Example:")
+    lines.append("  /calc ipr model=auto pr=3000 pb=2200 q_test=900 pwf_test=2400 pwf=1200")
+    lines.append("  /calc ipr model=vogel pr=3000 qmax=1500 pwf=1200")
+    return "\n".join(lines)
+
+
+def _ipr_result_lines(model: str, reason: str, pr: float,
+                      pwf: Optional[float], q: Optional[float],
+                      j: Optional[float], qmax: Optional[float],
+                      pb: Optional[float], qb: Optional[float],
+                      qo_max: Optional[float],
+                      test: Optional[Tuple[float, float]]) -> List[str]:
+    lines = [
+        "IPR Calculation Result",
+        "=" * 50,
+        f"Selected model: {MODEL_DISPLAY.get(model, model)}",
+        f"Reason: {reason}",
+        "",
+        f"Pr = {pr:g} psia",
+    ]
+    if pb is not None:
+        lines.append(f"Pb = {pb:g} psia")
+    if test is not None:
+        lines.append(f"Test point (measured): q_test = {test[0]:g} STB/day @ Pwf_test = {test[1]:g} psia")
+    if j is not None:
+        lines.append(f"Productivity index J = {j:g} STB/day/psi")
+    if qmax is not None:
+        lines.append(f"qmax = {qmax:g} STB/day")
+    if qb is not None:
+        lines.append(f"qb at Pb = {qb:g} STB/day")
+    if qo_max is not None:
+        lines.append(f"qo_max (AOF, model extrapolation) = {qo_max:g} STB/day")
+    lines.append("")
+    if pwf is not None and q is not None:
+        lines.append(f"Rate at Pwf = {pwf:g} psia:  q = {q:g} STB/day")
+    else:
+        lines.append("No Pwf requested — full curve parameters only.")
+    lines.append("")
+    lines.append("NOTE: Results are CALCULATED (empirical correlation or model-based),")
+    lines.append("not measured data. Use a backpressure/single-point test to validate.")
+    return lines
+
+
+@registry.register("ipr")
+def handle_calc_ipr(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
+    """Handle /calc ipr [model=...] key=value ... — deterministic IPR engine.
+
+    Reachable via /calc ipr (dispatched through handle_calc) or directly
+    as /ipr with the same key=value syntax.
+    """
+    text = message.get("text", "")
+    # Both "/calc ipr model=..." and "/ipr model=..." parse the same way:
+    # strip the command prefix (first token) and take everything after it.
+    first_space = text.find(" ")
+    args_str = text[first_space + 1:] if first_space >= 0 else ""
+    # parse_kv_args silently drops non-numeric values (model=, plot=), so
+    # parse IPR-specific string keys first, then numeric kv parsing.
+    kwargs: Dict[str, Any] = {}
+    if args_str and args_str.strip():
+        for _part in args_str.split():
+            if "=" not in _part:
+                continue
+            _key, _, _val = _part.partition("=")
+            _key, _val = _key.strip().lower(), _val.strip()
+            if _key in ("model", "plot"):
+                kwargs[_key] = _val
+                continue
+    _numeric = parse_kv_args(args_str)
+    _numeric.update(kwargs)
+    kwargs = _numeric
+    engine = IPREngine()
+
+    model_req = (kwargs.get("model") or "auto").lower()
+    if model_req not in ("auto", "linear", "vogel", "composite"):
+        return ("Error: model must be one of auto, linear, vogel, composite.\n\n" + _IPR_USAGE), None, None
+
+    pr = kwargs.get("pr")
+    pb = kwargs.get("pb")
+    pwf = kwargs.get("pwf")
+    qmax = kwargs.get("qmax")
+    j = kwargs.get("j")
+    q_test = kwargs.get("q_test")
+    pwf_test = kwargs.get("pwf_test")
+
+    # --- Collect known values & check missing data per requested model ---
+    required: List[str] = []
+    if pr is None:
+        required.append("pr")
+    if model_req in ("vogel",) and qmax is None and (q_test is None or pwf_test is None):
+        required += ["qmax", "q_test", "pwf_test"]
+    if model_req in ("linear",) and j is None and (q_test is None or pwf_test is None):
+        required += ["j", "q_test", "pwf_test"]
+    if model_req in ("composite",) and (q_test is None or pwf_test is None):
+        required += ["q_test", "pwf_test"]
+    if model_req == "auto" and (q_test is None or pwf_test is None):
+        required += ["q_test", "pwf_test"]
+    if model_req in ("composite", "auto") and pb is None and pr is not None:
+        required.append("pb")
+    if required:
+        return _ipr_missing_message(required), None, None
+
+    try:
+        pr = float(pr)
+        pb = float(pb) if pb is not None else None
+        pwf = float(pwf) if pwf is not None else None
+        qmax = float(qmax) if qmax is not None else None
+        j = float(j) if j is not None else None
+        q_test = float(q_test) if q_test is not None else None
+        pwf_test = float(pwf_test) if pwf_test is not None else None
+    except (TypeError, ValueError):
+        return "Error: all parameter values must be numeric.\n\n" + _IPR_USAGE, None, None
+
+    if q_test is not None and pwf_test is not None:
+        if pwf_test >= pr:
+            return (
+                "Error: test flowing pressure Pwf_test must be below reservoir "
+                "pressure Pr to calibrate the IPR."
+            ), None, None
+        if q_test <= 0 or pwf_test < 0:
+            return (
+                "Error: invalid test point — q_test must be > 0 STB/day and "
+                "Pwf_test >= 0 psia."
+            ), None, None
+
+    # --- Effective model selection (deterministic) ---
+    effective_model = model_req
+    if model_req == "auto":
+        effective_model, reason = engine.select_model(pr, pb, pwf)
+    elif model_req == "vogel":
+        if pb is not None and pr > pb and pwf is not None and pwf < pb:
+            return (
+                "Error: requested Pwf is below Pb, so linear/Vogel-only treatment is "
+                "outside the Vogel model assumptions. Use model=composite (or model=auto) "
+                "for the inflow path that crosses the bubble point."
+            ), None, None
+        reason = ("Vogel IPR requested explicitly (saturated-oil treatment). "
+                  "Applicable only for Pr <= Pb or calibration from a test point.")
+    elif model_req == "linear":
+        if pb is not None and pr > pb and pwf is not None and pwf < pb:
+            return (
+                "Error: requested Pwf is below Pb; a single-phase linear model is not "
+                "applicable. Use model=composite (or model=auto)."
+            ), None, None
+        reason = ("Linear PI requested explicitly. Valid only while inflow stays in the "
+                  "single-phase (undersaturated) regime, i.e. Pwf >= Pb.")
+    else:  # composite
+        if pb is None or pr <= pb:
+            return (
+                "Error: Composite IPR requires Pr > Pb with the inflow path crossing Pb. "
+                "For a saturated reservoir (Pr <= Pb) use model=vogel."
+            ), None, None
+        reason = (
+            "Composite IPR requested: the inflow path is treated linear above Pb "
+            "and with a Vogel-shaped curve below Pb, joined continuously at Pb."
+        )
+
+    # --- Anchor derivations ---
+    derived_qmax: Optional[float] = None
+    derived_j: Optional[float] = None
+    derived_j_star: Optional[float] = None
+    if effective_model == "vogel":
+        if qmax is None:
+            qmax = engine.vogel_qmax_from_test(pr, pwf_test, q_test)
+            derived_qmax = qmax
+    elif effective_model == "linear":
+        if j is None:
+            j = engine.linear_j(q_test, pr, pwf_test)
+            derived_j = j
+    else:  # composite
+        derived_j_star = engine.linear_j(q_test, pr, pwf_test)
+
+    # --- Point evaluation ---
+    q: Optional[float] = None
+    try:
+        if pwf is not None:
+            if effective_model == "vogel":
+                q = engine.vogel_q(pr, qmax, pwf)
+            elif effective_model == "linear":
+                q = engine.linear_q(pr, j, pwf)
+            else:
+                q = engine.composite_q(pr, pb, derived_j_star, pwf)
+
+        qb, qo_max = (None, None)
+        if effective_model == "composite":
+            qb, qo_max = engine.composite_segments(pr, pb, derived_j_star)
+    except ValueError as _err:
+        # Hard guardrails: PHYSICALLY_INVALID / INSUFFICIENT_DATA messages.
+        _msg = str(_err)
+        if "PHYSICALLY_INVALID" in _msg:
+            return ("Engineering Guardrail — inputs rejected as physically "
+                    "invalid.\n" + _msg), None, None
+        return ("Engineering Guardrail — inputs rejected.\n" + _msg), None, None
+    except Exception as _err:
+        return (f"IPR calculation error: {_err}. Please check your inputs."), None, None
+
+    test = (q_test, pwf_test) if q_test is not None else None
+    out = _ipr_result_lines(
+        effective_model, reason, pr, pwf, q, j, qmax, pb, qb, qo_max, test
+    )
+
+    # --- Optional calculated-IPR plot ---
+    png: Optional[bytes] = None
+    if bool(kwargs.get("plot")):
+        # PVT_PLOT_RULES "ipr_plot" defines x_axis = rate, y_axis = pressure,
+        # so pass (x=rates, y=pressures) to render the customary IPR orientation.
+        ps_curve = engine._curve_pressures(pr, 10, include_pb=(pb is not None), pb=pb)
+        qs_curve = engine.build_curve(
+            effective_model, pr, pwf=pwf, pb=pb,
+            j=j, j_star=derived_j_star, qmax=qmax,
+        )
+        well_name = f"Calculated IPR Model — {effective_model}"
+        if pb is not None:
+            well_name += f" (Pb = {pb:g})"
+        png = generate_pvt_plot(
+            "ipr_plot", qs_curve, ps_curve, pb,
+            well_name, labels=[f"Calculated — {effective_model}"],
+        )
+        if png is None:
+            out.append("")
+            out.append("NOTE: could not generate the calculated IPR plot.")
+        else:
+            out.append("")
+            out.append("Calculated IPR Model Plot attached (rate on X, pressure on Y).")
+            out.append("This is a model-generated curve, not measured data.")
+
+    return "\n".join(out), png, None
 
 
 @registry.register("estimate", aliases=["corr", "correlation"])
