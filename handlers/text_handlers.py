@@ -33,6 +33,7 @@ from services.pvt_engine import (
 from services.calculation_engine import parse_kv_args
 from services.visualization import format_plot_response, generate_pvt_plot
 from services.production_engine import IPREngine, MODEL_DISPLAY
+from services import vlp_engine
 from logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -133,6 +134,16 @@ def handle_calc(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Opti
 
     formula_key = parts[1]
     args_str = parts[2] if len(parts) > 2 else ""
+
+    if formula_key.lower() == "vlp":
+        # Deterministic Production VLP engine (Phase 2: VLP only); handled
+        # separately from EXACT_FORMULAS so that Beggs-Brill guardrails and
+        # curve/plot generation apply. Same parse_kv_args caution as IPR:
+        # string keys (plot=) are kept before numeric parsing.
+        text, png, caption = handle_calc_vlp(
+            {"text": "/vlp " + args_str}, tg
+        )
+        return text, png, caption
 
     if formula_key.lower() == "ipr":
         # Deterministic Production IPR engine (Phase 1); handled separately
@@ -419,6 +430,303 @@ def handle_calc_ipr(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
             out.append("Calculated IPR Model Plot attached (rate on X, pressure on Y).")
             out.append("This is a model-generated curve, not measured data.")
 
+        return "\n".join(out), png, None
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  /calc vlp  —  Deterministic VLP Engine (Phase 2: VLP only)
+# ═══════════════════════════════════════════════════════════════════════
+
+_VLP_USAGE = (
+    "Usage: /calc vlp [plot=1] key=value ...\n\n"
+    "Pressures in psia (psi); rates in STB/day; depths in ft; diameters in in;\n"
+    "temperatures in degF; viscosities in cP.\n\n"
+    "Required: thp tvd id q gor api gamma_g mu_l bo rs t_wh geothermal\n"
+    "Optional: wc (default 0), q_w (alternative to wc), gamma_w (1.07),\n"
+    "  bw (1.01), z (1.0), sigma (30 dyne/cm), segments (80)\n\n"
+    "Single-rate example:\n"
+    "  /calc vlp thp=100 tvd=8000 id=1.995 q=3000 gor=1000 rs=600 api=35\n"
+    "    gamma_g=0.65 mu_l=1 bo=1.4 t_wh=120 geothermal=1.5\n\n"
+    "Calculated VLP curve (Pwf vs rate from q_min to q_max):\n"
+    "  /calc vlp thp=100 tvd=8000 id=1.995 q_min=0 q_max=8000 gor=1000 rs=600\n"
+    "    api=35 gamma_g=0.65 mu_l=1 bo=1.4 t_wh=120 geothermal=1.5 plot=1"
+)
+
+_VLP_REQUIRED_HINTS = {
+    "thp": "Wellhead (tubing-head) pressure, psia",
+    "tvd": "True vertical depth, ft",
+    "id": "Tubing inside diameter, in",
+    "q": "Oil production rate, STB/day (use q_w or wc for water)",
+    "q_min": "Minimum rate for the VLP curve sweep, STB/day",
+    "q_max": "Maximum rate for the VLP curve sweep, STB/day",
+    "gor": "Produced GOR, scf/STB",
+    "rs": "Solution GOR at the average pressure, scf/STB",
+    "api": "Oil API gravity",
+    "gamma_g": "Gas specific gravity (air = 1)",
+    "mu_l": "Liquid (oil) viscosity, cP",
+    "bo": "Oil formation volume factor, rb/STB",
+    "t_wh": "Wellhead temperature, degF",
+    "geothermal": "Geothermal gradient, degF/100 ft",
+    "wc": "Water cut, fraction 0..1 (default 0)",
+    "q_w": "Water rate, STB/day (alternative to wc)",
+    "gamma_w": "Water specific gravity (default 1.07)",
+    "bw": "Water FVF, rb/STB (default 1.01)",
+    "z": "Gas compressibility factor (default 1.0)",
+    "sigma": "Surface tension, dyne/cm (default 30)",
+    "segments": "Number of traverse segments (default 80)",
+    "plot": "Set plot=1 to also return the calculated VLP plot as PNG",
+}
+
+
+def _vlp_missing_message(missing: List[str]) -> str:
+    """Engineering Data Requirement message for insufficient VLP data."""
+    lines = ["Engineering Data Requirement — insufficient data for VLP calculation.", ""]
+    lines.append("Missing parameters:")
+    for m in missing:
+        lines.append(f"  \u2022 {m}: {_VLP_REQUIRED_HINTS.get(m, '')}")
+    lines.append("")
+    lines.append("Units: pressures in psia (psi), rates in STB/day, depths in ft,\n"
+                 "  diameters in in, temperatures in degF, viscosity in cP.")
+    lines.append("")
+    lines.append("Example:")
+    lines.append("  /calc vlp thp=100 tvd=8000 id=1.995 q=3000 gor=1000 rs=600\n"
+                 "    api=35 gamma_g=0.65 mu_l=1 bo=1.4 t_wh=120 geothermal=1.5")
+    return "\n".join(lines)
+
+
+def _vlp_result_lines(thp: float, tvd: float, q_o: float, q_w: float,
+                      result) -> List[str]:
+    """Format a single-rate VLP engine result for Telegram."""
+    lines = [
+        "VLP Calculation Result",
+        "=" * 50,
+        f"Method: {vlp_engine.MODEL_DISPLAY['beggs_brill']}",
+        f"Segments: {result.segments}",
+        "",
+        f"Wellhead pressure THP = {thp:g} psia",
+        f"TVD = {tvd:g} ft",
+        f"Rate: qo = {q_o:g} STB/day, qw = {q_w:g} STB/day",
+        f"Total = {q_o + q_w:g} STB/day",
+        "",
+        f"Required BHP (Pwf) = {result.pwf:g} psia",
+    ]
+    comps = result.components or {}
+    lines.append("")
+    lines.append("Pressure-loss components (wellhead -> bottomhole):")
+    lines.append(f"  \u2022 Hydrostatic/elevation: {comps.get('elevation', 0.0):.1f} psi")
+    lines.append(f"  \u2022 Friction: {comps.get('friction', 0.0):.1f} psi")
+    lines.append(f"  \u2022 Acceleration: {comps.get('acceleration', 0.0):.1f} psi")
+    if result.flow_pattern_counts:
+        lines.append("")
+        lines.append("Flow-pattern distribution along the tubing (Beggs-Brill):")
+        for pat, cnt in sorted(result.flow_pattern_counts.items()):
+            lines.append(f"  \u2022 {pat}: {cnt} segments")
+    if result.warnings:
+        lines.append("")
+        lines.append("Warnings:")
+        for w in result.warnings:
+            lines.append(f"  \u2022 {w}")
+    if result.limitations:
+        lines.append("")
+        lines.append("Correlation limitations:")
+        for lim in result.limitations:
+            lines.append(f"  \u2022 {lim}")
+    lines.append("")
+    lines.append("NOTE: Results are CALCULATED (Beggs-Brill 1973 correlation with a\n"
+                 "segmented midpoint traverse), not measured data.")
+    return lines
+
+
+@registry.register("vlp")
+def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
+    """Handle /calc vlp [plot=1] key=value ... — deterministic VLP engine.
+
+    Reachable via /calc vlp (dispatched through handle_calc) or directly
+    as /vlp with the same key=value syntax.
+    """
+    text = message.get("text", "")
+    first_space = text.find(" ")
+    args_str = text[first_space + 1:] if first_space >= 0 else ""
+    # parse_kv_args silently drops non-numeric values (plot=), so keep
+    # string keys first, then numeric kv parsing (same as IPR handler).
+    kwargs: Dict[str, Any] = {}
+    if args_str and args_str.strip():
+        for _part in args_str.split():
+            if "=" not in _part:
+                continue
+            _key, _, _val = _part.partition("=")
+            _key, _val = _key.strip().lower(), _val.strip()
+            if _key in ("plot",):
+                kwargs[_key] = _val
+                continue
+    _numeric = parse_kv_args(args_str)
+    _numeric.update(kwargs)
+    kwargs = _numeric
+
+    # --- Hard validation (guardrails) ---
+    err = vlp_engine.validate_inputs(kwargs)
+    if err is not None:
+        return ("Engineering Guardrail — inputs rejected as physically "
+                "invalid.\n" + err.message), None, None
+
+    # --- Curve-sweep mode vs single-rate mode ---
+    q_min = kwargs.get("q_min")
+    q_max = kwargs.get("q_max")
+    wc = kwargs.get("wc") if kwargs.get("wc") is not None else 0.0
+    q_w = kwargs.get("q_w")
+
+    # --- Engineering Data Requirement ---
+    curve_mode = q_min is not None or q_max is not None
+    if curve_mode:
+        # Curve mode replaces the single-rate "q" requirement with a sweep.
+        required = [k for k in vlp_engine.missing_inputs(kwargs, "beggs_brill")
+                    if k != "q"]
+        if q_min is None:
+            required.append("q_min")
+        if q_max is None:
+            required.append("q_max")
+        if q_min is not None and q_max is not None and q_min > q_max:
+            return ("Error: q_min must be <= q_max for the VLP curve sweep."), None, None
+    else:
+        required = vlp_engine.missing_inputs(kwargs, "beggs_brill")
+        if kwargs.get("q") is None:
+            required.append("q")
+    # Deduplicate while preserving order.
+    required = list(dict.fromkeys(required))
+    if required:
+        return _vlp_missing_message(required), None, None
+
+    # --- Float conversion ---
+    try:
+        floats = {}
+        for _k in ("thp", "tvd", "id", "q", "gor", "api", "gamma_g", "mu_l",
+                   "bo", "rs", "t_wh", "geothermal", "wc", "q_w", "gamma_w",
+                   "bw", "z", "sigma", "segments", "q_min", "q_max"):
+            _v = kwargs.get(_k)
+            if _v is not None:
+                floats[_k] = float(_v)
+    except (TypeError, ValueError):
+        return ("Error: all parameter values must be numeric.\n\n" + _VLP_USAGE), None, None
+
+    if curve_mode:
+        # --- Calculated VLP curve + plot ---
+        wc = floats.get("wc", 0.0)
+        # Sweep total rate in 20 points; the zero-rate point is resolved
+        # with the static hydrostatic engine (multiphase friction is
+        # undefined at zero flow).
+        q_min_v, q_max_v = floats["q_min"], floats["q_max"]
+        n_pts = 20
+        if q_min_v == q_max_v:
+            qs, ps = [q_min_v], []
+            if q_min_v <= 0.0:
+                ps.append(vlp_engine.static_gradient(
+                    floats["thp"], floats["tvd"], floats["t_wh"],
+                    floats.get("geothermal", 1.5), floats["gamma_g"],
+                    floats.get("gamma_w", 1.07), floats.get("z", 1.0)).pwf)
+            else:
+                q_o_s, q_w_s = q_min_v * (1.0 - wc), q_min_v * wc
+                ps.append(vlp_engine.traverse(
+                    floats["thp"], floats["tvd"], q_o_s, q_w_s,
+                    floats["gor"], floats["bo"], floats.get("bw", 1.01),
+                    floats.get("z", 1.0), floats["gamma_g"],
+                    floats.get("gamma_w", 1.07), floats["mu_l"],
+                    floats["api"], wc, floats["id"], floats["rs"],
+                    floats["t_wh"], floats.get("geothermal", 1.5),
+                    n_segments=int(floats.get("segments", 80))).pwf)
+        else:
+            qs, ps = [], []
+            for i in range(n_pts):
+                q_total = q_min_v + (q_max_v - q_min_v) * i / (n_pts - 1)
+                if q_total <= 0.0:
+                    qs.append(q_total)
+                    ps.append(vlp_engine.static_gradient(
+                        floats["thp"], floats["tvd"], floats["t_wh"],
+                        floats.get("geothermal", 1.5), floats["gamma_g"],
+                        floats.get("gamma_w", 1.07),
+                        floats.get("z", 1.0)).pwf)
+                else:
+                    q_o_s, q_w_s = q_total * (1.0 - wc), q_total * wc
+                    qs.append(q_total)
+                    ps.append(vlp_engine.traverse(
+                        floats["thp"], floats["tvd"], q_o_s, q_w_s,
+                        floats["gor"], floats["bo"], floats.get("bw", 1.01),
+                        floats.get("z", 1.0), floats["gamma_g"],
+                        floats.get("gamma_w", 1.07), floats["mu_l"],
+                        floats["api"], wc, floats["id"], floats["rs"],
+                        floats["t_wh"], floats.get("geothermal", 1.5),
+                        n_segments=int(floats.get("segments", 80))).pwf)
+        if not qs:
+            return "VLP curve error: empty rate sweep.", None, None
+        out = [
+            "Calculated VLP Curve",
+            "=" * 50,
+            f"Method: {vlp_engine.MODEL_DISPLAY['beggs_brill']}",
+            f"THP = {floats['thp']:g} psia  |  TVD = {floats['tvd']:g} ft  |  "
+            f"ID = {floats['id']:g} in",
+            f"GOR = {floats['gor']:g} scf/STB (Rs = {floats['rs']:g})  |  "
+            f"wc = {wc:.2f}",
+            f"Sweep: q = {floats['q_min']:g} .. {floats['q_max']:g} STB/day "
+            f"(20 points, segmented traverse)",
+            "",
+            "Rate (STB/day) -> Required Pwf (psia):",
+        ]
+        for _q, _p in zip(qs, ps):
+            out.append(f"  q = {_q:g}  ->  Pwf = {_p:.1f}")
+        png = None
+        if bool(kwargs.get("plot")):
+            png = generate_pvt_plot(
+                "vlp_plot", qs, ps, None,
+                f"Calculated VLP — THP {floats['thp']:g} psia",
+                labels=["Calculated — Beggs-Brill (1973)"],
+            )
+            if png is None:
+                out.append("")
+                out.append("NOTE: could not generate the calculated VLP plot.")
+            else:
+                out.append("")
+                out.append("Calculated VLP Plot attached (rate on X, required BHP on Y).")
+                out.append("This is a model-generated curve, not measured data.")
+        return "\n".join(out), png, None
+
+    # --- Single-rate mode ---
+    wc = floats.get("wc", 0.0)
+    q_o = floats["q"] * (1.0 - wc) if q_w is None else floats["q"]
+    q_w = q_w if q_w is not None else floats["q"] * wc
+    try:
+        result = vlp_engine.traverse(
+            floats["thp"], floats["tvd"], q_o, q_w, floats["gor"],
+            floats["bo"], floats.get("bw", 1.01), floats.get("z", 1.0),
+            floats["gamma_g"], floats.get("gamma_w", 1.07), floats["mu_l"],
+            floats["api"], wc, floats["id"], floats["rs"], floats["t_wh"],
+            floats.get("geothermal", 1.5),
+            sigma=floats.get("sigma", 30.0),
+            n_segments=int(floats.get("segments", 80)),
+        )
+    except ValueError as _e:
+        _msg = str(_e)
+        if "PHYSICALLY_INVALID" in _msg:
+            return ("Engineering Guardrail — inputs rejected as physically "
+                    "invalid.\n" + _msg), None, None
+        return ("Engineering Guardrail — inputs rejected.\n" + _msg), None, None
+    except Exception as _e:
+        return f"VLP calculation error: {_e}. Please check your inputs.", None, None
+
+    out = _vlp_result_lines(floats["thp"], floats["tvd"], q_o, q_w, result)
+
+    png = None
+    if bool(kwargs.get("plot")):
+        png = generate_pvt_plot(
+            "vlp_plot", [q_o + q_w], [result.pwf], None,
+            f"Calculated VLP — single rate {q_o + q_w:g} STB/day",
+            labels=["Calculated — Beggs-Brill (1973)"],
+        )
+        if png is None:
+            out.append("")
+            out.append("NOTE: could not generate the calculated VLP plot.")
+        else:
+            out.append("")
+            out.append("Calculated VLP Plot attached (rate on X, required BHP on Y).")
+            out.append("This is a model-generated curve, not measured data.")
     return "\n".join(out), png, None
 
 
