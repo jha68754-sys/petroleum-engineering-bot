@@ -67,7 +67,10 @@ class TestVLPEngineBenchmarks(unittest.TestCase):
         res = _run(3000.0, 0.0, well=WELL_LIQUID)
         self.assertEqual(res.status, "CONVERGED")
         self.assertAlmostEqual(res.pwf, 2412.7, places=0)
-        # Hydrostatic dominates; friction tiny at this velocity.
+        # Hydrostatic dominates; friction is real but tiny at this low
+        # velocity — independently checked with Darcy-Weisbach:
+        # Re ~ 4100, f ~ 0.04, gradient ~ 0.000004 psi/ft -> ~0.03 psi
+        # over 8000 ft (see VLP_ENGINEERING_MODEL.md benchmarks).
         self.assertGreater(res.components["elevation"], 2000.0)
 
     def test_b2_two_phase_base_case(self):
@@ -106,9 +109,27 @@ class TestVLPPhysics(unittest.TestCase):
             self.assertGreaterEqual(res.pwf, WELL["thp"])
 
     def test_friction_zero_at_zero_rate(self):
+        # q = 0 -> static column; friction exactly zero by construction
+        # (the zero-rate/static fallback in vlp_engine/static_gradient).
         res = _run(0.0, 0.0, well=WELL_LIQUID)
         self.assertAlmostEqual(res.components["friction"], 0.0, places=6)
         self.assertEqual(res.flow_pattern_counts, {})
+
+    def test_liquid_only_flow_friction_positive(self):
+        # REGRESSION (2026-08-13): flowing liquid-only flow (GOR = Rs,
+        # no free gas) MUST report friction > 0 and the engine must never
+        # silently suppress it — friction loss is real (~0.03 psi over
+        # 8000 ft at 3000 STB/day in 1.995-in tubing) even though it is
+        # negligible relative to the ~2313 psi hydrostatic column.
+        # The two-phase /static path only applies when the rate itself
+        # is zero; a flowing liquid-full segment still carries liquid
+        # friction via the Beggs-Brill two-phase factor (HL = 1, f_tp = fn).
+        res = _run(3000.0, 0.0, well=WELL_LIQUID)
+        self.assertGreater(res.components["friction"], 0.0)
+        # Consistent with the independent Darcy-Weisbach/Moody check
+        # (rho_L 41.63 lbm/ft3, v 0.399 ft/s, Re 4107, f 0.0403,
+        #  dp 0.000004 psi/ft) within 0.01 psi.
+        self.assertAlmostEqual(res.components["friction"], 0.03, delta=0.01)
 
     def test_more_rate_never_requires_less_bhp_liquid_full(self):
         # Liquid-full case (GOR = Rs, no free gas) must be monotonic

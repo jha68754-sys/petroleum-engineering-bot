@@ -36,6 +36,20 @@ from services.production_engine import IPREngine, MODEL_DISPLAY
 from services import vlp_engine
 from logging_config import get_logger
 
+
+def _fmt_loss(value: float) -> str:
+    """Format a pressure-loss component so tiny (but real) losses are never
+    displayed as 0.0: use more decimals when the value is < 1 psi so the
+    user can distinguish 'physically negligible' from 'not computed'."""
+    v = abs(value) if value is not None else 0.0
+    if v >= 1.0:
+        return f"{value:.1f}"
+    if v >= 0.01:
+        return f"{value:.2f}"
+    if v > 0.0:
+        return f"{value:.4f}"
+    return "0.0"
+
 logger = get_logger(__name__)
 
 
@@ -514,8 +528,8 @@ def _vlp_result_lines(thp: float, tvd: float, q_o: float, q_w: float,
     lines.append("")
     lines.append("Pressure-loss components (wellhead -> bottomhole):")
     lines.append(f"  \u2022 Hydrostatic/elevation: {comps.get('elevation', 0.0):.1f} psi")
-    lines.append(f"  \u2022 Friction: {comps.get('friction', 0.0):.1f} psi")
-    lines.append(f"  \u2022 Acceleration: {comps.get('acceleration', 0.0):.1f} psi")
+    lines.append(f"  \u2022 Friction: {_fmt_loss(comps.get('friction', 0.0))} psi")
+    lines.append(f"  \u2022 Acceleration: {_fmt_loss(comps.get('acceleration', 0.0))} psi")
     if result.flow_pattern_counts:
         lines.append("")
         lines.append("Flow-pattern distribution along the tubing (Beggs-Brill):")

@@ -23,7 +23,10 @@ that lifts the fluid to the given THP, together with:
 
 A rate sweep returns the full VLP curve (Pwf vs total rate). The zero-rate
 point is computed with `static_gradient` (static gas/liquid column, zero
-friction) because multiphase friction correlations are undefined at zero flow.
+friction) because multiphase friction correlations are undefined at zero flow. A
+flowing liquid-full segment (GOR = Rs) still carries liquid friction via the
+Beggs-Brill two-phase factor (HL = 1, f_tp = f_n) — it is tiny at low
+velocity, never zero, and never suppressed.
 
 ## 2. Correlation: Beggs-Brill (1973)
 
@@ -89,7 +92,7 @@ stations (usually negligible).
 
 | Case | Well | Result | Verification |
 |---|---|---|---|
-| Liquid-full (GOR=Rs, no free gas) | THP 100, TVD 8000 ft, 2-in ID, 3000 STB/d, API 35 | Pwf = 2412.7 psia | Analytic hydrostatic + friction with same Brown-form ρ_L = 41.6 lbm/ft³, gradient 0.289 psi/ft → 2412.78 (agreement 0.03 psi) |
+| Liquid-full (GOR=Rs, no free gas) | THP 100, TVD 8000 ft, 2-in ID, 3000 STB/d, API 35 | Pwf = 2412.7 psia | Analytic hydrostatic + friction with same Brown-form ρ_L = 41.6 lbm/ft³, gradient 0.289 psi/ft → 2412.78 (agreement 0.03 psi). Note: friction loss is real but tiny in this case — independent Darcy-Weisbach/Moody check with the same inputs gives Re ≈ 4100, f ≈ 0.04, gradient ≈ 0.000004 psi/ft, total ≈ 0.03 psi (handler displays it with adaptive decimals so it is never misread as "0.0"). |
 | Two-phase base | + GOR 1000, Rs 600 | Pwf ≈ 356 psia | Independent marching model, same property set → 356.7 (±2 psi) |
 | Deep stress | THP 1000, TVD 15000 ft, 3.5-in ID, 8000 STB/d | Pwf ≈ 1948 psia | Engine-verified; marching cross-check within ±15 psi (z treatment spread) |
 | Static column, q = 0 | THP 100, TVD 8000 ft | Pwf ≈ 117 psia | Analytic exponential gas column |
