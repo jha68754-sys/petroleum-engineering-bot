@@ -519,7 +519,13 @@ def resolve_relationship_key(alias: str) -> Optional[str]:
         The canonical key (e.g., "bo_vs_p"), or None if not found.
     """
     normalized = alias.strip().lower()
-    return PLOT_ALIASES.get(normalized)
+    key = PLOT_ALIASES.get(normalized)
+    if key is not None:
+        return key
+    # Bare canonical rule keys (e.g. "sensitivity_pwf_plot") are valid too.
+    if normalized in PVT_PLOT_RULES:
+        return normalized
+    return None
 
 
 def run_exact_calculation(formula_key: str, kwargs: Dict[str, float]) -> str:

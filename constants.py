@@ -562,6 +562,33 @@ PVT_PLOT_RULES: Dict[str, PVTPlotRule] = {
         "plot_color": "#2E86C1",
         "y_label": "Pressure (psia)",
     },
+    "sensitivity_plot": {
+        "title_en": "Sensitivity — Operating Rate vs Parameter",
+        "title_ar": "تحليل الحساسية — معدل الإنتاج مقابل المتغير",
+        "definition": "Operating-point rate sensitivity to one system parameter",
+        "x_axis": "Sensitivity Parameter",
+        "y_axis": "Operating Rate (STB/day)",
+        "plot_color": "#16A085",
+        "y_label": "Operating Rate (STB/day)",
+    },
+    "sensitivity_pwf_plot": {
+        "title_en": "Sensitivity — Operating Pwf vs Parameter",
+        "title_ar": "تحليل الحساسية — ضغط التدفق مقابل المتغير",
+        "definition": "Operating-point BHP sensitivity to one system parameter",
+        "x_axis": "Sensitivity Parameter",
+        "y_axis": "Operating Pwf (psia)",
+        "plot_color": "#8E44AD",
+        "y_label": "Operating Pwf (psia)",
+    },
+    "optimization_plot": {
+        "title_en": "Candidate Optimization Comparison",
+        "title_ar": "مقارنة المرشحين للتحسين",
+        "definition": "Operating rate of each supplied candidate",
+        "x_axis": "Candidate Value",
+        "y_axis": "Operating Rate (STB/day)",
+        "plot_color": "#E67E22",
+        "y_label": "Operating Rate (STB/day)",
+    },
 }
 
 
@@ -728,6 +755,8 @@ PLOT_ALIASES: Dict[str, str] = {
     "pressure": "p_vs_t", "production": "q_vs_t",
     "kr": "kr_vs_sw", "kro": "kr_vs_sw", "krw": "kr_vs_sw",
     "ipr": "ipr_plot", "vlp": "vlp_plot", "nodal": "nodal_plot",
+    "sensitivity": "sensitivity_plot",
+    "optimize": "optimization_plot", "optimization": "optimization_plot",
 }
 
 

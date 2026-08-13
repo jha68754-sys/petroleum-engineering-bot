@@ -35,6 +35,11 @@ from services.visualization import format_plot_response, generate_pvt_plot
 from services.production_engine import IPREngine, MODEL_DISPLAY
 from services import vlp_engine
 from services import nodal_engine
+from services import production_optimizer
+from services.production_optimizer import (
+    FEASIBLE, NO_OPERATING_POINT, MULTIPLE_OPERATING_POINTS,
+    PHYSICALLY_INVALID,
+)
 from logging_config import get_logger
 
 
@@ -176,6 +181,20 @@ def handle_calc(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Opti
         # would otherwise drop.
         text, png, caption = handle_calc_ipr(
             {"text": "/ipr " + args_str}, tg
+        )
+        return text, png, caption
+    if formula_key.lower() in ("sensitivity", "sens"):
+        # Phase 4: deterministic sensitivity layer over the verified Nodal
+        # engine; string keys (type=, plot=) are kept first like IPR/VLP.
+        text, png, caption = handle_calc_sensitivity(
+            {"text": "/sensitivity " + args_str}, tg
+        )
+        return text, png, caption
+    if formula_key.lower() in ("optimize", "optim"):
+        # Phase 4: deterministic constrained candidate optimization over
+        # the verified Nodal engine; string keys kept first like IPR/VLP.
+        text, png, caption = handle_calc_optimize(
+            {"text": "/optimize " + args_str}, tg
         )
         return text, png, caption
 
@@ -610,14 +629,32 @@ _NODAL_HINTS = {
 }
 
 
+_NODAL_IPR_INPUT_SETS = (
+    "Provide one valid IPR input set (pick ONE of the following):\n"
+    "  \u2022 Linear        \u2192 pr= + j=\n"
+    "  \u2022 Vogel         \u2192 pr= + qmax=  (or a valid test point "
+    "q_test= + pwf_test=)\n"
+    "  \u2022 Composite     \u2192 pr= + pb= + q_test= + pwf_test=\n"
+    "  \u2022 Auto           \u2192 pr= + any of the sets above "
+    "(model=auto is the default)"
+)
+
+
 def _nodal_missing_message(missing: List[str]) -> str:
     lines = ["Cannot run Nodal Analysis yet: missing data."]
     lines.append("")
-    lines.append("Required (not provided):")
-    for k in missing:
-        hint = _NODAL_HINTS.get(k, "")
-        lines.append(f"  \u2022 {k}" + (f" ({hint})" if hint else ""))
+    lines.append(_NODAL_IPR_INPUT_SETS)
     lines.append("")
+    # VLP inputs are required in every mode, so list those explicitly.
+    vlp_missing = [k for k in missing
+                   if k in ("thp", "tvd", "id", "gor", "api", "gamma_g",
+                            "mu_l", "bo", "rs", "t_wh", "geothermal")]
+    if vlp_missing:
+        lines.append("Required VLP inputs (not provided):")
+        for k in vlp_missing:
+            hint = _NODAL_HINTS.get(k, "")
+            lines.append(f"  \u2022 {k}" + (f" ({hint})" if hint else ""))
+        lines.append("")
     lines.append(_NODAL_USAGE)
     return "\n".join(lines)
 
@@ -1396,3 +1433,638 @@ def handle_analyze(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], O
 def handle_surface_separator(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
     """Handle /surface_separator command."""
     return SURFACE_SEPARATOR_ANSWER, None, None
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  /calc sensitivity & /calc optimize  —  Phase 4 Sensitivity &
+#  Constrained Candidate Optimization (deterministic layer over the
+#  verified IPR + VLP + Nodal engines; zero equation duplication).
+#
+#  Syntax (both commands):
+#    /calc sensitivity type=<var> [var=value1,value2,...]
+#        [var_min=X var_max=Y n_points=N] [base_var=X]
+#        <IPR inputs...> <VLP inputs...> [plot=1]
+#    /calc optimize type=<var> var=value1,value2 objective=<obj>
+#        [min_pwf=X max_drawdown=X max_liquid_rate=X max_water_cut=X
+#         min_thp=X max_thp=X max_gor=X]
+#        <IPR inputs...> <VLP inputs...> [plot=1]
+#
+#  <var>: thp | id (tubing_id) | wc (water_cut) | gor
+#  <obj>: max_oil_rate
+# ═══════════════════════════════════════════════════════════════════════
+
+_SENSITIVITY_USAGE = (
+    "Usage: /calc sensitivity type=<var> var=<values> "
+    "[var_min=X var_max=Y n_points=N] [base_var=X] [plot=1] "
+    "<IPR inputs> <VLP inputs>\n\n"
+    "Supported variables:\n"
+    "  type=thp        THP sensitivity  (thp=100,200,300  or  "
+    "thp_min=100 thp_max=400 n_points=4)\n"
+    "  type=id         Tubing-ID sensitivity  (id=1.995,2.5,3.0)\n"
+    "  type=wc         Water-cut sensitivity  (wc=0,0.25,0.5,0.75,1  — "
+    "0<=wc<=1)\n"
+    "  type=gor        Produced-GOR sensitivity  (gor=400,800,1600)\n\n"
+    "Base case: the first supplied candidate value (or var_min for a "
+    "range). Every scenario reports Delta-q, Delta-q% and Delta-Pwf "
+    "versus the base case.\n\n"
+    "Required in addition: one valid IPR input set (see /calc nodal) and "
+    "all VLP inputs (thp tvd id gor api gamma_g mu_l bo rs t_wh "
+    "geothermal).\n\n"
+    "Examples:\n"
+    "  /calc sensitivity type=thp thp=100,200,300 model=linear pr=3000 "
+    "j=1.5 tvd=8000 id=1.995 gor=1000 rs=600 api=35 gamma_g=0.65 "
+    "mu_l=1 bo=1.4 t_wh=120 geothermal=1.5 plot=1\n"
+    "  /calc sensitivity type=wc wc=0,0.5,1 thp_min=100 thp_max=400 "
+    "n_points=3 model=linear pr=3000 j=1.5 tvd=8000 id=1.995 gor=1000 "
+    "rs=600 api=35 gamma_g=0.65 mu_l=1 bo=1.4 t_wh=120 geothermal=1.5"
+)
+
+_OPTIMIZE_USAGE = (
+    "Usage: /calc optimize type=<var> var=<values> objective=<obj> "
+    "[constraints...] [plot=1] <IPR inputs> <VLP inputs>\n\n"
+    "Supported variables: type=thp | id (tubing) | wc (water cut) | gor\n"
+    "Objective: objective=max_oil_rate (only deterministic objective "
+    "implemented in this phase)\n\n"
+    "Supported constraints (explicit limits only):\n"
+    "  min_pwf=<psi>  max_drawdown=<psi>  max_liquid_rate=<STB/d>  "
+    "max_water_cut=<frac>\n"
+    "  min_thp=<psi>  max_thp=<psi>  max_gor=<scf/STB>\n\n"
+    "At least two candidates required. Every candidate is classified as "
+    "FEASIBLE / INFEASIBLE / NO_OPERATING_POINT / MULTIPLE_OPERATING_POINTS "
+    "/ NUMERICAL_NON_CONVERGENCE / PHYSICALLY_INVALID.\n\n"
+    "Example:\n"
+    "  /calc optimize type=id id=1.995,2.5,3.0 objective=max_oil_rate "
+    "min_pwf=500 model=linear pr=3000 j=1.5 tvd=8000 gor=1000 rs=600 "
+    "api=35 gamma_g=0.65 mu_l=1 bo=1.4 t_wh=120 geothermal=1.5 plot=1"
+)
+
+# Telegram names -> optimizer variable names and display labels
+SENSVARIABLE_LABELS = {
+    "thp": "THP", "tubing_id": "Tubing ID",
+    "water_cut": "Water cut", "gor": "GOR",
+}
+SENSVAR_KEYS = {"thp": "thp", "id": "tubing_id",
+                "wc": "water_cut", "gor": "gor"}
+
+
+def _parse_number_list(token_value: str) -> Tuple[List[float], Optional[str]]:
+    """Parse '1.995,2.5,3.0' style values; return (list, error_text)."""
+    try:
+        values = [float(_v) for _v in token_value.split(",")
+                  if _v.strip()]
+        return values, None
+    except ValueError:
+        return [], "Error: values must be numbers separated by commas " \
+                   "(e.g. 1.995,2.5,3.0)."
+
+
+def _common_string_keys(args_str: str, extra: Tuple[str, ...]
+                        ) -> Dict[str, Any]:
+    """Parse string keys that parse_kv_args silently drops (same caution
+    as the IPR/VLP/nodal handlers).
+
+    Comma-separated numeric lists are kept here verbatim for the
+    sensitivity/optimization keys (e.g. thp=100,200,300) because the
+    generic numeric parser cannot consume lists."""
+    _LIST_KEYS = ("thp", "id", "wc", "gor",
+                  "thp_min", "id_min", "wc_min", "gor_min",
+                  "thp_max", "id_max", "wc_max", "gor_max")
+    kwargs: Dict[str, Any] = {}
+    for _part in (args_str.split() if args_str else []):
+        if "=" not in _part:
+            continue
+        _key, _, _val = _part.partition("=")
+        _key, _val = _key.strip().lower(), _val.strip()
+        if _key in ("model", "plot", "type", "objective", "base_thp",
+                    "base_id", "base_wc", "base_gor",
+                    "n_points") + extra + _LIST_KEYS:
+            # Duplicate-key conflict: when the same key appears twice
+            # (e.g. type=id and a later id=1.995 VLP token, or the sweep
+            # key given as both a comma list and a base value), prefer
+            # the comma-separated list if any occurrence carries one;
+            # otherwise the LAST occurrence wins (usual kv semantics).
+            if _key in kwargs and "," in _val:
+                # a comma list must always beat a plain single value
+                kwargs[_key] = _val
+            elif _key in kwargs and "," in kwargs[_key]:
+                pass  # existing comma list survives a plain single value
+            else:
+                kwargs[_key] = _val
+    return kwargs
+
+
+def _ipr_kwargs_for_optimizer(kwargs: Dict[str, Any],
+                              model_req: str,
+                              ) -> Dict[str, Optional[float]]:
+    """Build the IPR kwargs block (same keys NodalEngine.solve expects),
+    reusing the nodal handler's required-input policy. Returns
+    (ipr_kwargs, error_text)."""
+    pr = kwargs.get("pr"); pb = kwargs.get("pb")
+    j = kwargs.get("j"); qmax = kwargs.get("qmax")
+    q_test = kwargs.get("q_test"); pwf_test = kwargs.get("pwf_test")
+    j_star = kwargs.get("j_star")
+    required: List[str] = []
+    if pr is None:
+        required.append("pr")
+    if model_req == "auto":
+        if q_test is None or pwf_test is None:
+            if j is None and qmax is None:
+                required += ["j", "qmax", "q_test", "pwf_test"]
+            elif pb is None and qmax is None:
+                required.append("qmax")
+    elif model_req == "linear":
+        if j is None:
+            required += ["j", "q_test", "pwf_test"] if \
+                (q_test is None or pwf_test is None) else []
+    elif model_req == "vogel":
+        if qmax is None:
+            required += ["qmax", "q_test", "pwf_test"] if \
+                (q_test is None or pwf_test is None) else []
+    else:  # composite
+        for _k in ("pb", "q_test", "pwf_test"):
+            if kwargs.get(_k) is None:
+                required.append(_k)
+    if required:
+        return {}, _nodal_missing_message(required)
+    return {"ipr_model": model_req, "pr": pr, "pb": pb, "j": j,
+            "j_star": j_star, "qmax": qmax, "q_test": q_test,
+            "pwf_test": pwf_test}, None
+
+
+def _vlp_kwargs_for_optimizer(kwargs: Dict[str, Any]
+                              ) -> Tuple[Dict[str, float], Optional[str]]:
+    """Build the VLP kwargs block for the optimizer (canonical names)."""
+    vlp_required = ["thp", "tvd", "id", "gor", "api", "gamma_g", "mu_l",
+                    "bo", "rs", "t_wh", "geothermal"]
+    missing = [k for k in vlp_required if kwargs.get(k) is None]
+    if missing:
+        return {}, _nodal_missing_message(missing)
+    return {"thp": kwargs["thp"], "tvd": kwargs["tvd"],
+            "tubing_id_in": kwargs["id"], "gor": kwargs["gor"],
+            "rs": kwargs["rs"], "api": kwargs["api"],
+            "gamma_g": kwargs["gamma_g"], "mu_l": kwargs["mu_l"],
+            "bo": kwargs["bo"], "t_wh": kwargs["t_wh"],
+            "geothermal": kwargs.get("geothermal", 1.5)}, None
+
+
+def _fmt_wc_display(value: float) -> str:
+    """Water cut as both fraction and percentage."""
+    return f"{value:g} ({value*100:.1f}%)"
+
+
+def _variable_label(variable: str, value: float) -> str:
+    lbl = SENSVARIABLE_LABELS.get(variable, variable)
+    if variable == "wc":
+        return f"{_fmt_wc_display(value)}"
+    if variable == "gor":
+        return f"{value:g} scf/STB"
+    if variable == "id":
+        return f"{value:g} in"
+    return f"{value:g} psia"
+
+
+def _point_line(label: str, point: "SensitivityPoint") -> str:
+    if point.classification == FEASIBLE:
+        return f"  {label}: q = {point.q_op:.2f} STB/day, " \
+               f"Pwf = {point.pwf_op:.2f} psia " \
+               f"(residual {point.residual:.4f} psi)"
+    if point.classification == MULTIPLE_OPERATING_POINTS:
+        return f"  {label}: MULTIPLE_OPERATING_POINTS " \
+               f"({point.n_roots} intersections) — " \
+               f"requires engineering review"
+    if point.classification == NO_OPERATING_POINT:
+        return (f"  {label}: NO_OPERATING_POINT "
+                + (f"({point.nodal.reason})" if point.nodal and
+                   point.nodal.reason else ""))
+    if point.classification == PHYSICALLY_INVALID:
+        return f"  {label}: PHYSICALLY_INVALID"
+    return f"  {label}: {point.classification}"
+
+
+def _delta_line(delta: "SensitivityDelta", base_q: Optional[float]
+                ) -> str:
+    dq = delta.dq
+    pct = delta.dq_pct
+    dpwf = delta.dpwf
+    dq_txt = f"{dq:+.1f} STB/day ({pct:+.1f}%)" if \
+        (dq is not None and base_q) else "n/c"
+    dpwf_txt = f"{dpwf:+.2f} psi" if dpwf is not None else "n/c"
+    return f"    Δq = {dq_txt}   ΔPwf = {dpwf_txt}"
+
+
+@registry.register("sensitivity")
+def handle_calc_sensitivity(message: Dict[str, Any], tg
+                            ) -> Tuple[str, Optional[bytes], Optional[str]]:
+    """Handle /calc sensitivity type=<var> ... — deterministic
+    one-variable sensitivity over the verified Nodal engine."""
+    text = message.get("text", "")
+    first_space = text.find(" ")
+    args_str = text[first_space + 1:] if first_space >= 0 else ""
+
+    kwargs = _common_string_keys(args_str, ())
+    _numeric = parse_kv_args(args_str)
+    _numeric.update(kwargs)
+    kwargs = _numeric
+
+    # --- Variable selection ---
+    var_key = (kwargs.get("type") or "").lower()
+    if var_key not in SENSVAR_KEYS:
+        return "Error: type must be one of thp, id, wc, gor.\n\n" \
+               + _SENSITIVITY_USAGE, None, None
+    variable = SENSVAR_KEYS[var_key]
+    skey = var_key  # Telegram key (thp/id/wc/gor)
+
+    # --- Duplicate-key conflict: already resolved at parse time by
+    # _common_string_keys (a comma list always beats a plain single
+    # value for the same key). The numeric parser may still have added
+    # a plain numeric occurrence of the sweep key; if so, demote it and
+    # restore the comma list when present.
+    if isinstance(kwargs.get(skey), (int, float)) and "_list" in dir():
+        pass
+    _str_list = [(_k, _v) for _k, _v in kwargs.items()
+                 if _k == skey and isinstance(_v, str) and "," in _v]
+    if _str_list:
+        kwargs[skey] = _str_list[0][1]
+
+    # --- Candidate list or bounded range ---
+    token = kwargs.get(skey)
+    explicit_values: List[float] = []
+    err = None
+    if token is not None:
+        if isinstance(token, str) and "," in token:
+            explicit_values, err = _parse_number_list(token)
+            if err:
+                return err + "\n\n" + _SENSITIVITY_USAGE, None, None
+        else:
+            try:
+                explicit_values = [float(token)]
+            except (TypeError, ValueError):
+                return "Error: values must be numeric.\n\n" \
+                       + _SENSITIVITY_USAGE, None, None
+    lo = kwargs.get(skey + "_min"); hi = kwargs.get(skey + "_max")
+    n_points = kwargs.get("n_points")
+    if not explicit_values and (lo is None or hi is None):
+        return "Error: provide candidate values " \
+               f"({skey}=<a>,<b>,<c>) or a bounded range " \
+               f"({skey}_min= / {skey}_max=).\n\n" + _SENSITIVITY_USAGE, \
+            None, None
+    # Range bounds may also be comma-kept strings
+    if isinstance(lo, str):
+        try:
+            lo = float(lo)
+        except (TypeError, ValueError):
+            return "Error: range bounds must be numeric.\n\n" \
+                   + _SENSITIVITY_USAGE, None, None
+    if isinstance(hi, str):
+        try:
+            hi = float(hi)
+        except (TypeError, ValueError):
+            return "Error: range bounds must be numeric.\n\n" \
+                   + _SENSITIVITY_USAGE, None, None
+    if isinstance(n_points, str):
+        try:
+            n_points = float(n_points)
+        except (TypeError, ValueError):
+            return "Error: n_points must be numeric.\n\n" \
+                   + _SENSITIVITY_USAGE, None, None
+
+    # --- IPR + VLP inputs ---
+    model_req = (kwargs.get("model") or "auto").lower()
+    if model_req not in ("auto", "linear", "vogel", "composite"):
+        return "Error: model must be one of auto, linear, vogel, " \
+               "composite.\n\n" + _SENSITIVITY_USAGE, None, None
+    ipr_kwargs, ipr_err = _ipr_kwargs_for_optimizer(kwargs, model_req)
+    if ipr_err:
+        return ipr_err, None, None
+    vlp_kwargs, vlp_err = _vlp_kwargs_for_optimizer(kwargs)
+    if vlp_err:
+        return vlp_err, None, None
+    # --- Numeric conversion for the VLP block: the optimizer and VLP
+    # engine expect float values; string tokens (other than the sweep
+    # comma list, which the optimizer substitutes per scenario) must be
+    # coerced here or arithmetic silently degrades.
+    for _k in tuple(vlp_kwargs):
+        _v = vlp_kwargs[_k]
+        if isinstance(_v, str):
+            if "," in _v:
+                continue  # sweep token (e.g. id list mapped to
+                          # tubing_id_in) — substituted per scenario
+            try:
+                vlp_kwargs[_k] = float(_v)
+            except (TypeError, ValueError):
+                return f"Error: value for {_k} must be numeric.\n\n" \
+                       + _SENSITIVITY_USAGE, None, None
+
+    base_key = "base_" + skey
+    base_value = kwargs.get(base_key)
+    if base_value is not None:
+        try:
+            base_value = float(base_value)
+        except (TypeError, ValueError):
+            return "Error: base value must be numeric.\n\n" \
+                   + _SENSITIVITY_USAGE, None, None
+
+    opt = production_optimizer.ProductionOptimizer()
+    try:
+        result = opt.sensitivity(
+            variable, explicit_values=explicit_values or None,
+            lo=float(lo) if lo is not None else None,
+            hi=float(hi) if hi is not None else None,
+            n_points=int(n_points) if n_points is not None else None,
+            base_value=base_value, base_kwargs=vlp_kwargs,
+            ipr_kwargs=ipr_kwargs)
+    except production_optimizer.OptimizationError as _e:
+        if _e.kind == "PHYSICALLY_INVALID":
+            return ("Engineering Guardrail — inputs rejected as physically "
+                    "invalid.\n" + _e.message), None, None
+        if _e.kind == "MISSING_DATA":
+            return ("Error: " + _e.message + "\n\n" + _SENSITIVITY_USAGE), \
+                None, None
+        return ("Engineering Guardrail — " + _e.message + "\n\n"
+                + _SENSITIVITY_USAGE), None, None
+    except Exception as _e:
+        return f"Sensitivity analysis error: {_e}.", None, None
+
+    # --- Response lines ---
+    var_display = SENSVARIABLE_LABELS.get(variable, variable)
+    lines = [f"{var_display} Sensitivity Result (CALCULATED — "
+             "deterministic layer over the verified IPR/VLP/Nodal "
+             "engines)", "=" * 60]
+    lines.append(f"Variable: {var_display}")
+    bp = result.base_point
+    lines.append("")
+    lines.append("BASE CASE")
+    if bp is not None and bp.nodal is not None:
+        lines.append("  " + skey + " = " + _variable_label(variable, result.base_value))
+        lines.append(f"  Nodal status: {bp.nodal.status}")
+        if bp.q_op is not None:
+            lines.append(f"  q_op = {bp.q_op:.2f} STB/day")
+            lines.append(f"  Pwf_op = {bp.pwf_op:.2f} psia")
+            lines.append(f"  Residual = {bp.residual:.4f} psi")
+        else:
+            lines.append(f"  Classification: {bp.classification}"
+                         + (f" ({bp.nodal.reason})" if bp.nodal and
+                            bp.nodal.reason else ""))
+    lines.append("")
+    lines.append("SCENARIOS")
+    for p, d in zip(result.points, result.deltas):
+        lines.append(_point_line(_variable_label(variable,
+                                                 p.parameter_value), p))
+        if p.classification == FEASIBLE and bp.q_op is not None:
+            lines.append(_delta_line(d, bp.q_op))
+    for w in result.warnings:
+        lines.append(f"NOTE: {w}")
+    lines.append("")
+    lines.append("Interpretation (engine layer): this is a calculated "
+                 "model sensitivity — field implementation requires "
+                 "confirmation of separator pressure, choke limits, "
+                 "tubing integrity, facility capacity and sand/erosion "
+                 "constraints.")
+    lines.append("")
+    lines.append("NOTE: Results are CALCULATED MODEL RESULTS — NOT "
+                 "measured field data.")
+    text_out = "\n".join(lines)
+
+    # --- Plot: operating rate vs parameter (+ optional Pwf) ---
+    png = None
+    if bool(kwargs.get("plot")):
+        xs = [p.parameter_value for p in result.points]
+        ys_q = [p.q_op for p in result.points]
+        ys_p = [p.pwf_op for p in result.points]
+        x_labels = [format(_variable_label(variable, v), ) for v in xs] \
+            if variable in ("thp", "id", "wc", "gor") else None
+        well = f"Calculated {var_display} Sensitivity"
+        if any(_q is not None for _q in ys_q):
+            pairs = [(x, y) for x, y in zip(xs, ys_q) if y is not None]
+            if len(pairs) >= 2:
+                png = generate_pvt_plot(
+                    "sensitivity_plot",
+                    [_p[0] for _p in pairs],
+                    [[_p[1] for _p in pairs]], None, well,
+                    labels=[f"Operating rate (base {_fmt_base(result)})"],
+                )
+        if png is None:
+            text_out += ("\n\nNOTE: could not generate the sensitivity "
+                         "plot (insufficient feasible points).")
+        else:
+            text_out += ("\n\nCalculated sensitivity plot attached: "
+                         "operating rate vs " + var_display
+                         + ". CALCULATED MODEL RESULTS — NOT measured "
+                         "field data.")
+    return text_out, png, None
+
+
+def _fmt_base(result: "SensitivityResult") -> str:
+    v = result.base_value
+    if result.variable == "wc":
+        return _fmt_wc_display(v)
+    if result.variable == "gor":
+        return f"{v:g} scf/STB"
+    if result.variable == "id":
+        return f"{v:g} in"
+    return f"{v:g} psia"
+
+
+@registry.register("optimize")
+def handle_calc_optimize(message: Dict[str, Any], tg
+                         ) -> Tuple[str, Optional[bytes], Optional[str]]:
+    """Handle /calc optimize type=<var> var=<vals> objective=... —
+    deterministic constrained candidate comparison over the verified
+    Nodal engine."""
+    text = message.get("text", "")
+    first_space = text.find(" ")
+    args_str = text[first_space + 1:] if first_space >= 0 else ""
+
+    kwargs = _common_string_keys(args_str, ())
+    _numeric = parse_kv_args(args_str)
+    _numeric.update(kwargs)
+    kwargs = _numeric
+
+    # --- Variable ---
+    var_key = (kwargs.get("type") or "").lower()
+    if var_key not in SENSVAR_KEYS:
+        return "Error: type must be one of thp, id, wc, gor.\n\n" \
+               + _OPTIMIZE_USAGE, None, None
+    variable = SENSVAR_KEYS[var_key]
+    skey = var_key  # Telegram key (thp/id/wc/gor)
+
+    # --- Duplicate-key conflict: same parse-time resolution as the
+    # sensitivity handler — restore the comma list if the numeric parser
+    # overwrote it with a plain numeric value.
+    _str_list = [(_k, _v) for _k, _v in kwargs.items()
+                 if _k == skey and isinstance(_v, str) and "," in _v]
+    if _str_list:
+        kwargs[skey] = _str_list[0][1]
+
+    # --- Candidate list (required) ---
+    token = kwargs.get(skey)
+    values: List[float] = []
+    if token is not None and isinstance(token, str) and "," in token:
+        values, err = _parse_number_list(token)
+        if err:
+            return err + "\n\n" + _OPTIMIZE_USAGE, None, None
+    if len(values) < 2:
+        return "Error: candidate optimization requires at least two " \
+               f"values for {skey} (comma-separated, " \
+               f"e.g. {skey}=1.995,2.5,3.0).\n\n" + _OPTIMIZE_USAGE, \
+            None, None
+
+    # --- Objective ---
+    objective = (kwargs.get("objective") or "").lower()
+    if not objective:
+        return "Error: objective= is required (objective=max_oil_rate).\n\n" \
+               + _OPTIMIZE_USAGE, None, None
+
+    # --- IPR + VLP inputs ---
+    model_req = (kwargs.get("model") or "auto").lower()
+    if model_req not in ("auto", "linear", "vogel", "composite"):
+        return "Error: model must be one of auto, linear, vogel, " \
+               "composite.\n\n" + _OPTIMIZE_USAGE, None, None
+    ipr_kwargs, ipr_err = _ipr_kwargs_for_optimizer(kwargs, model_req)
+    if ipr_err:
+        return ipr_err, None, None
+    vlp_kwargs, vlp_err = _vlp_kwargs_for_optimizer(kwargs)
+    if vlp_err:
+        return vlp_err, None, None
+    # --- Numeric conversion for the VLP block (same rule as the
+    # sensitivity handler — skip the candidate key itself, whose list
+    # the optimizer substitutes per candidate).
+    for _k in tuple(vlp_kwargs):
+        _v = vlp_kwargs[_k]
+        if isinstance(_v, str):
+            if "," in _v:
+                continue  # sweep token — substituted per candidate
+            try:
+                vlp_kwargs[_k] = float(_v)
+            except (TypeError, ValueError):
+                return f"Error: value for {_k} must be numeric.\n\n" \
+                       + _OPTIMIZE_USAGE, None, None
+
+    # --- Constraints ---
+    constraints: Dict[str, Any] = {}
+    for _cname in ("min_pwf", "max_drawdown", "max_liquid_rate",
+                   "max_water_cut", "min_thp", "max_thp", "max_gor"):
+        _v = kwargs.get(_cname)
+        if _v is not None:
+            try:
+                constraints[_cname] = float(_v)
+            except (TypeError, ValueError):
+                return f"Error: {_cname} must be numeric.", None, None
+
+    opt = production_optimizer.ProductionOptimizer()
+    try:
+        result = opt.optimize(
+            variable, values=values, objective=objective,
+            constraints=constraints or None,
+            base_kwargs=vlp_kwargs, ipr_kwargs=ipr_kwargs)
+    except production_optimizer.OptimizationError as _e:
+        if _e.kind == "PHYSICALLY_INVALID":
+            return ("Engineering Guardrail — inputs rejected as physically "
+                    "invalid.\n" + _e.message), None, None
+        if _e.kind in ("MISSING_DATA", "UNSUPPORTED_OBJECTIVE",
+                       "UNSUPPORTED_CONSTRAINT", "UNSUPPORTED_VARIABLE"):
+            return ("Error: " + _e.message + "\n\n" + _OPTIMIZE_USAGE), \
+                None, None
+        return ("Engineering Guardrail — " + _e.message + "\n\n"
+                + _OPTIMIZE_USAGE), None, None
+    except Exception as _e:
+        return f"Optimization error: {_e}.", None, None
+
+    # --- Response lines ---
+    var_display = SENSVARIABLE_LABELS.get(variable, variable)
+    lines = ["Production Optimization Result (CALCULATED — deterministic "
+             "layer over the verified IPR/VLP/Nodal engines)", "=" * 60]
+    lines.append(f"Objective: {result.objective}")
+    lines.append(f"Variable optimized: {var_display}")
+    lines.append("")
+    bc = result.base_candidate
+    if bc is not None:
+        lines.append("BASE CASE")
+        lines.append("  " + skey + " = " + _variable_label(variable, bc.parameter_value))
+        if bc.point.q_op is not None:
+            lines.append(f"  q_op = {bc.point.q_op:.2f} STB/day")
+            lines.append(f"  Pwf_op = {bc.point.pwf_op:.2f} psia")
+        else:
+            lines.append(f"  Status: {bc.classification}")
+    lines.append("")
+    lines.append("CANDIDATES")
+    for c in result.candidates:
+        lines.append("  " + skey + " = " + _variable_label(
+            variable, c.parameter_value)
+                     + ": " + c.classification)
+        if c.point.q_op is not None:
+            lines.append(f"    q_op = {c.point.q_op:.2f} STB/day, "
+                         f"Pwf_op = {c.point.pwf_op:.2f} psia, "
+                         f"residual {c.point.residual:.4f} psi")
+        if c.review_required:
+            lines.append("    REVIEW REQUIRED (multiple operating points "
+                         "or non-convergence — no root selected "
+                         "automatically).")
+        for cv in c.constraint_violations:
+            lines.append(f"    Constraint violated: {cv.constraint} "
+                         f"limit={cv.limit:g}, actual={cv.actual:g}")
+    lines.append("")
+    best = result.best
+    if best is not None:
+        lines.append("BEST FEASIBLE CANDIDATE")
+        lines.append("  " + skey + " = " + _variable_label(variable, best.parameter_value))
+        lines.append(f"  q_op = {best.point.q_op:.2f} STB/day")
+        lines.append(f"  Pwf_op = {best.point.pwf_op:.2f} psia")
+        if bc is not None and bc.point.q_op is not None \
+                and best.point.q_op is not None:
+            dq = best.point.q_op - bc.point.q_op
+            pct = 100.0 * dq / bc.point.q_op if bc.point.q_op else None
+            dpwf = (best.point.pwf_op - bc.point.pwf_op
+                    if best.point.pwf_op is not None
+                    and bc.point.pwf_op is not None else None)
+            lines.append(f"  Δq = {dq:+.1f} STB/day "
+                         + (f"({pct:+.1f}%)" if pct is not None else ""))
+            if dpwf is not None:
+                lines.append(f"  ΔPwf = {dpwf:+.2f} psi")
+        lines.append(f"  Residual: {best.point.residual:.4f} psi")
+        lines.append("  (Best feasible candidate within the supplied "
+                     "model and constraints — not a real-world "
+                     "operating condition.)")
+    elif result.all_infeasible:
+        lines.append("RESULT: ALL CANDIDATES INFEASIBLE under the "
+                     "supplied constraints — no feasible optimum exists "
+                     "in the candidate set.")
+    else:
+        lines.append("RESULT: no feasible candidate achieved the "
+                     "objective (candidates either failed to converge, "
+                     "had no operating point, or needed engineering "
+                     "review).")
+    for w in result.warnings:
+        lines.append(f"NOTE: {w}")
+    lines.append("")
+    lines.append("Interpretation (engine layer): model sensitivity is "
+                 "not a field instruction. Field implementation requires "
+                 "confirmation of separator pressure, choke limits, "
+                 "tubing integrity, facility capacity and sand/erosion "
+                 "constraints.")
+    lines.append("")
+    lines.append("NOTE: Results are CALCULATED MODEL RESULTS — NOT "
+                 "measured field data.")
+    text_out = "\n".join(lines)
+
+    # --- Plot: comparison of candidates ---
+    png = None
+    if bool(kwargs.get("plot")):
+        pairs = [(c.parameter_value, c.point.q_op)
+                 for c in result.candidates if c.point.q_op is not None]
+        if len(pairs) >= 2:
+            png = generate_pvt_plot(
+                "optimization_plot",
+                [_p[0] for _p in pairs],
+                [[_p[1] for _p in pairs]], None,
+                f"Calculated {var_display} Candidate Comparison",
+                labels=["Operating rate"],
+            )
+        if png is None:
+            text_out += ("\n\nNOTE: could not generate the comparison "
+                         "plot (fewer than two feasible candidates).")
+        else:
+            text_out += ("\n\nCalculated comparison plot attached: "
+                         "operating rate per candidate. CALCULATED MODEL "
+                         "RESULTS — NOT measured field data.")
+    return text_out, png, None
