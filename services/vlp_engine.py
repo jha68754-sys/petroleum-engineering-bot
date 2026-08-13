@@ -64,7 +64,27 @@ _BB_INCL_COEFS: Dict[str, Tuple[float, float, float, float]] = {
 _BB_DOWNHILL = (4.70, -0.3692, 0.1244, -0.5056)
 
 _MODEL_BEGGS_BRILL = "beggs_brill"
-MODEL_DISPLAY = {"beggs_brill": "Beggs-Brill (1973) multiphase"}
+_MODEL_HAGEDORN_BROWN = "hagedorn_brown"
+MODEL_DISPLAY = {"beggs_brill": "Beggs-Brill (1973) multiphase",
+                 "hagedorn_brown": "Hagedorn-Brown (1965) multiphase"}
+MODEL_ID = "vlp_model"
+VALID_MODELS = (_MODEL_BEGGS_BRILL, _MODEL_HAGEDORN_BROWN)
+
+
+def _resolve_model(vlp_model: Optional[str]) -> str:
+    """Normalized model identifier. Beggs-Brill remains the default."""
+    if vlp_model is None:
+        return _MODEL_BEGGS_BRILL
+    key = vlp_model.strip().lower().replace("-", "_")
+    if key in VALID_MODELS:
+        return key
+    if "hagedorn" in key or key == "hb":
+        return _MODEL_HAGEDORN_BROWN
+    if "beggs" in key or "brill" in key or key == "bb":
+        return _MODEL_BEGGS_BRILL
+    raise ValueError(
+        f"PHYSICALLY_INVALID: unknown vlp_model '{vlp_model}'; use "
+        f"'beggs_brill' (default) or 'hagedorn_brown'.")
 
 
 # ---------------------------------------------------------------------- #
@@ -327,20 +347,31 @@ def traverse(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
              sigma: float = 30.0, n_segments: int = DEFAULT_SEGMENTS,
              tol: float = DEFAULT_TOL,
              max_seg_iter: int = DEFAULT_MAX_SEG_ITER,
-             max_iters: int = DEFAULT_MAX_ITERS) -> VLPResult:
-    """Segmented Beggs-Brill pressure traverse, wellhead -> bottomhole.
+             max_iters: int = DEFAULT_MAX_ITERS,
+             vlp_model: Optional[str] = None) -> VLPResult:
+    """Segmented pressure traverse, wellhead -> bottomhole.
 
-    Midpoint method per segment: properties evaluated at the arithmetic-mean
-    pressure of the segment endpoints, iterated until the segment delta-p
-    converges within `tol` (relative). Global iteration count is capped at
-    `max_iters`; exceeding it returns NUMERICAL_NON_CONVERGENCE (never a
-    silent answer). Pressure floor 0.01 psia is enforced with an error.
-
-    q_o, q_w: STB/day (total rates, water cut already accounted for in
-    q_w). GOR: scf/STB (produced). rs: scf/STB at local average pressure.
-    If rs is not supplied per-segment (single value), it is held constant —
-    see the "PVT INTEGRATION" contract.
+    Model selection: 'beggs_brill' (default, original implementation) or
+    'hagedorn_brown' (dispatches to traverse_hb). Beggs-Brill code path is
+    unchanged when vlp_model is None.
     """
+    resolved = _resolve_model(vlp_model)
+    if resolved == _MODEL_HAGEDORN_BROWN:
+        return traverse_hb(
+            thp, tvd, q_o, q_w, gor, bo, bw, z_factor, gamma_g, gamma_w,
+            mu_l, api, wc, tubing_id_in, rs, t_wh, geothermal, sigma,
+            n_segments, tol, max_seg_iter, max_iters)
+
+    # Midpoint method per segment: properties evaluated at the arithmetic-mean
+    # pressure of the segment endpoints, iterated until the segment delta-p
+    # converges within `tol` (relative). Global iteration count is capped at
+    # `max_iters`; exceeding it returns NUMERICAL_NON_CONVERGENCE (never a
+    # silent answer). Pressure floor 0.01 psia is enforced with an error.
+
+    # q_o, q_w: STB/day (total rates, water cut already accounted for in
+    # q_w). GOR: scf/STB (produced). rs: scf/STB at local average pressure.
+    # If rs is not supplied per-segment (single value), it is held constant —
+    # see the "PVT INTEGRATION" contract.
     if n_segments < 4:
         raise ValueError(
             "PHYSICALLY_INVALID: segment count must be >= 4 for a stable "
@@ -453,6 +484,137 @@ def traverse(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
         acceleration_psi=accel_psi, iterations=total_iters)
 
 
+def traverse_hb(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
+                bo: float, bw: float, z_factor: float, gamma_g: float,
+                gamma_w: float, mu_l: float, api: float, wc: float,
+                tubing_id_in: float, rs: float, t_wh: float,
+                geothermal: float, sigma: float = 30.0,
+                n_segments: int = DEFAULT_SEGMENTS,
+                tol: float = DEFAULT_TOL,
+                max_seg_iter: int = DEFAULT_MAX_SEG_ITER,
+                max_iters: int = DEFAULT_MAX_ITERS) -> VLPResult:
+    """Segmented Hagedorn-Brown (1965) pressure traverse, wellhead ->
+    bottomhole.
+
+    Structural mirror of `traverse` (same bracketed bisection, same
+    midpoint method, same convergence contract). Segment properties come
+    from the independent `services.hagedorn_brown` module. Flow-pattern
+    counts are N/A for H-B (a segmented correlation with no distinct
+    pattern map); the result keeps the field for API symmetry.
+    """
+    # Late import keeps hagedorn_brown out of the frozen Beggs-Brill path.
+    from services import hagedorn_brown as _hb
+    if n_segments < 4:
+        raise ValueError(
+            "PHYSICALLY_INVALID: segment count must be >= 4 for a stable "
+            "midpoint traverse.")
+    d_ft = tubing_id_in / 12.0
+    dl = tvd / n_segments
+    total_iters = 0
+    p = thp
+    elev_psi = 0.0
+    fric_psi = 0.0
+    accel_psi = 0.0
+    seg_grads: List[Tuple[float, float]] = []
+    warnings: List[str] = []
+    # Applicability envelope (Hagedorn & Brown 1965 test range)
+    env = _hb.HB_APPLICABILITY
+    if not (env["tubing_id_in"][0] <= tubing_id_in <= env["tubing_id_in"][1]):
+        warnings.append(
+            f"CORRELATION_LIMITATION: tubing ID {tubing_id_in} in is outside "
+            f"the published H-B range {env['tubing_id_in']} in.")
+    if not (env["gor"][0] <= gor <= env["gor"][1]):
+        warnings.append(
+            f"CORRELATION_LIMITATION: GOR {gor} scf/STB is outside the "
+            f"published H-B range {env['gor']} scf/STB.")
+    q_total = q_o + q_w
+    if not (env["liquid_rate"][0] <= q_total <= env["liquid_rate"][1]):
+        warnings.append(
+            f"CORRELATION_LIMITATION: liquid rate {q_total} STB/D is outside "
+            f"the published H-B range {env['liquid_rate']} STB/D.")
+    for i in range(n_segments):
+        t_f = t_wh + geothermal * (i + 0.5) * dl / 100.0
+        converged_seg = False
+        seg_dp_el, seg_dp_fr = 0.0, 0.0
+        p2 = p
+        seg_st: Optional[Dict[str, float]] = None
+        try:
+            st_up = _hb.hb_segment_state(
+                p, t_f, q_o, q_w, gor, bo, bw, z_factor, gamma_g, gamma_w,
+                mu_l, api, wc, d_ft, rs, sigma)
+        except (ValueError, ZeroDivisionError):
+            seg_dp_el, seg_dp_fr = 0.0, 0.0
+        else:
+            dp_up_el, dp_up_fr = _hb.hb_gradients(st_up, d_ft)
+            hi = p + (dp_up_el + dp_up_fr) * dl
+            lo = p + 1e-9
+            for k in range(max_seg_iter):
+                p_avg = (p + (lo + hi) / 2.0) / 2.0
+                if p_avg <= 0.01:
+                    raise ValueError(
+                        "NUMERICAL_NON_CONVERGENCE: pressure collapsed "
+                        "below 0.01 psia during the traverse.")
+                try:
+                    st = _hb.hb_segment_state(
+                        p_avg, t_f, q_o, q_w, gor, bo, bw, z_factor,
+                        gamma_g, gamma_w, mu_l, api, wc, d_ft, rs, sigma)
+                except (ValueError, ZeroDivisionError):
+                    seg_dp_el, seg_dp_fr = 0.0, 0.0
+                    break
+                dp_el, dp_fr = _hb.hb_gradients(st, d_ft)
+                seg_dp_el, seg_dp_fr = dp_el, dp_fr
+                p_mid = (lo + hi) / 2.0
+                try:
+                    st2 = _hb.hb_segment_state(
+                        p_mid, t_f + geothermal * (i + 1) * dl / 100.0,
+                        q_o, q_w, gor, bo, bw, z_factor, gamma_g, gamma_w,
+                        mu_l, api, wc, d_ft, rs, sigma)
+                    dp_dvm = (st2["rho_s"] * st2["vm"]
+                              - st["rho_s"] * st["vm"])
+                    ek_prime = dp_dvm / GC / PSI_PSF
+                except (ValueError, ZeroDivisionError):
+                    ek_prime = 0.0
+                denom = 1.0 - ek_prime
+                dp = (dp_el + dp_fr) / (denom if abs(denom) > 1e-9 else 1e-9)
+                g_mid = p + dp * dl - p_mid
+                if g_mid > 0:
+                    lo = p_mid
+                else:
+                    hi = p_mid
+                if hi - lo <= max(tol * max(p_mid, 1.0), 1e-6):
+                    p2 = (lo + hi) / 2.0
+                    converged_seg = True
+                    seg_st = st
+                    accel_psi += abs(ek_prime * dp) * dl
+                    seg_grads.append((seg_dp_el, seg_dp_fr))
+                    break
+                total_iters += 1
+                if total_iters >= max_iters:
+                    raise ValueError(
+                        "NUMERICAL_NON_CONVERGENCE: segmented traverse did "
+                        "not converge within the allowed iteration budget.")
+        if not converged_seg:
+            total_iters += max_seg_iter
+        seg_grads.append((seg_dp_el, seg_dp_fr))
+        elev_psi += seg_dp_el * dl
+        fric_psi += seg_dp_fr * dl
+        p = p2
+        if p <= 0.01:
+            raise ValueError(
+                "NUMERICAL_NON_CONVERGENCE: bottomhole pressure collapsed "
+                "below the 0.01 psia floor; check wellhead/rate inputs.")
+    return VLPResult(
+        status="CONVERGED", pwf=p, thp=thp, rate=q_o + q_w,
+        water_cut=wc, gor=gor, tvd=tvd, tubing_id=tubing_id_in,
+        segments=n_segments,
+        components=dict(elevation=elev_psi, friction=fric_psi,
+                        acceleration=accel_psi),
+        flow_pattern_counts={},
+        elevation_psi=elev_psi, friction_psi=fric_psi,
+        acceleration_psi=accel_psi, iterations=total_iters,
+        warnings=warnings, limitations=warnings)
+
+
 # ---------------------------------------------------------------------- #
 # Zero-rate / static limit (documented, numerically safe)
 # ---------------------------------------------------------------------- #
@@ -489,10 +651,12 @@ def vlp_curve(thp: float, tvd: float, gor: float, bo: float, bw: float,
               rs: float, t_wh: float, geothermal: float,
               q_min: float, q_max: float, n_points: int,
               n_segments: int = DEFAULT_SEGMENTS,
-              sigma: float = 30.0) -> Tuple[List[float], List[float]]:
+              sigma: float = 30.0,
+              vlp_model: Optional[str] = None) -> Tuple[List[float],
+                                                         List[float]]:
     """Calculated VLP curve: Pwf vs total rate. Rates are swept linearly;
     the water phase rate scales with water cut (q_w = q_o*wc/(1-wc)).
-    Caller MUST supply q_min/q_max — no envelope is invented."""
+    Caller MUST supply q_min/q_max - no envelope is invented."""
     if n_points < 2:
         raise ValueError("PHYSICALLY_INVALID: need at least 2 curve points.")
     qs: List[float] = []
@@ -512,7 +676,7 @@ def vlp_curve(thp: float, tvd: float, gor: float, bo: float, bw: float,
         res = traverse(
             thp, tvd, q_o, q_w, gor, bo, bw, z_factor, gamma_g, gamma_w,
             mu_l, api, wc, tubing_id_in, rs, t_wh, geothermal, sigma,
-            n_segments)
+            n_segments, vlp_model=vlp_model)
         qs.append(q_total)
         ps.append(res.pwf if res.pwf is not None else 0.0)
     return qs, ps
@@ -543,6 +707,8 @@ OPTIONAL_INPUTS = [
     ("z", "Gas compressibility factor (default 1.0 if unknown)"),
     ("sigma", "Surface tension, dyne/cm (default 30)"),
     ("segments", "Number of traverse segments (default 80)"),
+    (MODEL_ID, "VLP correlation: 'beggs_brill' (default) or "
+               "'hagedorn_brown'"),
 ]
 
 
@@ -633,6 +799,8 @@ def missing_inputs(kwargs: Dict[str, Optional[float]],
     """Return the list of required-but-missing parameter names."""
     required = ["thp", "tvd", "id", "q", "gor", "api", "gamma_g", "mu_l",
                 "bo", "rs", "t_wh", "geothermal"]
+    _ = model_req  # reserved hook for future model-specific inputs
+    # H-B requires no additional inputs beyond the standard contract.
     if kwargs.get("wc") is not None or kwargs.get("q_w") is not None:
         required += []  # water handled optionally
     return [k for k in required if kwargs.get(k) is None]

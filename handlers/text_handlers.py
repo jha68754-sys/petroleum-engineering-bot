@@ -197,6 +197,14 @@ def handle_calc(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Opti
             {"text": "/optimize " + args_str}, tg
         )
         return text, png, caption
+    if formula_key.lower() in ("vlp_compare", "vlp_compare_models"):
+        # Phase 5A: deterministic comparison of the two verified VLP
+        # correlations (Beggs-Brill 1973 vs Hagedorn-Brown 1965) with an
+        # overlay plot; same parse_kv_args caution as /calc vlp.
+        text, png, caption = handle_calc_vlp_compare(
+            {"text": "/vlp_compare " + args_str}, tg
+        )
+        return text, png, caption
 
     kwargs = parse_kv_args(args_str)
 
@@ -311,7 +319,7 @@ def handle_calc_ipr(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
                 continue
             _key, _, _val = _part.partition("=")
             _key, _val = _key.strip().lower(), _val.strip()
-            if _key in ("model", "plot"):
+            if _key in ("model", "plot", "vlp_model"):
                 kwargs[_key] = _val
                 continue
     _numeric = parse_kv_args(args_str)
@@ -517,6 +525,7 @@ _VLP_REQUIRED_HINTS = {
     "sigma": "Surface tension, dyne/cm (default 30)",
     "segments": "Number of traverse segments (default 80)",
     "plot": "Set plot=1 to also return the calculated VLP plot as PNG",
+    "vlp_model": "VLP correlation: 'beggs_brill' (default) or 'hagedorn_brown'",
 }
 
 
@@ -537,12 +546,13 @@ def _vlp_missing_message(missing: List[str]) -> str:
 
 
 def _vlp_result_lines(thp: float, tvd: float, q_o: float, q_w: float,
-                      result) -> List[str]:
+                      result,
+                      vlp_model: str = "beggs_brill") -> List[str]:
     """Format a single-rate VLP engine result for Telegram."""
     lines = [
         "VLP Calculation Result",
         "=" * 50,
-        f"Method: {vlp_engine.MODEL_DISPLAY['beggs_brill']}",
+        f"Method: {vlp_engine.MODEL_DISPLAY.get(vlp_model, vlp_model)}",
         f"Segments: {result.segments}",
         "",
         f"Wellhead pressure THP = {thp:g} psia",
@@ -574,8 +584,9 @@ def _vlp_result_lines(thp: float, tvd: float, q_o: float, q_w: float,
         for lim in result.limitations:
             lines.append(f"  \u2022 {lim}")
     lines.append("")
-    lines.append("NOTE: Results are CALCULATED (Beggs-Brill 1973 correlation with a\n"
-                 "segmented midpoint traverse), not measured data.")
+    model_name = vlp_engine.MODEL_DISPLAY.get(vlp_model, vlp_model)
+    lines.append(f"NOTE: Results are CALCULATED ({model_name} correlation "
+                 "with a\nsegmented midpoint traverse), not measured data.")
     return lines
 
 
@@ -724,7 +735,7 @@ def handle_calc_nodal(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes]
                 continue
             _key, _, _val = _part.partition("=")
             _key, _val = _key.strip().lower(), _val.strip()
-            if _key in ("model", "plot"):
+            if _key in ("model", "plot", "vlp_model"):
                 kwargs[_key] = _val
                 continue
     _numeric = parse_kv_args(args_str)
@@ -733,6 +744,12 @@ def handle_calc_nodal(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes]
         kwargs = _numeric
 
     # --- Hard validation (guardrails) ---
+    vlp_model_raw = str(kwargs.get("vlp_model", "beggs_brill")).strip().lower()
+    try:
+        vlp_model = vlp_engine._resolve_model(vlp_model_raw)
+    except ValueError:
+        return ("Error: unknown vlp_model. Use 'beggs_brill' (default) or "
+                "'hagedorn_brown'."), None, None
     ipr_model = (kwargs.get("model") or "auto").lower()
     if ipr_model not in ("auto", "linear", "vogel", "composite"):
         return ("Error: model must be one of auto, linear, vogel, composite.\n\n"
@@ -830,6 +847,7 @@ def handle_calc_nodal(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes]
             bw=floats.get("bw", 1.01), z_factor=floats.get("z", 0.9),
             sigma=floats.get("sigma", 30.0),
             n_segments=int(floats.get("segments", 80)),
+            vlp_model=vlp_model,
             q_min=floats.get("q_min"),
             q_max=floats.get("q_max"),
             n_points=int(floats.get("n_points", 201)),
@@ -927,12 +945,19 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
                 continue
             _key, _, _val = _part.partition("=")
             _key, _val = _key.strip().lower(), _val.strip()
-            if _key in ("plot",):
+            if _key in ("plot", "vlp_model"):
                 kwargs[_key] = _val
                 continue
     _numeric = parse_kv_args(args_str)
     _numeric.update(kwargs)
     kwargs = _numeric
+    # Normalize the VLP correlation selector (string key, not numeric).
+    vlp_model = str(kwargs.get("vlp_model", "beggs_brill")).strip().lower()
+    try:
+        vlp_model = vlp_engine._resolve_model(vlp_model)
+    except ValueError:
+        return ("Error: unknown vlp_model. Use 'beggs_brill' (default) or "
+                "'hagedorn_brown'."), None, None
 
     # --- Hard validation (guardrails) ---
     err = vlp_engine.validate_inputs(kwargs)
@@ -950,7 +975,7 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
     curve_mode = q_min is not None or q_max is not None
     if curve_mode:
         # Curve mode replaces the single-rate "q" requirement with a sweep.
-        required = [k for k in vlp_engine.missing_inputs(kwargs, "beggs_brill")
+        required = [k for k in vlp_engine.missing_inputs(kwargs, vlp_model)
                     if k != "q"]
         if q_min is None:
             required.append("q_min")
@@ -959,7 +984,7 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
         if q_min is not None and q_max is not None and q_min > q_max:
             return ("Error: q_min must be <= q_max for the VLP curve sweep."), None, None
     else:
-        required = vlp_engine.missing_inputs(kwargs, "beggs_brill")
+        required = vlp_engine.missing_inputs(kwargs, vlp_model)
         if kwargs.get("q") is None:
             required.append("q")
     # Deduplicate while preserving order.
@@ -1003,7 +1028,8 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
                     floats.get("gamma_w", 1.07), floats["mu_l"],
                     floats["api"], wc, floats["id"], floats["rs"],
                     floats["t_wh"], floats.get("geothermal", 1.5),
-                    n_segments=int(floats.get("segments", 80))).pwf)
+                    n_segments=int(floats.get("segments", 80)),
+                    vlp_model=vlp_model).pwf)
         else:
             qs, ps = [], []
             for i in range(n_pts):
@@ -1025,13 +1051,14 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
                         floats.get("gamma_w", 1.07), floats["mu_l"],
                         floats["api"], wc, floats["id"], floats["rs"],
                         floats["t_wh"], floats.get("geothermal", 1.5),
-                        n_segments=int(floats.get("segments", 80))).pwf)
+                        n_segments=int(floats.get("segments", 80)),
+                        vlp_model=vlp_model).pwf)
         if not qs:
             return "VLP curve error: empty rate sweep.", None, None
         out = [
             "Calculated VLP Curve",
             "=" * 50,
-            f"Method: {vlp_engine.MODEL_DISPLAY['beggs_brill']}",
+            f"Method: {vlp_engine.MODEL_DISPLAY[vlp_model]}",
             f"THP = {floats['thp']:g} psia  |  TVD = {floats['tvd']:g} ft  |  "
             f"ID = {floats['id']:g} in",
             f"GOR = {floats['gor']:g} scf/STB (Rs = {floats['rs']:g})  |  "
@@ -1048,7 +1075,7 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
             png = generate_pvt_plot(
                 "vlp_plot", qs, ps, None,
                 f"Calculated VLP — THP {floats['thp']:g} psia",
-                labels=["Calculated — Beggs-Brill (1973)"],
+                labels=["Calculated — " + vlp_engine.MODEL_DISPLAY[vlp_model]],
             )
             if png is None:
                 out.append("")
@@ -1072,6 +1099,7 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
             floats.get("geothermal", 1.5),
             sigma=floats.get("sigma", 30.0),
             n_segments=int(floats.get("segments", 80)),
+            vlp_model=vlp_model,
         )
     except ValueError as _e:
         _msg = str(_e)
@@ -1082,14 +1110,15 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
     except Exception as _e:
         return f"VLP calculation error: {_e}. Please check your inputs.", None, None
 
-    out = _vlp_result_lines(floats["thp"], floats["tvd"], q_o, q_w, result)
+    out = _vlp_result_lines(floats["thp"], floats["tvd"], q_o, q_w, result,
+                            vlp_model=vlp_model)
 
     png = None
     if bool(kwargs.get("plot")):
         png = generate_pvt_plot(
             "vlp_plot", [q_o + q_w], [result.pwf], None,
             f"Calculated VLP — single rate {q_o + q_w:g} STB/day",
-            labels=["Calculated — Beggs-Brill (1973)"],
+            labels=["Calculated — " + vlp_engine.MODEL_DISPLAY[vlp_model]],
         )
         if png is None:
             out.append("")
@@ -1098,6 +1127,142 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
             out.append("")
             out.append("Calculated VLP Plot attached (rate on X, required BHP on Y).")
             out.append("This is a model-generated curve, not measured data.")
+    return "\n".join(out), png, None
+
+
+@registry.register("vlp_compare")
+def handle_calc_vlp_compare(message: Dict[str, Any], tg
+                            ) -> Tuple[str, Optional[bytes], Optional[str]]:
+    """Handle /calc vlp_compare ... — deterministic comparison of the two
+    VLP correlations (Beggs-Brill 1973 vs Hagedorn-Brown 1965) over the same
+    rate sweep, with an overlay plot (rate on X, required BHP on Y)."""
+    text = message.get("text", "")
+    first_space = text.find(" ")
+    args_str = text[first_space + 1:] if first_space >= 0 else ""
+    kwargs: Dict[str, Any] = {}
+    if args_str and args_str.strip():
+        for _part in args_str.split():
+            if "=" not in _part:
+                continue
+            _key, _, _val = _part.partition("=")
+            _key, _val = _key.strip().lower(), _val.strip()
+            if _key in ("plot",):
+                kwargs[_key] = _val
+                continue
+    _numeric = parse_kv_args(args_str)
+    _numeric.update(kwargs)
+    kwargs = _numeric
+
+    # --- Hard validation (guardrails) ---
+    err = vlp_engine.validate_inputs(kwargs)
+    if err is not None:
+        return ("Engineering Guardrail — inputs rejected as physically "
+                "invalid.\n" + err.message), None, None
+
+    # The comparison always sweeps both models, so the required VLP inputs
+    # follow the most demanding correlation (BB envelope here).
+    required = [k for k in vlp_engine.missing_inputs(kwargs, "beggs_brill")
+                if k != "q"]
+    if required:
+        return _vlp_missing_message(required), None, None
+
+    # --- Float conversion ---
+    try:
+        floats = {}
+        for _k in ("thp", "tvd", "id", "gor", "api", "gamma_g", "mu_l",
+                   "bo", "rs", "t_wh", "geothermal", "wc", "gamma_w",
+                   "bw", "z", "sigma", "segments"):
+            _v = kwargs.get(_k)
+            if _v is not None:
+                floats[_k] = float(_v)
+    except (TypeError, ValueError):
+        return "Error: all parameter values must be numeric.", None, None
+
+    wc = floats.get("wc", 0.0)
+    id_ = floats["id"]
+    n_segments = int(floats.get("segments", 80))
+
+    def _sweep(model: str):
+        """Rate sweep through the same traverse API used by /calc vlp."""
+        qs, ps = [], []
+        for i in range(20):
+            q_total = 0.0 + (5000.0 - 0.0) * i / 19.0
+            if q_total <= 0.0:
+                qs.append(q_total)
+                ps.append(vlp_engine.static_gradient(
+                    floats["thp"], floats["tvd"], floats["t_wh"],
+                    floats.get("geothermal", 1.5), floats["gamma_g"],
+                    floats.get("gamma_w", 1.07),
+                    floats.get("z", 1.0)).pwf)
+            else:
+                q_o_s, q_w_s = q_total * (1.0 - wc), q_total * wc
+                qs.append(q_total)
+                ps.append(vlp_engine.traverse(
+                    floats["thp"], floats["tvd"], q_o_s, q_w_s,
+                    floats["gor"], floats["bo"], floats.get("bw", 1.01),
+                    floats.get("z", 1.0), floats["gamma_g"],
+                    floats.get("gamma_w", 1.07), floats["mu_l"],
+                    floats["api"], wc, id_, floats["rs"],
+                    floats["t_wh"], floats.get("geothermal", 1.5),
+                    sigma=floats.get("sigma", 30.0),
+                    n_segments=n_segments,
+                    vlp_model=model).pwf)
+        return qs, ps
+
+    try:
+        qs_bb, ps_bb = _sweep("beggs_brill")
+        qs_hb, ps_hb = _sweep("hagedorn_brown")
+    except ValueError as _e:
+        return ("VLP comparison error: " + str(_e) +
+                "\nPlease check your inputs (the Hagedorn-Brown correlation "
+                "applies strict envelope limits on GOR, tubing ID and "
+                "liquid rate — see its limitations list)."), None, None
+    except Exception as _e:
+        return f"VLP comparison error: {_e}.", None, None
+
+    deltas = [_hb - _bb for _hb, _bb in zip(ps_hb, ps_bb)]
+    max_delta = max(abs(d) for d in deltas)
+
+    out = [
+        "VLP Model Comparison (CALCULATED — Beggs-Brill 1973 vs "
+        "Hagedorn-Brown 1965)",
+        "=" * 60,
+        f"THP = {floats['thp']:g} psia  |  TVD = {floats['tvd']:g} ft  |  "
+        f"ID = {id_:g} in",
+        f"GOR = {floats['gor']:g} scf/STB (Rs = {floats['rs']:g})  |  "
+        f"wc = {wc:.2f}",
+        "Sweep: q = 0 .. 5000 STB/day (20 points, segmented traverse, "
+        "same inputs to both correlations)",
+        "",
+        "Rate (STB/day) -> Pwf_BeggsBrill -> Pwf_HagedornBrown -> Δ "
+        "(HB − BB, psi):",
+    ]
+    for _q, _bb, _hb, _d in zip(qs_bb, ps_bb, ps_hb, deltas):
+        out.append(f"  q = {_q:g}  ->  BB = {_bb:.1f}  HB = {_hb:.1f}  "
+                   f"Δ = {_d:+.2f}")
+    out.append("")
+    out.append(f"Maximum |Δ| over the sweep: {max_delta:.1f} psi")
+    out.append("")
+    out.append("NOTE: Differences come entirely from the two independent")
+    out.append("correlation formulations (no shared equations). Inputs")
+    out.append("outside a correlation's published envelope are reported in")
+    out.append("that correlation's limitations; results are still computed.")
+    out.append("These are model-generated values, not measured data.")
+
+    png = None
+    if bool(kwargs.get("plot")):
+        png = generate_pvt_plot(
+            "vlp_compare_plot", qs_bb,
+            [ps_bb, ps_hb], None,
+            "VLP Comparison — Beggs-Brill vs Hagedorn-Brown",
+            labels=["Beggs-Brill (1973)", "Hagedorn-Brown (1965)"],
+        )
+        if png is None:
+            out.append("")
+            out.append("NOTE: could not generate the comparison plot.")
+        else:
+            out.append("")
+            out.append("Comparison plot attached (rate on X, required BHP on Y).")
     return "\n".join(out), png, None
 
 
@@ -1542,7 +1707,8 @@ def _common_string_keys(args_str: str, extra: Tuple[str, ...]
             continue
         _key, _, _val = _part.partition("=")
         _key, _val = _key.strip().lower(), _val.strip()
-        if _key in ("model", "plot", "type", "objective", "base_thp",
+        if _key in ("model", "plot", "vlp_model", "type", "objective",
+                    "base_thp",
                     "base_id", "base_wc", "base_gor",
                     "n_points") + extra + _LIST_KEYS:
             # Duplicate-key conflict: when the same key appears twice
@@ -1611,7 +1777,14 @@ def _vlp_kwargs_for_optimizer(kwargs: Dict[str, Any]
             "rs": kwargs["rs"], "api": kwargs["api"],
             "gamma_g": kwargs["gamma_g"], "mu_l": kwargs["mu_l"],
             "bo": kwargs["bo"], "t_wh": kwargs["t_wh"],
-            "geothermal": kwargs.get("geothermal", 1.5)}, None
+            "geothermal": kwargs.get("geothermal", 1.5),
+            "wc": kwargs.get("wc") if kwargs.get("wc") is not None else 0.0,
+            "gamma_w": kwargs.get("gamma_w", 1.07),
+            "bw": kwargs.get("bw", 1.01),
+            "z_factor": kwargs.get("z", 0.9),
+            "sigma": kwargs.get("sigma", 30.0),
+            "n_segments": int(kwargs.get("segments", 80))
+            if kwargs.get("segments") is not None else 80}, None
 
 
 def _fmt_wc_display(value: float) -> str:
@@ -1749,11 +1922,21 @@ def handle_calc_sensitivity(message: Dict[str, Any], tg
     vlp_kwargs, vlp_err = _vlp_kwargs_for_optimizer(kwargs)
     if vlp_err:
         return vlp_err, None, None
+    # VLP correlation selector (same normalize/validation as /calc vlp).
+    _vm = str(kwargs.get("vlp_model", "beggs_brill")).strip().lower()
+    try:
+        vlp_kwargs["vlp_model"] = vlp_engine._resolve_model(_vm)
+    except ValueError:
+        return ("Error: unknown vlp_model. Use 'beggs_brill' (default) or "
+                "'hagedorn_brown'."), None, None
     # --- Numeric conversion for the VLP block: the optimizer and VLP
     # engine expect float values; string tokens (other than the sweep
     # comma list, which the optimizer substitutes per scenario) must be
     # coerced here or arithmetic silently degrades.
+    _STRING_SKIP = ("vlp_model",)
     for _k in tuple(vlp_kwargs):
+        if _k in _STRING_SKIP:
+            continue  # kept as-is and passed through to nodal.solve
         _v = vlp_kwargs[_k]
         if isinstance(_v, str):
             if "," in _v:
@@ -1806,6 +1989,7 @@ def handle_calc_sensitivity(message: Dict[str, Any], tg
     lines.append("BASE CASE")
     if bp is not None and bp.nodal is not None:
         lines.append("  " + skey + " = " + _variable_label(variable, result.base_value))
+        lines.append(f"  VLP model: {bp.nodal.vlp_model}")
         lines.append(f"  Nodal status: {bp.nodal.status}")
         if bp.q_op is not None:
             lines.append(f"  q_op = {bp.q_op:.2f} STB/day")
@@ -1937,10 +2121,20 @@ def handle_calc_optimize(message: Dict[str, Any], tg
     vlp_kwargs, vlp_err = _vlp_kwargs_for_optimizer(kwargs)
     if vlp_err:
         return vlp_err, None, None
+    # VLP correlation selector (same normalize/validation as /calc vlp).
+    _vm = str(kwargs.get("vlp_model", "beggs_brill")).strip().lower()
+    try:
+        vlp_kwargs["vlp_model"] = vlp_engine._resolve_model(_vm)
+    except ValueError:
+        return ("Error: unknown vlp_model. Use 'beggs_brill' (default) or "
+                "'hagedorn_brown'."), None, None
     # --- Numeric conversion for the VLP block (same rule as the
     # sensitivity handler — skip the candidate key itself, whose list
     # the optimizer substitutes per candidate).
+    _STRING_SKIP = ("vlp_model",)
     for _k in tuple(vlp_kwargs):
+        if _k in _STRING_SKIP:
+            continue  # kept as-is and passed through to nodal.solve
         _v = vlp_kwargs[_k]
         if isinstance(_v, str):
             if "," in _v:
@@ -2007,6 +2201,7 @@ def handle_calc_optimize(message: Dict[str, Any], tg
             lines.append(f"    q_op = {c.point.q_op:.2f} STB/day, "
                          f"Pwf_op = {c.point.pwf_op:.2f} psia, "
                          f"residual {c.point.residual:.4f} psi")
+            lines.append(f"    VLP model: {c.point.nodal.vlp_model}")
         if c.review_required:
             lines.append("    REVIEW REQUIRED (multiple operating points "
                          "or non-convergence — no root selected "

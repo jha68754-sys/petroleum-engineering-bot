@@ -553,6 +553,15 @@ PVT_PLOT_RULES: Dict[str, PVTPlotRule] = {
         "plot_color": "#C0392B",
         "y_label": "Pressure (psia)",
     },
+    "vlp_compare_plot": {
+        "title_en": "VLP Model Comparison — Beggs-Brill vs Hagedorn-Brown",
+        "title_ar": "مقارنة نماذج أداء الرفع العمودي — بيغز-بريل مقابل هاجيدورن-براون",
+        "definition": "Overlay of required BHP from the two independent VLP correlations over the same rate sweep",
+        "x_axis": "Production Rate (STB/day)",
+        "y_axis": "Required BHP (psia)",
+        "plot_color": "#C0392B",
+        "y_label": "Required BHP (psia)",
+    },
     "nodal_plot": {
         "title_en": "Nodal Analysis (IPR vs VLP)",
         "title_ar": "التحليل العقدي (IPR مقابل VLP)",

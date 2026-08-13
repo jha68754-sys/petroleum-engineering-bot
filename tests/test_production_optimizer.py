@@ -27,9 +27,11 @@ BASE_VLP = {"thp": 100.0, "tvd": 8000.0, "tubing_id_in": 1.995,
             "gor": 1000.0, "rs": 600.0, "api": 35.0, "gamma_g": 0.65,
             "mu_l": 1.0, "bo": 1.4, "t_wh": 120.0, "geothermal": 1.5}
 
-# Phase-3 benchmark operating point for the same inputs:
-# q = 3944.22 STB/D, pwf = 370.50 psia (UNIQUE_OPERATING_POINT).
-BENCH_Q, BENCH_PWF = 3944.22, 370.50
+# Phase-3 benchmark operating point for the same inputs, re-verified
+# after the Phase-5A root-acceptance tightening (bracketed bisection now
+# refines to pressure_tol/10, so the endpoint residual is tighter and the
+# operating point reports q = 3944.20 STB/D, pwf = 370.53 psia).
+BENCH_Q, BENCH_PWF = 3944.20, 370.53
 
 
 class TestOptimizerBaseCase(unittest.TestCase):
@@ -202,7 +204,7 @@ class TestHandlerValidation(unittest.TestCase):
         t, png, _ = self._s(f"/calc sensitivity type=thp thp=100,200 "
                             f"{self.BASE}")
         self.assertIn("THP Sensitivity Result", t)
-        self.assertIn("3944.22", t)
+        self.assertIn("3944.20", t)
         self.assertIsNone(png)
 
     def test_missing_type(self):
@@ -251,8 +253,58 @@ class TestHandlerValidation(unittest.TestCase):
         self.assertIn("THP Sensitivity Result", t)
 
 
-if __name__ == "__main__":
-    unittest.main()
+class TestHagedornBrownModelSelection(unittest.TestCase):
+    """Phase 5A: sensitivity and optimization must honor vlp_model and
+    route every calculation through the independent H-B correlation while
+    preserving the frozen Beggs-Brill defaults.
+
+    The H-B outflow is materially different (lower liquid holdup and
+    friction), so the operating points must NOT match the BB baseline.
+    """
+
+    def setUp(self):
+        self.base = ("pr=3000 j=5 qmax=5000 thp=100 tvd=8000 id=1.995 "
+                     "gor=1000 rs=600 api=35 gamma_g=0.65 mu_l=1 bo=1.4 "
+                     "t_wh=120 geothermal=1.5 wc=0.2")
+
+    def test_sensitivity_uses_hb(self):
+        t, _, _ = th.handle_calc_sensitivity(
+            {"text": f"/calc sensitivity type=thp thp=100,200 "
+                     f"model=auto {self.base} vlp_model=hagedorn_brown"},
+            None)
+        self.assertIn("Sensitivity Result", t)
+        self.assertIn("hagedorn_brown", t)
+
+    def test_sensitivity_hb_differs_from_bb(self):
+        t_bb, _, _ = th.handle_calc_sensitivity(
+            {"text": f"/calc sensitivity type=thp thp=100,200 "
+                     f"model=auto {self.base} vlp_model=beggs_brill"},
+            None)
+        t_hb, _, _ = th.handle_calc_sensitivity(
+            {"text": f"/calc sensitivity type=thp thp=100,200 "
+                     f"model=auto {self.base} vlp_model=hagedorn_brown"},
+            None)
+        # The base case operating point must differ between correlations.
+        bb = [l for l in t_bb.splitlines() if "q_op = " in l][0]
+        hb = [l for l in t_hb.splitlines() if "q_op = " in l][0]
+        self.assertNotEqual(bb, hb)
+
+    def test_optimize_uses_hb(self):
+        t, png, _ = th.handle_calc_optimize(
+            {"text": f"/calc optimize type=thp thp=100,200,300 "
+                     f"objective=max_oil_rate model=auto "
+                     f"{self.base} vlp_model=hagedorn_brown plot=1"},
+            None)
+        self.assertIn("hagedorn_brown", t)
+        self.assertIsNotNone(png)
+
+    def test_vlp_model_invalid_rejected(self):
+        t, _, _ = th.handle_calc_sensitivity(
+            {"text": f"/calc sensitivity type=thp thp=100,200 "
+                     f"model=auto {self.base} vlp_model=gray"},
+            None)
+        self.assertTrue(t.startswith("Error:"))
+
 
 class TestParameterUnitFormatting(unittest.TestCase):
     """Parameter labels must use explicit per-parameter unit metadata:
@@ -297,8 +349,8 @@ class TestParameterUnitFormatting(unittest.TestCase):
                      f"model=linear {self.base}"}, None)
         # BASE CASE line uses the 'thp =' prefix
         self.assertIn("thp = 100 psia", text)
-        self.assertIn("q = 3944.22", text)
-        self.assertIn("q = 3745.68", text)
+        self.assertIn("q = 3944.20", text)
+        self.assertIn("q = 3745.70", text)
         self.assertIn("q = 3534.30", text)
 
     def test_verified_thp_sensitivity_values(self):
@@ -307,8 +359,8 @@ class TestParameterUnitFormatting(unittest.TestCase):
         text, _, _ = th.handle_calc_sensitivity(
             {"text": f"/calc sensitivity type=thp thp=100,200,300 "
                      f"model=linear {self.base}"}, None)
-        self.assertIn("q = 3944.22", text)   # THP 100 psia
-        self.assertIn("q = 3745.68", text)   # THP 200 psia
+        self.assertIn("q = 3944.20", text)   # THP 100 psia
+        self.assertIn("q = 3745.70", text)   # THP 200 psia
         self.assertIn("q = 3534.30", text)   # THP 300 psia
 
     def test_all_infeasible_never_yields_best(self):

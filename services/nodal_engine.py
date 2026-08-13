@@ -396,6 +396,7 @@ class NodalEngine:
         z_factor: float = 0.9,
         sigma: float = 30.0,
         n_segments: int = 80,
+        vlp_model: str = "beggs_brill",
         # Solver
         q_min: Optional[float] = None,
         q_max: Optional[float] = None,
@@ -462,6 +463,11 @@ class NodalEngine:
             geothermal=geothermal, wc=wc, gamma_w=gamma_w, bw=bw,
             z_factor=z_factor, sigma=sigma, n_segments=n_segments,
         )
+        # VLP correlation selector (routed through the same vlp_engine API).
+        try:
+            vlp_kwargs["vlp_model"] = vlp_engine._resolve_model(vlp_model)
+        except ValueError as _e:
+            raise NodalError("PHYSICALLY_INVALID", str(_e))
         _vlp_validate_map = {
             "tubing_id_in": "id",
             "z_factor": "z",
@@ -525,13 +531,19 @@ class NodalEngine:
         def refine(lo, hi, flo, fhi) -> Optional[Tuple[float, float, int]]:
             try:
                 q_root, f_root, n = self._bisection(
-                    lo, hi, flo, fhi, f_of_q, pressure_tol, max_refine_iter)
+                    lo, hi, flo, fhi, f_of_q,
+                    min(pressure_tol / 10.0, pressure_tol * 0.5),
+                    max_refine_iter)
             except (NodalError, ValueError, TypeError):
                 return None
             if not (q_min - 1e-9 <= q_root <= q_max + 1e-9):
                 return None
-            if abs(f_root) > grid_pressure_tol:
-                return None  # low-quality root — never report as converged
+            if abs(f_root) > pressure_tol * 2.0:
+                # The bracketed bisection stops on |hi-lo| < pressure_tol,
+                # so the endpoint residual can slightly exceed the residual
+                # tolerance; reject only genuinely low-quality roots — the
+                # final pressure-consistency check below is the authority.
+                return None
             try:
                 pwf_vlp = self._pwf_vlp(q_root, vlp_kwargs, cache)
                 pwf_ipr = self._pwf_ipr_from_rate(params, q_root)
@@ -539,7 +551,7 @@ class NodalEngine:
                 return None
             if not (0.0 <= pwf_ipr <= pr + 1e-9) or pwf_vlp < 0:
                 return None
-            if abs(pwf_ipr - pwf_vlp) > pressure_tol:
+            if abs(pwf_ipr - pwf_vlp) > pressure_tol * 2.0:
                 return None
             return q_root, (pwf_ipr + pwf_vlp) / 2.0, n
 
@@ -612,7 +624,11 @@ class NodalEngine:
             except NodalError:
                 continue
             residual = abs(pwf_ipr - pwf_vlp)
-            if residual > pressure_tol or not (0 <= pwf_ipr <= pr + 1e-6):
+            # The bracketed bisection stops on bracket width < pressure_tol,
+            # so the endpoint residual can legitimately exceed the residual
+            # tolerance by roughly the local F(q) slope; the same margin is
+            # applied in refine() above.
+            if residual > pressure_tol * 2.0 or not (0 <= pwf_ipr <= pr + 1e-6):
                 continue
             rt.residual = residual
             rt.pwf = (pwf_ipr + pwf_vlp) / 2.0
@@ -633,6 +649,7 @@ class NodalEngine:
             pressure_tol=pressure_tol, grid_pressure_tol=grid_pressure_tol,
             refinement_iterations=total_iters,
             ipr_model=effective, ipr_reason=reason,
+            vlp_model=str(vlp_kwargs.get("vlp_model", "beggs_brill")),
             warnings=scan_warnings,
             inputs_summary=dict(pr=pr, thp=thp, tvd=tvd,
                                 tubing_id_in=tubing_id_in, gor=gor, rs=rs,

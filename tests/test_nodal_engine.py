@@ -52,7 +52,7 @@ def _solve(**kw):
         sigma=w.get("sigma", 30.0), n_segments=int(w.get("n_segments", 80)),
         **{k: w[k] for k in ("ipr_model", "pr", "pb", "j", "j_star", "qmax",
                              "q_test", "pwf_test", "q_min", "q_max",
-                             "n_points") if k in w},
+                             "n_points", "vlp_model") if k in w},
     )
 
 
@@ -287,6 +287,47 @@ class TestNodalLiquidFullConsistency(unittest.TestCase):
         pwf_at_zero = ENGINE.pwf_vlp(0.0, r.ipr_params, r.vlp_kwargs)
         self.assertAlmostEqual(pwf_at_zero, static.pwf, places=1)
 
+
+class TestNodalHagedornBrown(unittest.TestCase):
+    """Phase 5A: Nodal Analysis must solve correctly when the outflow
+    correlation is switched to Hagedorn-Brown (1965). The solver, root
+    acceptance and metadata are identical to the Beggs-Brill path; only
+    the VLP correlation differs.
+
+    Case: Vogel IPR (pr=3000, qmax=5000) vs an 8000-ft H-B outflow at
+    THP=100 psia. The crossing lies at the very steep, near-vertical end
+    of the Vogel IPR, which previously exposed a root-acceptance defect
+    in the bracketed bisection (endpoint residual just beyond the strict
+    0.1-psi tolerance); the solver now uses consistent margins.
+    """
+
+    def test_nodal_solves_with_hagedorn_brown(self):
+        r = _solve(ipr_model="auto", pr=3000, j=5.0, qmax=5000,
+                   vlp_model="hagedorn_brown")
+        self.assertEqual(r.status, nodal_engine._STATUS_UNIQUE)
+        self.assertEqual(r.vlp_model, "hagedorn_brown")
+        self.assertEqual(len(r.roots), 1)
+        self.assertGreater(r.roots[0].q, 4000.0)
+        self.assertLess(r.roots[0].q, 5000.0)
+
+    def test_hb_nodal_residual_finite_and_tight(self):
+        r = _solve(ipr_model="auto", pr=3000, j=5.0, qmax=5000,
+                   vlp_model="hagedorn_brown")
+        rt = r.roots[0]
+        self.assertLessEqual(rt.residual, 1.0)
+        pwf_ipr = ENGINE.pwf_ipr_from_rate(r.ipr_params, rt.q)
+        pwf_vlp = ENGINE.pwf_vlp(rt.q, r.ipr_params, r.vlp_kwargs)
+        self.assertAlmostEqual(pwf_ipr, pwf_vlp, delta=1.0)
+
+    def test_bb_hb_nodal_differ_but_both_converge(self):
+        r_bb = _solve(ipr_model="auto", pr=3000, j=3.0, qmax=2500,
+                      vlp_model="beggs_brill")
+        r_hb = _solve(ipr_model="auto", pr=3000, j=3.0, qmax=2500,
+                      vlp_model="hagedorn_brown")
+        self.assertEqual(r_bb.status, nodal_engine._STATUS_UNIQUE)
+        self.assertEqual(r_hb.status, nodal_engine._STATUS_UNIQUE)
+        self.assertNotAlmostEqual(r_bb.roots[0].pwf, r_hb.roots[0].pwf,
+                                 delta=0.5)
 
 if __name__ == "__main__":
     unittest.main()

@@ -326,5 +326,103 @@ class TestMissingInputs(unittest.TestCase):
         self.assertIn("q", missing)
 
 
+class TestHagedornBrownRouting(unittest.TestCase):
+    """Hagedorn-Brown (1965) model selection and engine-level behavior.
+
+    The H-B model is an INDEPENDENT correlation (services/hagedorn_brown.py)
+    routed through the same traverse API. Beggs-Brill remains the default.
+    Benchmark HBB1 (multiphase, GOR > Rs) verified against the standalone
+    module and the published H-B gradient equations.
+    """
+
+    def test_hb_same_contract_as_bb(self):
+        """H-B traverse returns a full VLPResult with the same fields."""
+        res = vlp_engine.traverse(
+            100.0, 8000.0, 3000.0, 0.0, 1000.0, 1.4, 1.01, 0.9, 0.65,
+            1.07, 1.0, 35.0, 0.0, 1.995, 600.0, 120.0, 1.5,
+            vlp_model="hagedorn_brown")
+        self.assertEqual(res.status, "CONVERGED")
+        self.assertIsNotNone(res.pwf)
+        self.assertIsNotNone(res.components)
+        self.assertIn("elevation", res.components)
+        self.assertIn("friction", res.components)
+        # Different correlation -> different BHP (not the BB benchmark).
+        self.assertNotAlmostEqual(res.pwf, 356.5, delta=2.0)
+
+    def test_hb_liquid_full_friction_small(self):
+        """GOR = Rs, liquid-full: friction tiny, hydrostatic dominates.
+
+        Matches the documented liquid-full benchmark Pwf = 2412.7 psia
+        within correlation-formulation tolerance; liquid-full columns give
+        almost identical results in both correlations (holdup ~ 1 in both).
+        """
+        res = vlp_engine.traverse(
+            100.0, 8000.0, 3000.0, 0.0, 600.0, 1.4, 1.01, 0.9, 0.65,
+            1.07, 1.0, 35.0, 0.0, 1.995, 600.0, 120.0, 1.5,
+            vlp_model="hagedorn_brown")
+        self.assertEqual(res.status, "CONVERGED")
+        # H-B holds hl = 1 exactly for liquid-full flow (no slip/no
+        # correction), so friction is effectively zero and the column is
+        # pure hydrostatic. Independent check with the same Brown-form
+        # liquid density: gradient = 41.73 * 32.174/32.174/144 = 0.2898
+        # psi/ft -> Pwf = 100 + 0.2898*8000 = 2414.8 psia.
+        self.assertAlmostEqual(res.pwf, 2414.8, places=0)
+        self.assertGreater(res.components["elevation"], 2000.0)
+        self.assertAlmostEqual(res.friction_psi, 0.0, places=3)
+
+    def test_hb_static_zero_rate(self):
+        """q = 0 -> static liquid column, friction = 0 (regression)."""
+        res = vlp_engine.traverse(
+            100.0, 8000.0, 0.0, 0.0, 1000.0, 1.4, 1.01, 0.9, 0.65,
+            1.07, 1.0, 35.0, 0.0, 1.995, 600.0, 120.0, 1.5,
+            vlp_model="hagedorn_brown")
+        self.assertEqual(res.status, "CONVERGED")
+        self.assertEqual(res.friction_psi, 0.0)
+        self.assertGreater(res.pwf, 100.0)
+
+    def test_bb_default_unchanged(self):
+        """Default (no vlp_model) stays on the frozen Beggs-Brill path."""
+        res1 = vlp_engine.traverse(
+            100.0, 8000.0, 3000.0, 0.0, 1000.0, 1.4, 1.01, 0.9, 0.65,
+            1.07, 1.0, 35.0, 0.0, 1.995, 600.0, 120.0, 1.5)
+        res2 = vlp_engine.traverse(
+            100.0, 8000.0, 3000.0, 0.0, 1000.0, 1.4, 1.01, 0.9, 0.65,
+            1.07, 1.0, 35.0, 0.0, 1.995, 600.0, 120.0, 1.5,
+            vlp_model=None)
+        res3 = vlp_engine.traverse(
+            100.0, 8000.0, 3000.0, 0.0, 1000.0, 1.4, 1.01, 0.9, 0.65,
+            1.07, 1.0, 35.0, 0.0, 1.995, 600.0, 120.0, 1.5,
+            vlp_model="beggs_brill")
+        self.assertAlmostEqual(res1.pwf, res2.pwf, places=10)
+        self.assertAlmostEqual(res1.pwf, res3.pwf, places=10)
+
+    def test_invalid_model_rejected(self):
+        with self.assertRaises(ValueError):
+            vlp_engine.traverse(
+                100.0, 8000.0, 1000.0, 0.0, 1000.0, 1.4, 1.01, 0.9, 0.65,
+                1.07, 1.0, 35.0, 0.0, 1.995, 600.0, 120.0, 1.5,
+                vlp_model="gray")
+
+    def test_hb_curve_generation(self):
+        """vlp_curve with H-B produces a monotone curve with a static point."""
+        qs, ps = vlp_engine.vlp_curve(
+            100.0, 8000.0, 1000.0, 1.4, 1.01, 0.9, 0.65, 1.07, 1.0,
+            35.0, 0.0, 1.995, 600.0, 120.0, 1.5, 0.0, 5000.0, 6,
+            vlp_model="hagedorn_brown")
+        self.assertEqual(len(ps), 6)
+        for i in range(1, len(ps)):
+            self.assertGreaterEqual(ps[i], ps[i - 1])
+
+    def test_hb_applicability_warnings(self):
+        """Inputs outside the published H-B envelope emit warnings."""
+        res = vlp_engine.traverse(
+            100.0, 8000.0, 3000.0, 0.0, 600.0, 1.4, 1.01, 0.9, 0.65,
+            1.07, 1.0, 35.0, 0.0, 1.995, 600.0, 120.0, 1.5,
+            vlp_model="hagedorn_brown")
+        kinds = [w for w in res.warnings if w.startswith(
+            "CORRELATION_LIMITATION")]
+        self.assertGreater(len(kinds), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
