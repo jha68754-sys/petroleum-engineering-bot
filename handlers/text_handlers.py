@@ -34,6 +34,7 @@ from services.calculation_engine import parse_kv_args
 from services.visualization import format_plot_response, generate_pvt_plot
 from services.production_engine import IPREngine, MODEL_DISPLAY
 from services import vlp_engine
+from services import nodal_engine
 from logging_config import get_logger
 
 
@@ -156,6 +157,14 @@ def handle_calc(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Opti
         # string keys (plot=) are kept before numeric parsing.
         text, png, caption = handle_calc_vlp(
             {"text": "/vlp " + args_str}, tg
+        )
+        return text, png, caption
+    if formula_key.lower() == "nodal":
+        # Deterministic Production Nodal Analysis (Phase 3: orchestrator over
+        # the verified IPR + VLP engines); kept separate from EXACT_FORMULAS
+        # for the same parse_kv_args caution (model=, plot= string keys).
+        text, png, caption = handle_calc_nodal(
+            {"text": "/nodal " + args_str}, tg
         )
         return text, png, caption
 
@@ -549,6 +558,317 @@ def _vlp_result_lines(thp: float, tvd: float, q_o: float, q_w: float,
     lines.append("NOTE: Results are CALCULATED (Beggs-Brill 1973 correlation with a\n"
                  "segmented midpoint traverse), not measured data.")
     return lines
+
+
+# ---------------------------------------------------------------------------
+# /calc nodal  —  Deterministic Nodal Analysis (Phase 3)
+# ---------------------------------------------------------------------------
+_NODAL_USAGE = (
+    "Usage: /calc nodal [model=auto|linear|vogel|composite] [plot=1] "
+    "key=value ...\n\n"
+    "Required IPR inputs (one of the following):\n"
+    "  Linear:   pr j\n"
+    "  Vogel:    pr qmax (or pr q_test pwf_test — inverted)\n"
+    "  Composite:pr pb q_test pwf_test\n"
+    "Required VLP inputs (all):\n"
+    "  thp tvd id gor api gamma_g mu_l bo rs t_wh geothermal\n"
+    "Optional VLP inputs:\n"
+    "  wc (default 0)  gamma_w (1.07)  bw (1.01)  z (0.9)\n"
+    "  sigma (30 dyne/cm)  segments (80)\n"
+    "Solver inputs:\n"
+    "  q_min (default 0)  q_max (default IPR theoretical maximum)\n"
+    "  n_points (default 201)\n\n"
+    "Examples:\n"
+    "  /calc nodal model=auto pr=3000 pb=2200 q_test=900 pwf_test=2400 \\\n"
+    "      thp=100 tvd=8000 id=1.995 gor=1000 rs=600 api=35 gamma_g=0.65 \\\n"
+    "      mu_l=1 bo=1.4 t_wh=120 geothermal=1.5 plot=1\n"
+    "  /calc nodal model=vogel pr=3000 qmax=1500 thp=100 tvd=8000 \\\n"
+    "      id=1.995 gor=1000 rs=600 api=35 gamma_g=0.65 mu_l=1 bo=1.4 \\\n"
+    "      t_wh=120 geothermal=1.5 plot=1\n"
+    "  /calc nodal model=linear pr=3000 j=1.5 thp=100 tvd=8000 id=1.995 \\\n"
+    "      gor=1000 rs=600 api=35 gamma_g=0.65 mu_l=1 bo=1.4 t_wh=120 \\\n"
+    "      geothermal=1.5"
+)
+_NODAL_HINTS = {
+    "pr": "Reservoir pressure (psia)",
+    "pb": "Bubble-point pressure (psia) — enables Composite/automatic selection",
+    "j": "Productivity index (STB/day/psi) — for Linear IPR",
+    "qmax": "Absolute open flow potential qmax (STB/day) — for Vogel IPR",
+    "q_test": "Measured test rate (STB/day)",
+    "pwf_test": "Measured test flowing pressure (psia)",
+    "thp": "Tubing-head pressure (psia)",
+    "tvd": "True vertical depth (ft)",
+    "id": "Tubing inside diameter (in)",
+    "gor": "Produced GOR (scf/STB)",
+    "api": "Oil API gravity",
+    "gamma_g": "Gas specific gravity (air = 1)",
+    "mu_l": "Liquid viscosity (cP)",
+    "bo": "Oil FVF (rb/STB)",
+    "rs": "Solution GOR (scf/STB)",
+    "t_wh": "Wellhead temperature (degF)",
+    "geothermal": "Geothermal gradient (degF/100 ft)",
+}
+
+
+def _nodal_missing_message(missing: List[str]) -> str:
+    lines = ["Cannot run Nodal Analysis yet: missing data."]
+    lines.append("")
+    lines.append("Required (not provided):")
+    for k in missing:
+        hint = _NODAL_HINTS.get(k, "")
+        lines.append(f"  \u2022 {k}" + (f" ({hint})" if hint else ""))
+    lines.append("")
+    lines.append(_NODAL_USAGE)
+    return "\n".join(lines)
+
+
+def _nodal_result_lines(result: nodal_engine.NodalResult) -> List[str]:
+    lines = ["Nodal Analysis Result", "=" * 50]
+    lines.append("Status: " + result.status)
+    lines.append("")
+    if result.status == nodal_engine._STATUS_UNIQUE:
+        rt = result.roots[0]
+        lines.append("Operating point:")
+        lines.append(f"  q  = {rt.q:.2f} STB/day")
+        lines.append(f"  Pwf = {rt.pwf:.2f} psia")
+        lines.append(f"  Residual |Pwf_IPR - Pwf_VLP| = {rt.residual:.4f} psi")
+        if rt.slope_sign:
+            lines.append(f"  Stability (interpretation only): {rt.slope_sign}")
+    elif result.status == nodal_engine._STATUS_MULTIPLE:
+        lines.append(f"{len(result.roots)} operating points detected:")
+        for rt in result.roots:
+            stab = rt.slope_sign or "unknown"
+            lines.append(f"  ({rt.index}) q = {rt.q:.2f} STB/day, "
+                         f"Pwf = {rt.pwf:.2f} psia, "
+                         f"residual {rt.residual:.4f} psi, stability: {stab}")
+        lines.append("")
+        for w in result.warnings:
+            lines.append(f"NOTE: {w}")
+    elif result.status == nodal_engine._STATUS_NONE:
+        lines.append("No operating point found in the analyzed range.")
+        if result.reason:
+            lines.append("Reason: " + result.reason)
+    lines.append("")
+    lines.append(f"Inflow model: {result.ipr_model} — {result.ipr_reason}")
+    lines.append(f"Outflow model: {result.vlp_model}")
+    lines.append(f"Rate range analyzed: {result.q_min:g} .. {result.q_max:g} "
+                 f"STB/day ({result.n_scan_points} scan points)")
+    lines.append(f"Solver: {result.root_method} "
+                 f"(pressure tolerance {result.pressure_tol:g} psi)")
+    if result.warnings:
+        lines.append("")
+        lines.append("Solver warnings:")
+        for w in result.warnings:
+            lines.append(f"  \u2022 {w}")
+    lines.append("")
+    lines.append("NOTE: Results are CALCULATED (verified deterministic IPR "
+                 "and VLP engines coupled by a bracketed root solver), "
+                 "not measured data.")
+    return lines
+
+
+@registry.register("nodal", aliases=["ipr_vlp", "node"])
+def handle_calc_nodal(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
+    """Handle /calc nodal [model=...] [plot=1] key=value ... — deterministic
+    Nodal Analysis (orchestrator over the verified IPR + VLP engines).
+
+    Reachable via /calc nodal (dispatched through handle_calc) or directly
+    as /nodal with the same key=value syntax.
+    """
+    text = message.get("text", "")
+    first_space = text.find(" ")
+    args_str = text[first_space + 1:] if first_space >= 0 else ""
+    # parse_kv_args silently drops non-numeric values (model=, plot=), so
+    # keep string keys first, then numeric kv parsing (same as IPR/VLP).
+    kwargs: Dict[str, Any] = {}
+    if args_str and args_str.strip():
+        for _part in args_str.split():
+            if "=" not in _part:
+                continue
+            _key, _, _val = _part.partition("=")
+            _key, _val = _key.strip().lower(), _val.strip()
+            if _key in ("model", "plot"):
+                kwargs[_key] = _val
+                continue
+    _numeric = parse_kv_args(args_str)
+    if isinstance(_numeric, dict):
+        _numeric.update(kwargs)
+        kwargs = _numeric
+
+    # --- Hard validation (guardrails) ---
+    ipr_model = (kwargs.get("model") or "auto").lower()
+    if ipr_model not in ("auto", "linear", "vogel", "composite"):
+        return ("Error: model must be one of auto, linear, vogel, composite.\n\n"
+                + _NODAL_USAGE), None, None
+
+    # Required inputs per mode (single-solve mode). Build the list of
+    # MISSING keys only — never add a key that is already supplied.
+    required = []
+    if kwargs.get("pr") is None:
+        required.append("pr")
+    q_test = kwargs.get("q_test")
+    pwf_test = kwargs.get("pwf_test")
+    test_pair = q_test is not None and pwf_test is not None
+    if ipr_model == "auto":
+        if not test_pair:
+            # Without a test point the user must give a slope (j) or qmax so
+            # the inflow curve can be anchored; pb stays optional.
+            if kwargs.get("j") is None and kwargs.get("qmax") is None:
+                required += ["j", "q_test", "pwf_test"]
+            # Without Pb the engine's auto policy resolves to Vogel IPR,
+            # which needs qmax (or the test pair) — j alone cannot anchor it.
+            elif kwargs.get("pb") is None and kwargs.get("qmax") is None:
+                required.append("qmax")
+    elif ipr_model == "linear":
+        if kwargs.get("j") is None:
+            if test_pair:
+                required += ["q_test", "pwf_test"]
+            else:
+                required += ["j", "q_test", "pwf_test"]
+    elif ipr_model == "vogel":
+        if kwargs.get("qmax") is None:
+            if test_pair:
+                required += ["q_test", "pwf_test"]
+            else:
+                required += ["qmax", "q_test", "pwf_test"]
+    else:  # composite — always needs the test point + pb
+        for _k in ("q_test", "pwf_test", "pb"):
+            if kwargs.get(_k) is None:
+                required.append(_k)
+
+    vlp_required = ["thp", "tvd", "id", "gor", "api", "gamma_g", "mu_l",
+                    "bo", "rs", "t_wh", "geothermal"]
+    for k in vlp_required:
+        if kwargs.get(k) is None:
+            required.append(k)
+    # Deduplicate preserving order.
+    required = list(dict.fromkeys(required))
+    if required:
+        return _nodal_missing_message(required), None, None
+
+    # --- Float conversion ---
+    try:
+        floats = {}
+        for _k in ("pr", "pb", "j", "qmax", "q_test", "pwf_test", "thp", "tvd",
+                   "id", "gor", "api", "gamma_g", "mu_l", "bo", "rs", "t_wh",
+                   "geothermal", "wc", "gamma_w", "bw", "z", "sigma",
+                   "segments", "q_min", "q_max", "n_points"):
+            _v = kwargs.get(_k)
+            if _v is not None:
+                floats[_k] = float(_v)
+    except (TypeError, ValueError):
+        return ("Error: all parameter values must be numeric.\n\n"
+                + _NODAL_USAGE), None, None
+
+    try:
+        wc = floats.get("wc", 0.0)
+        if not (0.0 <= wc <= 1.0):
+            return "Error: wc must be between 0 and 1.", None, None
+        if floats.get("q_min") is not None and floats["q_min"] < 0:
+            return "Error: q_min must be >= 0.", None, None
+        if (floats.get("q_min") is not None and
+                floats.get("q_max") is not None and
+                floats["q_min"] >= floats["q_max"]):
+            return "Error: q_min must be < q_max.", None, None
+        if floats.get("n_points") is not None:
+            if floats["n_points"] != int(floats["n_points"]) or \
+                    floats["n_points"] < 2:
+                return "Error: n_points must be an integer >= 2.", None, None
+
+        engine = nodal_engine.NodalEngine()
+        result = engine.solve(
+            ipr_model=ipr_model,
+            pr=floats["pr"],
+            pb=floats.get("pb"),
+            j=floats.get("j"),
+            qmax=floats.get("qmax"),
+            q_test=floats.get("q_test"),
+            pwf_test=floats.get("pwf_test"),
+            thp=floats["thp"], tvd=floats["tvd"],
+            tubing_id_in=floats["id"], gor=floats["gor"], rs=floats["rs"],
+            api=floats["api"], gamma_g=floats["gamma_g"],
+            mu_l=floats["mu_l"], bo=floats["bo"], t_wh=floats["t_wh"],
+            geothermal=floats.get("geothermal", 1.5),
+            wc=wc, gamma_w=floats.get("gamma_w", 1.07),
+            bw=floats.get("bw", 1.01), z_factor=floats.get("z", 0.9),
+            sigma=floats.get("sigma", 30.0),
+            n_segments=int(floats.get("segments", 80)),
+            q_min=floats.get("q_min"),
+            q_max=floats.get("q_max"),
+            n_points=int(floats.get("n_points", 201)),
+        )
+    except nodal_engine.NodalError as _e:
+        _msg = str(_e)
+        if "PHYSICALLY_INVALID" in _msg:
+            return ("Engineering Guardrail — inputs rejected as physically "
+                    "invalid.\n" + _msg), None, None
+        return ("Engineering Guardrail — inputs rejected.\n" + _msg), None, None
+    except Exception as _e:
+        return f"Nodal analysis error: {_e}. Please check your inputs.", \
+            None, None
+
+    # --- Build IPR + VLP curves for the calculated Nodal plot ---
+    # Curve points go through the engine's OWN inverters with the SAME
+    # resolved params and VLP kwargs the solver used — no duplicated
+    # calibration (j_star) or inversion logic.
+    q_min_v = result.q_min
+    q_max_v = result.q_max
+    n_pts = 20
+    qs_curve, ps_ipr, ps_vlp = [], [], []
+    try:
+        if result.ipr_params is not None and result.vlp_kwargs is not None:
+            for i in range(n_pts):
+                q_total = q_min_v + (q_max_v - q_min_v) * i / (n_pts - 1)
+                qs_curve.append(q_total)
+                try:
+                    ps_ipr.append(engine.pwf_ipr_from_rate(
+                        result.ipr_params, q_total))
+                except nodal_engine.NodalError:
+                    ps_ipr.append(None)
+                try:
+                    ps_vlp.append(engine.pwf_vlp(
+                        q_total, result.ipr_params, result.vlp_kwargs))
+                except nodal_engine.NodalError:
+                    ps_vlp.append(None)
+    except Exception:
+        qs_curve, ps_ipr, ps_vlp = [], [], []
+
+    # --- Response ---
+    out = _nodal_result_lines(result)
+    out.append("")
+    out.append("Calculated Nodal curve points (rate on X):")
+    for _q, _p_ipr, _p_vlp in zip(qs_curve, ps_ipr, ps_vlp):
+        if _p_vlp is None:
+            out.append(f"  q = {_q:g}  IPR Pwf = {_p_ipr:.1f}  VLP = N/C")
+        else:
+            out.append(f"  q = {_q:g}  IPR Pwf = {_p_ipr:.1f}  "
+                       f"VLP Pwf = {_p_vlp:.1f}")
+    png = None
+    if bool(kwargs.get("plot")) and qs_curve:
+        clean_vlp = [_v for _v in ps_vlp if _v is not None]
+        clean_q = [q for q, v in zip(qs_curve, ps_vlp) if v is not None]
+        clean_ipr = [p for p, v in zip(ps_ipr, ps_vlp) if v is not None]
+        png = generate_pvt_plot(
+            "nodal_plot", clean_q,
+            [clean_ipr, clean_vlp], None,
+            f"Calculated Nodal Analysis — {result.ipr_model} IPR vs VLP",
+            labels=["IPR (inflow)", "VLP (outflow)"],
+        )
+        if png is None:
+            out.append("")
+            out.append("NOTE: could not generate the calculated Nodal plot.")
+        else:
+            out.append("")
+            out.append("Calculated Nodal Plot attached: IPR and VLP curves "
+                       "(rate on X, BHP on Y); the intersection is the "
+                       "operating point.")
+            out.append("This is a model-generated curve, not measured data.")
+            if result.status == nodal_engine._STATUS_UNIQUE:
+                out.append("")
+                out.append("Operating point: q = "
+                           f"{result.roots[0].q:.2f} STB/day, Pwf = "
+                           f"{result.roots[0].pwf:.2f} psia.")
+    return "\n".join(out), png, None
 
 
 @registry.register("vlp")
