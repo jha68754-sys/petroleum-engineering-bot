@@ -2,9 +2,9 @@
 
 **Baseline:** commit `c5fc976` (2026-08-13), branch `main`, repository [jha68754-sys/petroleum-engineering-bot](https://github.com/jha68754-sys/petroleum-engineering-bot), deployed on Railway with automatic GitHub→Railway deployment.
 
-**Final regression suite: 160 tests, all passing, zero failures, zero test warnings.**
+**Final regression suite: 161 tests, all passing, zero failures, zero test warnings.**
 
-**FINAL STATUS: PHASE 5A IMPLEMENTED — AWAITING OWNER LIVE VERIFICATION**
+**FINAL STATUS: PHASE 5A NOT VERIFIED — AWAITING CORRECTED OWNER LIVE TEST** (live-verification audit Aug 13, 2026 found a holdup-formulation defect in H-B Revision 1 and a circular benchmark; both corrected in Revision 2 — see `HAGEDORN_BROWN_ENGINEERING_MODEL.md`)
 
 This document records the verified architecture as it stands after Phase 4 closeout. It is the single source of truth for what is implemented, tested, deployed, and live-verified.
 
@@ -18,7 +18,7 @@ This document records the verified architecture as it stands after Phase 4 close
 | Phase 2 | VLP engine (Beggs–Brill 1973, segmented pressure traverse, bisection Pwf solver) | IMPLEMENTED, TESTED, DEPLOYED, LIVE TELEGRAM VERIFIED, FROZEN |
 | Phase 3 | Nodal Analysis (IPR–VLP coupling, grid-scan + bracketed bisection, 0/1/multiple intersections, calculated overlay plot) | IMPLEMENTED, TESTED, DEPLOYED, LIVE TELEGRAM VERIFIED, FROZEN |
 | Phase 4 | Production Sensitivity & Optimization (deterministic sweeps, constraints, objectives, calculated plots) | IMPLEMENTED, TESTED, DEPLOYED, LIVE TELEGRAM VERIFIED, FROZEN |
-| Phase 5A | Hagedorn–Brown (1965) VLP correlation: independent module, `vlp_model=` selection across all production commands, `/calc vlp_compare` dual-model overlay | IMPLEMENTED, TESTED — AWAITING OWNER LIVE VERIFICATION (Railway auto-deploy pending) |
+| Phase 5A | Hagedorn–Brown (1965) VLP correlation (Revision 2 after live-verification audit): independent module, `vlp_model=` selection across all production commands, `/calc vlp_compare` dual-model overlay | IMPLEMENTED, TESTED — AWAITING CORRECTED OWNER LIVE TEST |
 
 ## 2. Deterministic engines
 
@@ -60,24 +60,25 @@ Both the deterministic and AI layers enforce engineering guardrails: positive pr
 | Water-cut sensitivity 0.5 / 1.0 | q = 3825.00 / 3691.89 STB/D |
 | Optimization BEST FEASIBLE (id 3.0 in) | q = 4038.97 STB/D, Pwf = 307.36 psia |
 | min_pwf = 10000 psia constraint | ALL CANDIDATES INFEASIBLE, no best candidate |
-| VLP liquid-full benchmark (thp 100, tvd 8000, q 3000, GOR = Rs) | BB: Pwf = 2412.7 psia; HB: Pwf = 2414.8 psia (hl = 1 exact, friction ≈ 0) |
-| VLP multiphase sweep BB vs HB (thp 100, tvd 8000, id 1.995, GOR 1000) | HB BHP consistently lower than BB by 180–400 psi across 260–2000 STB/D (H-B gives lighter liquid holdup / lower friction in this regime) |
+| VLP liquid-full benchmark (thp 100, tvd 8000, q 3000, GOR = Rs = 600, id 1.995 — extrapolation) | BB: Pwf = 2412.7 psia; HB: Pwf = 2414.8 psia (hl = 1 exact, friction ≈ 0; matches independent analytical hydrostatic 2414.9 psia) |
+| VLP two-phase GOR > Rs (thp 100, tvd 8000, id 1.995, GOR 1000, Rs 600) | HB: Pwf ≈ 128 psia — published H-B density-ratio behavior (no-slip ρ_s in elevation; gas-dominated column); outside the published test envelope, flagged `CORRELATION_LIMITATION` |
+| HB correction audit (Aug 13, 2026) | Revision 1 holdup group (N_RE-based, missing pressure/diameter groups) replaced by the verbatim published form (N_GV^0.575, (p/14.7)^0.1, N_D, C_NL from N_L); circular 2414.8 benchmark replaced by independent analytical hydrostatic; published-form test added |
 
 Full details: `PRODUCTION_ENGINEERING_PHASE1_IPR_MODEL.md` (Phase 1 doc), `VLP_ENGINEERING_MODEL.md`, `NODAL_ENGINEERING_MODEL.md`, `PRODUCTION_OPTIMIZATION_MODEL.md` (Section 7), `HAGEDORN_BROWN_ENGINEERING_MODEL.md` (Phase 5A).
 
-## 6. Test inventory (160 total)
+## 6. Test inventory (161 total)
 
 | Module | Tests |
 |---|---|
 | IPR engine | 37 |
-| VLP engine | 37 (incl. 7 Hagedorn–Brown routing/regression tests) |
+| VLP engine | 38 (incl. 8 Hagedorn–Brown routing/regression tests, including an independent published-holdup-form check) |
 | Nodal engine | 21 (incl. 3 Hagedorn–Brown nodal tests) |
 | Production optimizer (incl. unit formatting) | 38 (incl. 4 Hagedorn–Brown model-selection tests) |
 | Engineering corrections / NPV & Z-factor / plot shape / artificial-lift guards | 27 |
 
 ## 7. Known limitations (transparent)
 
-1. **VLP correlations:** Beggs–Brill (1973, default) plus Hagedorn–Brown (1965) via `vlp_model=`; H-B inputs outside its published applicability envelope (tubing ID, GOR) emit `CORRELATION_LIMITATION` warnings — results at those edges are indicative, not authoritative.
+1. **VLP correlations:** Beggs–Brill (1973, default) plus Hagedorn–Brown (1965, Revision 2) via `vlp_model=`; H-B inputs outside its published applicability envelope (tubing ID 1.0–1.5 in, liquid rate 50–1200 STB/D, GOR 0–2000 scf/STB) emit `CORRELATION_LIMITATION` warnings — results at those edges are indicative, not authoritative.
 2. **VLP fluid model:** constant Rs at average pressure; no pressure-dependent Rs evolution; vertical/uphill only (θ saturation).
 3. **Nodal multiple intersections:** the non-monotonic (liquid-loading dip) path exists for future correlations; the verified Beggs–Brill and H-B configurations remain monotonic in tested ranges.
 4. **Auto IPR without Pb** defaults to Vogel and requires qmax or a test point — documented behavior, not a defect.

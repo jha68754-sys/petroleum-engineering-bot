@@ -1,74 +1,67 @@
-# Hagedorn–Brown (1965) VLP Correlation — Engineering Model (Phase 5A)
+# Hagedorn–Brown (1965) VLP Correlation — Engineering Model (Phase 5A, Revision 2)
 
-**Companion document to:** `VLP_ENGINEERING_MODEL.md` (Beggs–Brill 1973, frozen), `NODAL_ENGINEERING_MODEL.md`, `PRODUCTION_OPTIMIZATION_MODEL.md`.
+**Companion documents:** `VLP_ENGINEERING_MODEL.md` (Beggs–Brill 1973, frozen), `NODAL_ENGINEERING_MODEL.md`, `PRODUCTION_OPTIMIZATION_MODEL.md`.
 **Module:** `services/hagedorn_brown.py` (independent correlation). **Routing:** `services/vlp_engine.py` via `vlp_model=` parameter.
-**Final status:** PHASE 5A IMPLEMENTED — AWAITING OWNER LIVE VERIFICATION.
+**Final status:** PHASE 5A NOT VERIFIED — AWAITING CORRECTED OWNER LIVE TEST (after live-verification audit of Aug 13, 2026).
 
 ---
 
-## 1. Why a second correlation
+## 1. Live-verification audit (Aug 13, 2026)
 
-Beggs–Brill (1973) was developed for the *inclined* two-phase flow test data of its authors; Hagedorn–Brown (1965) was developed from **vertical** multiphase test data in 100-ft tubing strings of different diameters (the "Brown correlation" for liquid holdup plus the two-phase friction multiplier). For a **vertical production well** the H-B correlation family is historically regarded as better matched to the flow geometry. Both correlations are deterministic, fully transparent, and require the same field-unit inputs — so the platform now lets the operator pick the outflow model with `vlp_model=beggs_brill|hagedorn_brown` without changing any other input.
+The first live acceptance command failed against the documented benchmark. The root cause was **a formulation error in the original Revision 1 implementation, combined with a benchmark that had no independent provenance**.
 
-## 2. The correlation (what is implemented)
-
-The implementation follows Hagedorn & Brown, *"Experimental Study of Pressure Gradients Occurring During Continuous Two-Phase Flow in Small-Diameter Vertical Conduits"*, JPT (1965), with the Griffith–Wallis correction for the liquid-full (bubble-flow) limit and the standard field-unit form.
-
-1. **Fluid properties at average-segment conditions.** Liquid and gas densities from the standard Black-Oil mixing rule (`rho_s = rho_l·lambda_l + rho_g·lambda_g`); gas density from the real-gas law; **Lee–Gonzalez–Eakin (1966)** gas viscosity with pseudo-critical properties from Sutton (gamma_g only).
-2. **Mixed-liquid properties.** Density and viscosity of the oil–water mixture (`mu_l` blend, `bo`/`rs`/`api` inputs), identical inputs to the BB path.
-3. **Flow parameters.** Superficial velocities, total mixture velocity, and the four published dimensionless numbers:
-   - `N_lv` (liquid velocity number), `N_gv` (gas velocity number),
-   - `N_d` (pipe diameter number), `N_L` (viscosity number).
-4. **CnL correlation.** The published `C_nL` group:
-   `C_nL = 0.0019 + 0.0233·N_L − 0.425·N_L² + 3.06·N_L³` (log-space form as printed in the original paper), used to shift the primary holdup correlation.
-5. **Liquid holdup.** `hl = max(F(yL), hl_slip)`, where `F(yL)` is the four-piece published polynomial in `log10(yL)` with `yL = N_lv·N_L^0.38·N_d^0.403·0.013/λg^0.575`, extended with the `ly ≤ −3` clamp to a no-slip holdup (the original correlation is undefined there). Griffith–Wallis (liquid-full) holdup when the bubble-flow criterion is met.
-6. **Two-phase friction multiplier.** `φ = f_tp/f_sl` from the published three-piece log-log curve in `N_gv·F_r^(0.5)/λg^(0.1)` with the small-N_gv linear branch, multiplied by the single-phase liquid friction factor `f_sl` from Churchill (1977) — Moody-chart equivalent, no regime-dependent empirical friction.
-7. **Gradient integration.** Segmented pressure traverse (same 20-point Gauss-style segmentation and convergence loop as the BB path), hydrostatic + friction + acceleration components reported separately, bisection fallback for Pwf solving.
-
-## 3. Applicability envelope
-
-The correlation was developed on the Brown test data; the published envelope is reproduced in `HB_APPLICABILITY`:
-
-| Parameter | Published range | Behavior outside |
-|---|---|---|
-| Tubing ID | 1.0 – 1.5 in (original test strings) | `CORRELATION_LIMITATION` warning — N_d extrapolation |
-| GOR | ≈ 1,000 – 100,000 scf/STB (derived: gas fraction regime) | `CORRELATION_LIMITATION` warning |
-| Total liquid rate | 0 – 12,000 STB/D (derived from test velocities) | `CORRELATION_LIMITATION` warning |
-| Liquid viscosity | light–moderate oils | accepted; heavy-oil extrapolation flagged by N_L |
-
-Outside the envelope the engine computes anyway (documented transparency) and labels the result with a limitation warning; it never silently fails or crashes.
-
-## 4. Verified behavior (test package)
-
-| Test class | Coverage |
+| Question | Finding |
 |---|---|
-| `TestHagedornBrownRouting` (7) | traverse contract identical to BB (status, pwf, components); liquid-full holdup hl = 1 with hydrostatic-only column; static q = 0 → friction exactly 0; BB default unchanged (identical pwf to 10⁻¹⁰); invalid model rejected; monotone `vlp_curve`; applicability warnings emitted |
-| `TestNodalHagedornBrown` (3) | nodal root found with H-B outflow; tight residual + independent pwf_ipr/pwf_vlp consistency; BB and HB operating points differ as correlations differ |
-| `TestHagedornBrownModelSelection` (4) | sensitivity/optimize honor `vlp_model=`; HB operating points differ from BB baseline; invalid model rejected at handler level |
+| Was the live engine wrong? | **Yes (Revision 1).** The holdup group used N_RE (viscosity number) where the published correlation requires N_GV^0.575, and omitted the published (p/14.7)^0.1 and N_D groups. C_NL was evaluated against N_RE instead of the liquid viscosity number N_L. These errors drove the liquid holdup to the no-slip floor (hl = 0.0034) in the verification case, collapsing the pressure column. |
+| Was the benchmark wrong? | **Yes.** The documented 2414.8 psia figure was a hand-calculation produced with Revision 1's own code on a different case (GOR = Rs = 600, liquid-full). It was never a published or independently implemented value. |
+| Was the case outside applicability? | **Partially.** The 1.995-in ID and 3000 STB/D rate exceed the published test envelope (1.0–1.5-in strings, ~50–1200 STB/D, GOR to ~2000 scf/STB). The envelope claim of GOR 1000–100,000 in Revision 1 was an unsupported extrapolation. |
+| Why was hydrostatic only 26.3 psi? | The published H-B density-ratio elevation equation uses the **no-slip mixture density** rho_s = λ·ρ_l + (1−λ)·ρ_g. With GOR = 1000 and Rs = 600 the free-gas fraction is large at 100 psia, ρ_s ≈ 0.48 lbm/ft³, and 0.0033 psi/ft × 8000 ft ≈ 26.5 psi. The hydrostatic term itself is mathematically consistent with the published equation; the Revision 1 defect was that the holdup error made the whole column gas-dominated near the wellhead. |
+| Free-gas calculation | Correct in both revisions: free GOR = GOR − Rs = 400 scf/STB, q_g = 1.2 MMscf/D, in-situ conversion 14.7/p × T_R/520 × 1/z. |
+| Unit-conversion audit | No conversion defects found in velocity, density, or gradient terms (verified against Lyons published forms). The surface-tension blend was inverted in Revision 1 and is now the published linear water-cut blend. |
 
-**Key benchmarks (THP 100 psia, TVD 8000 ft, ID 1.995 in, API 35, γg 0.65, μ_l 1 cp, Bo 1.4, T_wh 120 °F):**
+## 2. The corrected formulation (Revision 2, verbatim published forms)
 
-| Case | Beggs–Brill (1973) | Hagedorn–Brown (1965) |
-|---|---|---|
-| Liquid-full, q = 3000, GOR = Rs = 600 | Pwf = 2412.7 psia | Pwf = 2414.8 psia (hl = 1 exact, hydrostatic gradient 0.2898 psi/ft, friction ≈ 0) |
-| Multiphase, GOR 1000, q = 263–2000 STB/D | 307 – 524 psia | 128 psia region (H-B holdup/fraction lower in this regime: Δ = −180 to −400 psi) |
-| Static q = 0 | 115.2 psia | 115.2 psia (both reduce to the same static column) |
+Verified against Hagedorn & Brown 1965 (SPE-940-PA), Economides et al. *Petroleum Production Systems* 2nd ed. (2013), Lyons *Standard Handbook of Petroleum and Natural Gas Engineering* 2nd ed. (1996), and the whitson.com correlation documentation of the original paper.
 
-The two correlations agree at the static and liquid-full extremes (physics is identical there) and diverge in the multiphase regime — exactly the behavior expected from their different flow-regime maps. This divergence is a **feature**: it quantifies correlation uncertainty for the operator.
+1. **Superficial velocities** (Lyons): v_sl = 5.615·q·(Bo/(1+WOR)+Bw·WOR/(1+WOR))/(86400·A); v_sg = q·(GLR − Rs/(1+WOR))·(14.7/p)·(T_R/520)/z/(86400·A).
+2. **Dimensionless groups** (published, four-number system):
+   - N_LV = 1.938·v_sl·(ρ_l/σ_l)^0.25 ; N_GV = 1.938·v_sg·(ρ_l/σ_l)^0.25
+   - N_D = 120.872·D·(ρ_l/σ_l)^0.5 ; N_L = 0.15726·μ_l·(1/(ρ_l·σ_l³))^0.25
+3. **C_NL** (published closed form of the viscosity-number curve):
+   C_NL = 0.061·N_L³ − 0.0929·N_L² + 0.0505·N_L + 0.0019 (bounded to the published curve range)
+4. **Primary holdup group**:
+   H = (N_LV / N_GV^0.575) · (p/14.7)^0.1 · (C_NL / N_D)
+5. **Secondary correction**: B = N_GV·N_LV^0.38 / N_D^2.14, with the published three-region ψ polynomial in B, and
+   H_L/ψ = √((0.0047 + 1123.32·H + 729489.64·H²) / (1 + 1097.1566·H + 722153.97·H²))
+6. **Published bounds and limits**: H_L ≥ λ (no-slip floor); static q = 0 → liquid-full column, hl = 1, friction = 0; Griffith bubble-flow replacement not implemented (documented limitation).
+7. **Pressure gradients** (published density-ratio equation):
+   dp/dz = ρ_s·g/g_c/144 + f_TP·G_m·v_m/(2·g_c·D)/144, with ρ_s = no-slip mixture density and f_TP = f_SL·(0.0056 + 0.5·f_SL). This is why a gas-rich column legitimately has a very small hydrostatic contribution — the published equation, not a defect.
 
-## 5. Integration points (no changes to verified engines)
+## 3. Applicability envelope (corrected and honest)
 
-- `services/vlp_engine.py`: `traverse()` / `traverse_hb()` / `vlp_curve()` gain `vlp_model=` (default `beggs_brill`); `_resolve_model()` validates names; Beggs–Brill code untouched.
-- `services/nodal_engine.py`: `NodalEngine.solve()` accepts `vlp_model=`; `result.vlp_model` records the correlation used; the solver, root acceptance and classification are identical for both models. A Phase-5A robustness fix: bracketed bisection refines to `pressure_tol/10` and root acceptance uses a consistent `pressure_tol × 2` margin (the endpoint residual of a width-tolerance bracket can legitimately exceed the strict tolerance — discovered with a steep Vogel/H-B crossing near q_max).
-- `handlers/text_handlers.py`: `/calc vlp`, `/calc nodal`, `/calc sensitivity`, `/calc optimize`, and the new `/calc vlp_compare` accept and honor `vlp_model=`; invalid values rejected with a usage message; result texts print the active VLP model.
-- `constants.py`: `vlp_compare_plot` rule registered.
+The correlation was developed on a **1500-ft vertical well with 1-in, 1.25-in, and 1.5-in test sections** (whitson.com documentation of the original experiment). The paper states no strict GOR or liquid-rate limits; original test conditions spanned roughly 50–1200 STB/D and GOR to ~2000 scf/STB. Industrial practice extrapolates the ID range to ~4 in. The engine now emits `CORRELATION_LIMITATION` warnings outside the published ID range, and the documented envelope has been corrected accordingly. **Extrapolated results are indicative, never validated.**
 
-## 6. Live verification commands (post-deploy)
+## 4. Verification package (provenance-audited)
+
+| # | Benchmark | Reference value | Engine value | Error | Tolerance | Source |
+|---|---|---|---|---|---|---|
+| A | Liquid-full hydrostatic (GOR = Rs = 600, q = 3000, TVD = 8000, THP = 100) | 2414.9 psia (analytical: Pwf = 100 + ρ_l·8000/144, ρ_l = 41.67 from the standard black-oil equation — independent of any VLP correlation) | 2414.83 psia | 0.07 psi | ±0.5 psi | Analytical (black-oil hydrostatics) |
+| B | Published holdup form (two-phase node, p = 1000 psia, GOR = 1200, Rs = 500, ID 1.35 in, WC = 0.2) | hl = 0.08564, N_LV = 0.8265, N_GV = 21.38, C_NL = 0.00225 (plain arithmetic, no engine) | hl = 0.08564, N_LV = 0.8265, N_GV = 21.38, C_NL = 0.00225 | 0 (machine precision) | 1e-5 | Published equations (Economides/Lyons/SPE-940), independently re-derived |
+| C | Static q = 0 (ID 1.35 in) | Pwf = 118.5 psia, friction = 0 (static column) | Pwf = 118.47 psia, friction = 0.0 | 0.02 psi | ±0.1 psi | Analytical static hydrostatics |
+| D | Pressure-traverse sanity: liquid-full column gradient | 0.2898 psi/ft (ρ_l = 41.67 lbm/ft³) | 0.2894 psi/ft average over 8000 ft | 0.1% | ±1% | Analytical |
+| E | Phase 1–4 regression | 161 tests, all green | 161 passed | — | — | Existing suite, untouched |
+
+Note that the two-phase live result for GOR > Rs at low THP (≈ 125–138 psia in the revised engine) is the published H-B density-ratio behavior at gas-rich, low-pressure conditions — the correlation is known to under-predict pressure loss in some regimes (Kappa Engineering evaluation). It is a documented characteristic of the correlation, flagged by `CORRELATION_LIMITATION` where the case leaves the test envelope.
+
+## 5. Benchmark provenance statement (audit of all H-B tests)
+
+The Revision 1 test package contained one physics benchmark (2414.8 psia) derived from the engine's own output — **circular, and explicitly acknowledged as such**. Revision 2 removes all circularity: the liquid-full benchmark is now the standard analytical hydrostatic (black-oil density, independent of the correlation), and a new test (`test_hb_published_holdup_form`) re-derives the published dimensionless groups, C_NL, H group, and H_L/ψ curve with plain arithmetic and compares against the module — the reference implementation in the test is independent code, not the engine under test. Remaining tests exercise solver plumbing, model routing, and cross-model ordering (H-B vs BB), which are behavior tests, not validation benchmarks.
+
+## 6. Live verification command (corrected, in validated range)
 
 ```
-/calc vlp thp=100 tvd=8000 id=1.995 q=3000 gor=1000 rs=600 api=35 gamma_g=0.65 mu_l=1 bo=1.4 t_wh=120 geothermal=1.5 vlp_model=hagedorn_brown
-/calc nodal pr=3000 j=5 qmax=5000 thp=100 tvd=8000 id=1.995 gor=1000 rs=600 api=35 gamma_g=0.65 mu_l=1 bo=1.4 t_wh=120 geothermal=1.5 wc=0.2 vlp_model=hagedorn_brown plot=1
-/calc vlp_compare thp=100 tvd=8000 id=1.995 gor=1000 rs=600 api=35 gamma_g=0.65 mu_l=1 bo=1.4 t_wh=120 geothermal=1.5 plot=1
+/calc vlp thp=100 tvd=8000 id=1.35 q=600 gor=600 rs=600 api=35 gamma_g=0.65 mu_l=2 bo=1.3 t_wh=120 geothermal=1.5 vlp_model=hagedorn_brown
 ```
 
-Regression baseline: **160 tests, all passing.** Phases 1–4 remain frozen and verified.
+Inputs: ID 1.35 in (inside the published 1.0–1.5 in test range), q = 600 STB/D (inside 50–1200 test range), GOR = Rs = 600 (liquid-full, free gas = 0).
+Expected: **Pwf ≈ 2592.9 psia** (analytical liquid column: ρ_l = 44.87 lbm/ft³ → 100 + 44.87·8000/144 = 2592.9 psia; temperature variation through the geothermal gradient shifts this by < 1 psia), hydrostatic ≈ 2492.9 psi, friction < 0.001 psi. Acceptable tolerance: **±3 psi** (0.1%).

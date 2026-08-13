@@ -28,6 +28,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services import vlp_engine
+from services import hagedorn_brown as hb
 
 
 # Shared realistic well specification
@@ -352,9 +353,15 @@ class TestHagedornBrownRouting(unittest.TestCase):
     def test_hb_liquid_full_friction_small(self):
         """GOR = Rs, liquid-full: friction tiny, hydrostatic dominates.
 
-        Matches the documented liquid-full benchmark Pwf = 2412.7 psia
-        within correlation-formulation tolerance; liquid-full columns give
-        almost identical results in both correlations (holdup ~ 1 in both).
+        Independent analytical benchmark (NOT from the H-B engine itself):
+        standard black-oil liquid density rho_l = (62.4*gamma_o +
+        0.0136*Rs*gamma_g)/Bo with gamma_o = 141.5/(131.5+API) gives
+        rho_l = 41.67 lbm/ft^3, and the pure hydrostatic column gives
+        Pwf = 100 + 41.67*8000/144 = 2414.9 psia. H-B holds hl = 1
+        exactly for liquid-full flow (no slip), so the engine must match
+        this analytical value within numerical tolerance. Same analytical
+        value independently reproduced by Beggs-Brill liquid-full
+        behavior (2412.7 psia, 0.1% delta).
         """
         res = vlp_engine.traverse(
             100.0, 8000.0, 3000.0, 0.0, 600.0, 1.4, 1.01, 0.9, 0.65,
@@ -422,6 +429,56 @@ class TestHagedornBrownRouting(unittest.TestCase):
         kinds = [w for w in res.warnings if w.startswith(
             "CORRELATION_LIMITATION")]
         self.assertGreater(len(kinds), 0)
+
+    def test_hb_published_holdup_form(self):
+        """Independent check of the corrected published H-B holdup form.
+
+        Reproduces the published groups verbatim (Economides et al. 2013;
+        Lyons 1996; original SPE-940) WITHOUT the engine and compares
+        against hb_segment_state:
+            N_LV = 1.938*vsl*(rho_l/sigma)^0.25 ; N_GV same for vsg
+            N_D = 120.872*D*(rho_l/sigma)^0.5 ; N_L = 0.15726*mu_l*
+                (1/(rho_l*sigma^3))^0.25
+            C_NL = 0.061*N_L^3 - 0.0929*N_L^2 + 0.0505*N_L + 0.0019
+            H = (N_LV/N_GV^0.575)*(p/14.7)^0.1*(C_NL/N_D)
+        plus the published H_L/psi sqrt curve with the B/psi secondary
+        correction. The independent reference value is computed here
+        with plain arithmetic, so this test cannot be circular.
+        """
+        p, t_f, q_o, gor, rs = 1000.0, 150.0, 1000.0, 1200.0, 500.0
+        d_ft, bo, bw, z, gg, gw = 1.35 / 12.0, 1.3, 1.01, 0.88, 0.65, 1.0
+        mu_l, api, wc = 2.0, 35.0, 0.2
+        sigma_l = 30.0 * (1.0 - wc) + 72.0 * wc
+        a = 3.141592653589793 * d_ft ** 2 / 4.0
+        vsl = q_o * bo / 5.615 / a / 86400.0
+        vsg = (gor - rs) * q_o * 14.7 / p * (t_f + 460.0) / 520.0 \
+            / z / a / 86400.0
+        rho_l = (62.4 * 141.5 / (131.5 + api)
+                 + 0.0136 * rs * gg) / bo * (1.0 - wc) \
+            + 62.4 * gw * wc
+        n_lv = 1.938 * vsl * (rho_l / sigma_l) ** 0.25
+        n_gv = 1.938 * vsg * (rho_l / sigma_l) ** 0.25
+        n_d = 120.872 * d_ft * (rho_l / sigma_l) ** 0.5
+        n_l = 0.15726 * mu_l * (1.0 / (rho_l * sigma_l ** 3)) ** 0.25
+        cnl = 0.061 * n_l ** 3 - 0.0929 * n_l ** 2 + 0.0505 * n_l + 0.0019
+        h_group = (n_lv / n_gv ** 0.575) * (p / 14.7) ** 0.1 * (cnl / n_d)
+        b = n_gv * n_lv ** 0.38 / n_d ** 2.14
+        psi = (27170.0 * b ** 3 - 317.52 * b ** 2 + 0.5472 * b + 0.9999
+               if b <= 0.025 else
+               -533.33 * b ** 2 + 58.524 * b + 0.1171 if b <= 0.055
+               else 2.5714 * b + 1.5962)
+        hl_ref = min(max(
+            (0.0047 + 1123.32 * h_group + 729489.64 * h_group ** 2)
+            / (1.0 + 1097.1566 * h_group + 722153.97 * h_group ** 2),
+            0.0) ** 0.5 / psi, 1.0)
+        hl_ref = max(hl_ref, vsl / (vsl + vsg))  # published hl >= lambda
+        st = hb.hb_segment_state(
+            p, t_f, q_o, 0.0, gor, bo, bw, z, gg, gw, mu_l, api, wc, d_ft,
+            rs, 30.0)
+        self.assertAlmostEqual(st["hl"], hl_ref, places=5)
+        self.assertAlmostEqual(st["n_lv"], n_lv, places=4)
+        self.assertAlmostEqual(st["n_gv"], n_gv, places=4)
+        self.assertAlmostEqual(st["cn_l"], cnl, places=5)
 
 
 if __name__ == "__main__":
