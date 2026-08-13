@@ -153,14 +153,23 @@ All five authorized live cases passed on `@pvt_lab_ai_bot`. The verified determi
 
 | Area | Status |
 |---|---|
-| Sensitivity engine (sweeps, deltas, classifications, base case) | IMPLEMENTED, TESTED (regression), LIVE TELEGRAM VERIFIED |
-| Optimization engine (candidate comparison, constraints, objectives) | IMPLEMENTED, TESTED (regression), LIVE TELEGRAM VERIFIED |
-| Telegram handlers `/calc sensitivity`, `/calc optimize` with `plot=1` PNG | IMPLEMENTED, TESTED (regression), LIVE TELEGRAM VERIFIED |
-| ENGINE-FIRST AI routing for both commands | IMPLEMENTED, TESTED (regression) |
-| Per-parameter unit metadata (`SENSUNIT_MAP`): tubing ID in "in", water cut dimensionless + % , THP in psia | IMPLEMENTED, TESTED (regression) |
+| Sensitivity engine (sweeps, deltas, classifications, base case) | IMPLEMENTED, TESTED, DEPLOYED, LIVE TELEGRAM VERIFIED |
+| Optimization engine (candidate comparison, constraints, objectives) | IMPLEMENTED, TESTED, DEPLOYED, LIVE TELEGRAM VERIFIED |
+| Telegram handlers `/calc sensitivity`, `/calc optimize` with `plot=1` PNG | IMPLEMENTED, TESTED, DEPLOYED, LIVE TELEGRAM VERIFIED |
+| ENGINE-FIRST AI routing for both commands | IMPLEMENTED, TESTED, DEPLOYED |
+| Per-parameter unit metadata (`SENSUNIT_MAP`): tubing ID in "in", water cut dimensionless + % , THP in psia | IMPLEMENTED, TESTED, DEPLOYED, LIVE TELEGRAM VERIFIED |
 | Benchmarks from live Telegram verification (Section 7.1) | LIVE TELEGRAM VERIFIED — frozen with the engines |
 
-The Phase 4 calculation engines are frozen: no equation, solver, or optimization mathematics may change unless a new verified engineering defect is found.
+### 7.3 Final owner verification (2026-08-13, post-commit `c5fc976`)
+
+The owner performed the required live Telegram verification on `@pvt_lab_ai_bot` and confirmed both cases PASS with correct engineering units and verified calculated rates:
+
+- **Tubing-ID sensitivity:** labels render as `1.995 in`, `2.5 in`, `3 in` with no psia mislabeling; rates 3944.22 / 3990.37 / 4038.97 STB/D confirmed.
+- **Water-cut sensitivity:** labels render as `0.00 (0%)`, `0.50 (50%)`, `1.00 (100%)` with no psia mislabeling; rates 3944.22 / 3825.00 / 3691.89 STB/D confirmed.
+
+### 7.4 Phase 4 final status
+
+**Phase 4 = IMPLEMENTED + TESTED + DEPLOYED + LIVE TELEGRAM VERIFIED + FROZEN BASELINE.** The final regression suite at closeout is **146 tests, all passing, no failures, no test warnings** (IPR 37, VLP 30, nodal 18, optimizer 34, plus NPV/Z-factor, engineering-corrections, plot-shape, and artificial-lift regression guards). The Phase 4 calculation engines are frozen: no equation, solver, or optimization mathematics may change unless a new verified engineering defect is found and owner approval is obtained.
 
 ---
 
