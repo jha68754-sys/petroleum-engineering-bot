@@ -129,17 +129,38 @@ Missing IPR or VLP inputs reuse the Phase-3 missing-data builder, so the user se
 
 ## 7. Verification
 
-The regression suite `tests/test_production_optimizer.py` (added in this phase) covers: guardrail acceptance/rejection, base-case computation versus the standalone nodal solver, monotonicity of the THP sweep, candidate feasibility classification, constraint elimination, the all-infeasible response, duplicate-key parsing, and the handler's missing-data and invalid-value paths. Full repository regression (130+ tests across Phases 1–4) passes before every push.
+The regression suite `tests/test_production_optimizer.py` (added in this phase) covers: guardrail acceptance/rejection, base-case computation versus the standalone nodal solver, monotonicity of the THP, tubing-ID, and water-cut sweeps, candidate feasibility classification, constraint elimination, the all-infeasible response, duplicate-key parsing, per-parameter unit formatting, and the handler's missing-data and invalid-value paths. Full repository regression (140+ tests across Phases 1–4) passes before every push.
 
-### 7.1 Live verification cases (post-deploy)
+### 7.1 Live verification results (Telegram, 2026-08-13)
 
-| # | Command (abbreviated) | Expected |
+All five authorized live cases passed on `@pvt_lab_ai_bot`. The verified deterministic values below are the authoritative benchmarks for this model — any future change that alters these numbers must be justified by a verified engineering defect, never by fitting the engine to a benchmark. The earlier documentation values of roughly 2176 and 1113 STB/D for the THP 200/300 scenarios were incorrect and have been replaced.
+
+| # | Scenario | Verified result |
 |---|---|---|
-| 1 | `/calc sensitivity type=thp thp=100,200,300 … plot=1` | base q ≈ 3944 STB/D, lower THP → higher rate, PNG bar/line |
-| 2 | `/calc sensitivity type=id id=1.995,2.5,3.0 …` | larger ID → higher rate, deltas vs base 3944 |
-| 3 | `/calc sensitivity type=wc wc=0,0.5,1 …` | higher WC → lower rate, all feasible |
-| 4 | `/calc optimize type=id id=1.995,2.5,3.0 objective=max_oil_rate …` | BEST FEASIBLE = 3.0 in (q ≈ 4039 STB/D) |
-| 5 | `/calc optimize type=id id=1.995,2.5,3.0 objective=max_oil_rate min_pwf=1000 …` | ALL CANDIDATES INFEASIBLE (Pwf < 1000 for all) |
+| 1 | THP sensitivity: THP 100 psia | q = 3944.22 STB/D, Pwf = 370.50 psia |
+| 1 | THP sensitivity: THP 200 psia | q = 3745.68 STB/D, Pwf = 502.89 psia |
+| 1 | THP sensitivity: THP 300 psia | q = 3534.30 STB/D, Pwf = 643.80 psia |
+| 2 | Tubing-ID sensitivity: 1.995 in | q = 3944.22 STB/D |
+| 2 | Tubing-ID sensitivity: 2.5 in | q = 3990.37 STB/D |
+| 2 | Tubing-ID sensitivity: 3.0 in | q = 4038.97 STB/D |
+| 3 | Water-cut sensitivity: wc 0.0 | q = 3944.22 STB/D |
+| 3 | Water-cut sensitivity: wc 0.5 | q = 3825.00 STB/D |
+| 3 | Water-cut sensitivity: wc 1.0 | q = 3691.89 STB/D |
+| 4 | Optimization: id 1.995/2.5/3.0 in, max_oil_rate | BEST FEASIBLE = 3.0 in, q = 4038.97 STB/D, Pwf = 307.36 psia |
+| 5 | Optimization with min_pwf = 10000 psia | ALL CANDIDATES INFEASIBLE — no best candidate returned |
+
+### 7.2 Phase 4 status
+
+| Area | Status |
+|---|---|
+| Sensitivity engine (sweeps, deltas, classifications, base case) | IMPLEMENTED, TESTED (regression), LIVE TELEGRAM VERIFIED |
+| Optimization engine (candidate comparison, constraints, objectives) | IMPLEMENTED, TESTED (regression), LIVE TELEGRAM VERIFIED |
+| Telegram handlers `/calc sensitivity`, `/calc optimize` with `plot=1` PNG | IMPLEMENTED, TESTED (regression), LIVE TELEGRAM VERIFIED |
+| ENGINE-FIRST AI routing for both commands | IMPLEMENTED, TESTED (regression) |
+| Per-parameter unit metadata (`SENSUNIT_MAP`): tubing ID in "in", water cut dimensionless + % , THP in psia | IMPLEMENTED, TESTED (regression) |
+| Benchmarks from live Telegram verification (Section 7.1) | LIVE TELEGRAM VERIFIED — frozen with the engines |
+
+The Phase 4 calculation engines are frozen: no equation, solver, or optimization mathematics may change unless a new verified engineering defect is found.
 
 ---
 

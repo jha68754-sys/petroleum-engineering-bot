@@ -1503,6 +1503,13 @@ SENSVARIABLE_LABELS = {
     "thp": "THP", "tubing_id": "Tubing ID",
     "water_cut": "Water cut", "gor": "GOR",
 }
+# Explicit per-parameter unit metadata — never a generic pressure formatter.
+SENSUNIT_MAP = {
+    "thp": "psia",
+    "tubing_id": "in",
+    "water_cut": "",
+    "gor": "scf/STB",
+}
 SENSVAR_KEYS = {"thp": "thp", "id": "tubing_id",
                 "wc": "water_cut", "gor": "gor"}
 
@@ -1609,18 +1616,21 @@ def _vlp_kwargs_for_optimizer(kwargs: Dict[str, Any]
 
 def _fmt_wc_display(value: float) -> str:
     """Water cut as both fraction and percentage."""
-    return f"{value:g} ({value*100:.1f}%)"
+    return f"{value:.2f} ({value*100:.0f}%)"
 
 
 def _variable_label(variable: str, value: float) -> str:
     lbl = SENSVARIABLE_LABELS.get(variable, variable)
-    if variable == "wc":
+    # Units come from explicit parameter metadata in SENSUNIT_MAP, never a
+    # generic pressure-unit formatter.
+    unit = SENSUNIT_MAP.get(variable, "psia")
+    if variable == "water_cut":
         return f"{_fmt_wc_display(value)}"
     if variable == "gor":
         return f"{value:g} scf/STB"
-    if variable == "id":
-        return f"{value:g} in"
-    return f"{value:g} psia"
+    if variable == "tubing_id":
+        return f"{value:g} {unit}"
+    return f"{value:g} {unit}"
 
 
 def _point_line(label: str, point: "SensitivityPoint") -> str:
@@ -1832,7 +1842,7 @@ def handle_calc_sensitivity(message: Dict[str, Any], tg
         ys_q = [p.q_op for p in result.points]
         ys_p = [p.pwf_op for p in result.points]
         x_labels = [format(_variable_label(variable, v), ) for v in xs] \
-            if variable in ("thp", "id", "wc", "gor") else None
+            if variable in ("thp", "tubing_id", "water_cut", "gor") else None
         well = f"Calculated {var_display} Sensitivity"
         if any(_q is not None for _q in ys_q):
             pairs = [(x, y) for x, y in zip(xs, ys_q) if y is not None]
@@ -1856,13 +1866,14 @@ def handle_calc_sensitivity(message: Dict[str, Any], tg
 
 def _fmt_base(result: "SensitivityResult") -> str:
     v = result.base_value
-    if result.variable == "wc":
+    # Units come from explicit parameter metadata in SENSUNIT_MAP, never a
+    # generic pressure-unit formatter.
+    unit = SENSUNIT_MAP.get(result.variable, "psia")
+    if result.variable == "water_cut":
         return _fmt_wc_display(v)
     if result.variable == "gor":
         return f"{v:g} scf/STB"
-    if result.variable == "id":
-        return f"{v:g} in"
-    return f"{v:g} psia"
+    return f"{v:g} {unit}"
 
 
 @registry.register("optimize")

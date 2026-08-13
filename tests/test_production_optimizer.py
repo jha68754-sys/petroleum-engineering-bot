@@ -253,3 +253,73 @@ class TestHandlerValidation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class TestParameterUnitFormatting(unittest.TestCase):
+    """Parameter labels must use explicit per-parameter unit metadata:
+    tubing ID in "in", water cut dimensionless/percent, THP in psia.
+    Never formatted with a generic pressure unit."""
+
+    def test_tubing_id_renders_in_not_psia(self):
+        text, _, _ = th.handle_calc_sensitivity(
+            {"text": f"/calc sensitivity type=id id=1.995,2.5,3.0 "
+                     f"model=linear {self.base}"}, None)
+        self.assertIn("id = 1.995 in", text)
+        # :g formatting drops trailing zeros (2.5 in, 3 in)
+        self.assertIn("in", text)
+        self.assertNotIn("id = 1.995 psia", text)
+        for line in text.splitlines():
+            if line.strip().startswith("id ="):
+                self.assertNotIn("psia", line)
+
+    def test_water_cut_renders_dimensionless_percent(self):
+        text, _, _ = th.handle_calc_sensitivity(
+            {"text": f"/calc sensitivity type=wc wc=0,0.5,1 "
+                     f"model=linear {self.base}"}, None)
+        # BASE CASE line uses the 'wc =' prefix; scenario lines use the
+        # plain dimensionless label. Both must stay free of psia.
+        self.assertIn("wc = 0.00 (0%)", text)
+        self.assertIn("  0.50 (50%):", text)
+        self.assertIn("  1.00 (100%):", text)
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("wc ="):
+                # BASE CASE label: 'wc = 0.00 (0%)' ends with ')'
+                self.assertRegex(stripped, r"^wc = .* \([0-9]+%\)$")
+            elif stripped.startswith(("0.00 (", "0.50 (", "1.00 (")):
+                # Scenario label ends with ')' before the ': q = ...'
+                self.assertTrue(stripped.startswith("0.00 (0%):")
+                                or stripped.startswith("0.50 (50%):")
+                                or stripped.startswith("1.00 (100%):"))
+
+    def test_thp_renders_psia(self):
+        text, _, _ = th.handle_calc_sensitivity(
+            {"text": f"/calc sensitivity type=thp thp=100,200,300 "
+                     f"model=linear {self.base}"}, None)
+        # BASE CASE line uses the 'thp =' prefix
+        self.assertIn("thp = 100 psia", text)
+        self.assertIn("q = 3944.22", text)
+        self.assertIn("q = 3745.68", text)
+        self.assertIn("q = 3534.30", text)
+
+    def test_verified_thp_sensitivity_values(self):
+        """Live-verified deterministic THP sweep benchmarks
+        (Telegram verification 2026-08-13)."""
+        text, _, _ = th.handle_calc_sensitivity(
+            {"text": f"/calc sensitivity type=thp thp=100,200,300 "
+                     f"model=linear {self.base}"}, None)
+        self.assertIn("q = 3944.22", text)   # THP 100 psia
+        self.assertIn("q = 3745.68", text)   # THP 200 psia
+        self.assertIn("q = 3534.30", text)   # THP 300 psia
+
+    def test_all_infeasible_never_yields_best(self):
+        text, _, _ = th.handle_calc_optimize(
+            {"text": f"/calc optimize type=id id=1.995,2.5,3.0 "
+                     f"objective=max_oil_rate min_pwf=10000 "
+                     f"model=linear {self.base}"}, None)
+        self.assertIn("ALL CANDIDATES INFEASIBLE", text)
+        self.assertNotIn("BEST FEASIBLE CANDIDATE", text)
+
+    def setUp(self):
+        self.base = ("pr=3000 j=1.5 thp=100 tvd=8000 id=1.995 gor=1000 "
+                     "rs=600 api=35 gamma_g=0.65 mu_l=1 bo=1.4 t_wh=120 "
+                     "geothermal=1.5")
