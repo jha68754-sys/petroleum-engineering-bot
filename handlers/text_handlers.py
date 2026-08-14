@@ -568,6 +568,21 @@ def _vlp_result_lines(thp: float, tvd: float, q_o: float, q_w: float,
     lines.append(f"  \u2022 Hydrostatic/elevation: {comps.get('elevation', 0.0):.1f} psi")
     lines.append(f"  \u2022 Friction: {_fmt_loss(comps.get('friction', 0.0))} psi")
     lines.append(f"  \u2022 Acceleration: {_fmt_loss(comps.get('acceleration', 0.0))} psi")
+    # Z-factor transparency: always report the active z and its provenance.
+    z_active = result.z_factor if result.z_factor is not None else 1.0
+    z_prov = result.z_factor_provenance or "default"
+    if z_prov == "user supplied":
+        lines.append("")
+        lines.append(f"Gas Z-factor = {z_active:.2f} (user supplied)")
+    else:
+        lines.append("")
+        lines.append(f"Gas Z-factor = {z_active:.2f} (default — not user "
+                     "supplied)")
+    if result.input_defaults:
+        lines.append("")
+        lines.append("Engine defaults used (inputs not supplied by user):")
+        for d in result.input_defaults:
+            lines.append(f"  \u2022 {d}")
     if result.flow_pattern_counts:
         lines.append("")
         lines.append("Flow-pattern distribution along the tubing (Beggs-Brill):")
@@ -1007,6 +1022,22 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
     if curve_mode:
         # --- Calculated VLP curve + plot ---
         wc = floats.get("wc", 0.0)
+        # Z-factor provenance: what the VLP calculations actually used.
+        z_used = floats.get("z", 1.0)
+        z_prov = "user supplied" if "z" in floats else "default — not user supplied"
+        # Input defaults list for auditability: every engine default the
+        # calculation relied on because the user did not supply the input.
+        input_defaults = []
+        if "gamma_w" not in floats:
+            input_defaults.append("gamma_w = 1.07 (default)")
+        if "bw" not in floats:
+            input_defaults.append("bw = 1.01 (default)")
+        if "z" not in floats:
+            input_defaults.append("z = 1.00 (default)")
+        if "geothermal" not in floats:
+            input_defaults.append("geothermal = 1.5 degF/100 ft (default)")
+        if "segments" not in floats:
+            input_defaults.append("segments = 80 (default)")
         # Sweep total rate in 20 points; the zero-rate point is resolved
         # with the static hydrostatic engine (multiphase friction is
         # undefined at zero flow).
@@ -1029,7 +1060,9 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
                     floats["api"], wc, floats["id"], floats["rs"],
                     floats["t_wh"], floats.get("geothermal", 1.5),
                     n_segments=int(floats.get("segments", 80)),
-                    vlp_model=vlp_model).pwf)
+                    vlp_model=vlp_model,
+                    z_provenance=z_prov,
+                    input_defaults=input_defaults).pwf)
         else:
             qs, ps = [], []
             for i in range(n_pts):
@@ -1052,7 +1085,9 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
                         floats["api"], wc, floats["id"], floats["rs"],
                         floats["t_wh"], floats.get("geothermal", 1.5),
                         n_segments=int(floats.get("segments", 80)),
-                        vlp_model=vlp_model).pwf)
+                        vlp_model=vlp_model,
+                        z_provenance=z_prov,
+                        input_defaults=input_defaults).pwf)
         if not qs:
             return "VLP curve error: empty rate sweep.", None, None
         out = [
@@ -1090,6 +1125,18 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
     wc = floats.get("wc", 0.0)
     q_o = floats["q"] * (1.0 - wc) if q_w is None else floats["q"]
     q_w = q_w if q_w is not None else floats["q"] * wc
+    # Z-factor provenance: what the VLP calculation actually used.
+    z_prov_single = "user supplied" if "z" in floats \
+        else "default — not user supplied"
+    input_defaults_single = []
+    for _dk, _dv in (("gamma_w", "gamma_w = 1.07 (default)"),
+                     ("bw", "bw = 1.01 (default)"),
+                     ("z", "z = 1.00 (default)"),
+                     ("geothermal", "geothermal = 1.5 degF/100 ft (default)"),
+                     ("sigma", "sigma = 30.0 dyn/cm (default)"),
+                     ("segments", "segments = 80 (default)")):
+        if _dk not in floats:
+            input_defaults_single.append(_dv)
     try:
         result = vlp_engine.traverse(
             floats["thp"], floats["tvd"], q_o, q_w, floats["gor"],
@@ -1100,6 +1147,8 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
             sigma=floats.get("sigma", 30.0),
             n_segments=int(floats.get("segments", 80)),
             vlp_model=vlp_model,
+            z_provenance=z_prov_single,
+            input_defaults=input_defaults_single,
         )
     except ValueError as _e:
         _msg = str(_e)

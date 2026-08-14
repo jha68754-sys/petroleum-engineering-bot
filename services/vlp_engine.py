@@ -118,6 +118,10 @@ class VLPResult:
         self.iterations: int = kw.get("iterations", 0)
         self.warnings: List[str] = kw.get("warnings", [])
         self.limitations: List[str] = kw.get("limitations", [])
+        self.z_factor: Optional[float] = kw.get("z_factor")
+        self.z_factor_provenance: Optional[str] = kw.get(
+            "z_factor_provenance")  # "user supplied" | "default"
+        self.input_defaults: List[str] = kw.get("input_defaults", [])
 
     @property
     def converged(self) -> bool:
@@ -348,7 +352,9 @@ def traverse(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
              tol: float = DEFAULT_TOL,
              max_seg_iter: int = DEFAULT_MAX_SEG_ITER,
              max_iters: int = DEFAULT_MAX_ITERS,
-             vlp_model: Optional[str] = None) -> VLPResult:
+             vlp_model: Optional[str] = None,
+             z_provenance: Optional[str] = None,
+             input_defaults: Optional[List[str]] = None) -> VLPResult:
     """Segmented pressure traverse, wellhead -> bottomhole.
 
     Model selection: 'beggs_brill' (default, original implementation) or
@@ -360,7 +366,8 @@ def traverse(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
         return traverse_hb(
             thp, tvd, q_o, q_w, gor, bo, bw, z_factor, gamma_g, gamma_w,
             mu_l, api, wc, tubing_id_in, rs, t_wh, geothermal, sigma,
-            n_segments, tol, max_seg_iter, max_iters)
+            n_segments, tol, max_seg_iter, max_iters,
+            z_provenance=z_provenance, input_defaults=input_defaults)
 
     # Midpoint method per segment: properties evaluated at the arithmetic-mean
     # pressure of the segment endpoints, iterated until the segment delta-p
@@ -481,7 +488,9 @@ def traverse(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
                         acceleration=accel_psi),
         flow_pattern_counts=patterns,
         elevation_psi=elev_psi, friction_psi=fric_psi,
-        acceleration_psi=accel_psi, iterations=total_iters)
+        acceleration_psi=accel_psi, iterations=total_iters,
+        z_factor=z_factor, z_factor_provenance=z_provenance,
+        input_defaults=input_defaults)
 
 
 def traverse_hb(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
@@ -492,7 +501,9 @@ def traverse_hb(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
                 n_segments: int = DEFAULT_SEGMENTS,
                 tol: float = DEFAULT_TOL,
                 max_seg_iter: int = DEFAULT_MAX_SEG_ITER,
-                max_iters: int = DEFAULT_MAX_ITERS) -> VLPResult:
+                max_iters: int = DEFAULT_MAX_ITERS,
+                z_provenance: Optional[str] = None,
+                input_defaults: Optional[List[str]] = None) -> VLPResult:
     """Segmented Hagedorn-Brown (1965) pressure traverse, wellhead ->
     bottomhole.
 
@@ -612,7 +623,9 @@ def traverse_hb(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
         flow_pattern_counts={},
         elevation_psi=elev_psi, friction_psi=fric_psi,
         acceleration_psi=accel_psi, iterations=total_iters,
-        warnings=warnings, limitations=warnings)
+        warnings=warnings, limitations=warnings,
+        z_factor=z_factor, z_factor_provenance=z_provenance,
+        input_defaults=input_defaults)
 
 
 # ---------------------------------------------------------------------- #
@@ -652,7 +665,10 @@ def vlp_curve(thp: float, tvd: float, gor: float, bo: float, bw: float,
               q_min: float, q_max: float, n_points: int,
               n_segments: int = DEFAULT_SEGMENTS,
               sigma: float = 30.0,
-              vlp_model: Optional[str] = None) -> Tuple[List[float],
+              vlp_model: Optional[str] = None,
+              z_provenance: Optional[str] = None,
+              input_defaults: Optional[List[str]] = None,
+              **_kwargs) -> Tuple[List[float],
                                                          List[float]]:
     """Calculated VLP curve: Pwf vs total rate. Rates are swept linearly;
     the water phase rate scales with water cut (q_w = q_o*wc/(1-wc)).
@@ -676,7 +692,9 @@ def vlp_curve(thp: float, tvd: float, gor: float, bo: float, bw: float,
         res = traverse(
             thp, tvd, q_o, q_w, gor, bo, bw, z_factor, gamma_g, gamma_w,
             mu_l, api, wc, tubing_id_in, rs, t_wh, geothermal, sigma,
-            n_segments, vlp_model=vlp_model)
+            n_segments, vlp_model=vlp_model,
+            z_provenance=z_provenance if z_provenance else "default",
+            input_defaults=input_defaults)
         qs.append(q_total)
         ps.append(res.pwf if res.pwf is not None else 0.0)
     return qs, ps

@@ -2,7 +2,7 @@
 
 **Companion documents:** `VLP_ENGINEERING_MODEL.md` (Beggs–Brill 1973, frozen), `NODAL_ENGINEERING_MODEL.md`, `PRODUCTION_OPTIMIZATION_MODEL.md`.
 **Module:** `services/hagedorn_brown.py` (independent correlation). **Routing:** `services/vlp_engine.py` via `vlp_model=` parameter.
-**Final status:** PHASE 5A NOT VERIFIED — AWAITING CORRECTED OWNER LIVE TEST (after live-verification audit of Aug 13, 2026).
+**Final status:** PHASE 5A — HAGEDORN-BROWN IMPLEMENTED + INDEPENDENTLY VALIDATED + LIVE TELEGRAM VERIFIED + FROZEN (Aug 14, 2026).
 
 ---
 
@@ -88,3 +88,34 @@ Expected: **Pwf ≈ 2592.9 psia** (analytical liquid column: ρ_l = 44.87 lbm/ft
 ```
 
 Expected: **Pwf ≈ 332.7 psia** (hydrostatic ≈ 32.6 psi, friction ≈ 0.2 psi; R1 tolerance ±0.5 psi). This matches the Aug-13 live result of 332.664 psia exactly. If z = 0.88 is supplied explicitly, the governing reference is R2: Pwf ≈ 335.5 psia (hydrostatic ≈ 35.3 psi; tolerance ±0.5 psi).
+
+## 8. Owner live multiphase verification (Aug 14, 2026) — PASSED
+
+The corrected H-B multiphase case was verified live on the Telegram bot with the exact Section 7 command (z not supplied, handler default z = 1.0):
+
+| Quantity | Live Telegram result | Independent reference (R1) | Error | Tolerance | Outcome |
+|---|---|---|---|---|---|
+| Pwf | 332.664 psia | 332.74 psia (80-segment plain arithmetic, z = 1.0) | 0.08 psi | ±0.5 psi | PASS |
+| Hydrostatic | ≈ 32.5 psi | ≈ 32.6 psi | 0.1 psi | ±0.5 psi | PASS |
+| Friction | ≈ 0.18 psi | ≈ 0.2 psi | 0.02 psi | ±0.3 psi | PASS |
+
+This case genuinely exercises the full published H-B machinery — genuine free gas (GOR 1200 > Rs 500, q_g = 0.4 MMscf/D), ID 1.35 in inside the published 1.0–1.5 in validation range, rate 800 STB/D inside 50–1200 — so the live result validates N_LV, N_GV, N_D, N_L, C_NL, the H group, the ψ(B) correction, the hl ≥ λ floor, and the density-ratio elevation/friction equations together, not only the liquid-full limit. The expected Pwf came from an independent plain-arithmetic 80-segment march of the published equations (no production-module code involved), so the verification is non-circular. Liquid-full live verification also passed earlier on the same day (2592.89 psia live vs 2592.9 analytical). **Multiphase acceptance: PASS — implementation matches the independently derived benchmark within tolerance on the live bot.**
+
+## 9. Z-factor provenance and input transparency (Aug 14, 2026) — implemented, tested, frozen
+
+The Aug 13 discrepancy showed that an opaque z-factor default can make a live result look "wrong" against a benchmark that assumed a different z. All VLP outputs now report, auditable end-to-end:
+
+| Item | Behavior |
+|---|---|
+| Active Z-factor | Always printed in the Telegram result (e.g. `Gas Z-factor = 1.00`) |
+| Provenance | `user supplied` when the owner supplied `z=`; `default — not user supplied` when the engine defaulted to z = 1.0 |
+| Engine defaults list | Other unfilled inputs are listed, e.g. `gamma_w = 1.07 (default)`, `bw = 1.01 (default)`, `sigma = 30.0 dyn/cm (default)` |
+
+The engine layer carries the metadata (`z_factor`, `z_factor_provenance`, `input_defaults` on `VLPResult`; `z_provenance` and `input_defaults` kwargs on `traverse()`), and the handler layer (`/calc vlp`, `/calc nodal`, `/calc sensitivity`, `/calc optimize`, `/calc vlp_compare`) prints it. The numerical logic of H-B Revision 2 and all Phase 1–4 engines is untouched; a regression guardrail (`test_metadata_does_not_change_numerical_result`) proves that attaching provenance metadata changes no computed values.
+
+## 10. Phase 5A closeout state (Aug 14, 2026)
+
+- Full regression suite: **177 tests, all passing** (172 in `tests/` plus root-level suites), including 7 new Phase-5A closeout tests (`TestZFactorProvenance`: provenance labels, input-default propagation, z-effect persistence, metadata immunity, locked accepted benchmark 332.664 psia, frozen BB baselines 2412.7 / 356.5 psia).
+- Accepted baselines locked for regression protection: HB multiphase Pwf = 332.664 psia (z default 1.0); BB liquid-full 2412.7 psia; BB two-phase 356.5 psia.
+- No changes to frozen Phase 1–4 engines or to H-B Revision 2 numerical logic; only routing/metadata plumbing and tests added.
+- **PHASE 5A IS FROZEN. Phase 5B has NOT started.**

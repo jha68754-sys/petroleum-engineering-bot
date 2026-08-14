@@ -558,5 +558,95 @@ class TestHBMultiphaseZBenchmark(unittest.TestCase):
         self.assertAlmostEqual(r1.pwf, r2.pwf, places=1)
 
 
+class TestZFactorProvenance(unittest.TestCase):
+    """Phase 5A closeout: z-factor transparency and input-provenance
+    metadata.
+
+    Regression protection for the Aug-13 discrepancy root cause: the live
+    verification command did not supply z, the engine defaulted to z = 1.0,
+    and the predeclared benchmark had used z = 0.88. User-facing output
+    must always disclose the active z-factor and whether it was user
+    supplied or an engine default, and adding this metadata must never
+    change numerical results.
+    """
+    # Multiphase owner live-verification case (id 1.35 in, q 800,
+    # GOR 1200 > Rs 500 => genuine free gas).
+    _HB = dict(thp=300.0, tvd=4000.0, q=800.0, gor=1200.0, rs=500.0,
+               id=1.35, api=35.0, gamma_g=0.65, mu_l=2.0, bo=1.3,
+               t_wh=120.0, geothermal=1.5, wc=0.0, bw=1.01)
+
+    def _hb(self, z=1.0, z_prov=None, input_defaults=None):
+        w = self._HB
+        return vlp_engine.traverse(
+            w["thp"], w["tvd"], w["q"], w["q"] * w["wc"], w["gor"],
+            w["bo"], w["bw"], z, w["gamma_g"], 1.07, w["mu_l"], w["api"],
+            w["wc"], w["id"], w["rs"], w["t_wh"], w["geothermal"],
+            vlp_model="hagedorn_brown",
+            z_provenance=z_prov, input_defaults=input_defaults)
+
+    def test_z_explicitly_supplied_labeled_user_supplied(self):
+        """Handler convention: z present in Telegram floats =>
+        'user supplied'."""
+        res = self._hb(z=0.88, z_prov="user supplied")
+        self.assertEqual(res.z_factor, 0.88)
+        self.assertEqual(res.z_factor_provenance, "user supplied")
+
+    def test_z_omitted_labeled_default_not_user_supplied(self):
+        """Handler convention: z absent => z = 1.0 default and
+        'default — not user supplied'."""
+        res = self._hb(z=1.0, z_prov="default — not user supplied")
+        self.assertEqual(res.z_factor, 1.0)
+        self.assertEqual(res.z_factor_provenance,
+                         "default — not user supplied")
+
+    def test_input_defaults_list_propagated(self):
+        """The engine must surface the defaults the calculation relied on."""
+        res = self._hb(input_defaults=["z = 1.00 (default)",
+                                       "gamma_w = 1.07 (default)"])
+        self.assertIn("z = 1.00 (default)", res.input_defaults)
+        self.assertIn("gamma_w = 1.07 (default)", res.input_defaults)
+
+    def test_explicit_z_still_affects_hb_calculation(self):
+        """Even after metadata was added, supplying z = 0.88 must still
+        raise the BHP by the documented physical amount (~2.8 psi)."""
+        r1 = self._hb(z=1.0)
+        r2 = self._hb(z=0.88)
+        self.assertGreater(r2.pwf - r1.pwf, 2.0)
+        self.assertLess(r2.pwf - r1.pwf, 3.5)
+
+    def test_metadata_does_not_change_numerical_result(self):
+        """Phase-5A closeout guardrail: attaching provenance metadata must
+        not alter the accepted multiphase benchmark value."""
+        base = self._hb()
+        with_meta = self._hb(z_prov="default — not user supplied",
+                             input_defaults=["z = 1.00 (default)"])
+        self.assertEqual(base.pwf, with_meta.pwf)
+        self.assertEqual(base.elevation_psi, with_meta.elevation_psi)
+        self.assertEqual(base.friction_psi, with_meta.friction_psi)
+
+    def test_hb_accepted_multiphase_benchmark_locked(self):
+        """Phase 5A accepted baseline (owner live-verified, Aug 13, 2026,
+        z default 1.0): Pwf = 332.664 psia, locked for regression."""
+        res = self._hb()
+        self.assertAlmostEqual(res.pwf, 332.664, places=3)
+        self.assertAlmostEqual(res.elevation_psi, 32.5, delta=0.5)
+        self.assertAlmostEqual(res.friction_psi, 0.18, delta=0.05)
+
+    def test_beggs_brill_frozen_benchmarks_unchanged(self):
+        """Phase 1-2 frozen baselines must remain exactly as documented:
+        B1 liquid-full Pwf 2412.7 and B2 two-phase Pwf 356.5."""
+        res_liquid = vlp_engine.traverse(
+            100.0, 8000.0, 3000.0, 0.0, 600.0, 1.4, 1.01, 0.9, 0.65,
+            1.07, 1.0, 35.0, 0.0, 1.995, 600.0, 120.0, 1.5,
+            vlp_model="beggs_brill")
+        res_twophase = vlp_engine.traverse(
+            100.0, 8000.0, 3000.0, 0.0, 1000.0, 1.4, 1.01, 0.9, 0.65,
+            1.07, 1.0, 35.0, 0.0, 1.995, 600.0, 120.0, 1.5,
+            vlp_model="beggs_brill")
+        self.assertAlmostEqual(res_liquid.pwf, 2412.7, places=0)
+        self.assertAlmostEqual(res_twophase.pwf, 356.5, delta=2.0)
+
+
 if __name__ == "__main__":
     unittest.main()
+

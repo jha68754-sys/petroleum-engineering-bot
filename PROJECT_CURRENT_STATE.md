@@ -2,9 +2,9 @@
 
 **Baseline:** commit `c5fc976` (2026-08-13), branch `main`, repository [jha68754-sys/petroleum-engineering-bot](https://github.com/jha68754-sys/petroleum-engineering-bot), deployed on Railway with automatic GitHub→Railway deployment.
 
-**Final regression suite: 161 tests, all passing, zero failures, zero test warnings.**
+**Final regression suite: 177 tests, all passing, zero failures, zero test warnings.**
 
-**FINAL STATUS: PHASE 5A NOT VERIFIED — AWAITING CORRECTED OWNER LIVE TEST** (live-verification audit Aug 13, 2026 found a holdup-formulation defect in H-B Revision 1 and a circular benchmark; both corrected in Revision 2 — see `HAGEDORN_BROWN_ENGINEERING_MODEL.md`)
+**FINAL STATUS: PHASE 5A — HAGEDORN-BROWN IMPLEMENTED + INDEPENDENTLY VALIDATED + LIVE TELEGRAM VERIFIED + FROZEN** (Revision 2 holdup formulation independently verified against two external arithmetic benchmarks, Aug 14, 2026; owner live Telegram multiphase verification PASSED with Pwf = 332.664 psia matching the z = 1.0 default reference within 0.08 psi; the Aug 13 discrepancy was traced to the Z-factor default — z = 1.0 default vs z = 0.88 benchmark — and resolved with explicit z-factor provenance reporting — see `HAGEDORN_BROWN_ENGINEERING_MODEL.md`)
 
 This document records the verified architecture as it stands after Phase 4 closeout. It is the single source of truth for what is implemented, tested, deployed, and live-verified.
 
@@ -18,7 +18,7 @@ This document records the verified architecture as it stands after Phase 4 close
 | Phase 2 | VLP engine (Beggs–Brill 1973, segmented pressure traverse, bisection Pwf solver) | IMPLEMENTED, TESTED, DEPLOYED, LIVE TELEGRAM VERIFIED, FROZEN |
 | Phase 3 | Nodal Analysis (IPR–VLP coupling, grid-scan + bracketed bisection, 0/1/multiple intersections, calculated overlay plot) | IMPLEMENTED, TESTED, DEPLOYED, LIVE TELEGRAM VERIFIED, FROZEN |
 | Phase 4 | Production Sensitivity & Optimization (deterministic sweeps, constraints, objectives, calculated plots) | IMPLEMENTED, TESTED, DEPLOYED, LIVE TELEGRAM VERIFIED, FROZEN |
-| Phase 5A | Hagedorn–Brown (1965) VLP correlation (Revision 2 after live-verification audit): independent module, `vlp_model=` selection across all production commands, `/calc vlp_compare` dual-model overlay | IMPLEMENTED, TESTED — AWAITING CORRECTED OWNER LIVE TEST |
+| Phase 5A | Hagedorn–Brown (1965) VLP correlation (Revision 2 after live-verification audit): independent module, `vlp_model=` selection across all production commands, `/calc vlp_compare` dual-model overlay, z-factor provenance + input-default transparency in all VLP outputs | IMPLEMENTED, TESTED, DEPLOYED, LIVE TELEGRAM VERIFIED, FROZEN |
 
 ## 2. Deterministic engines
 
@@ -63,18 +63,21 @@ Both the deterministic and AI layers enforce engineering guardrails: positive pr
 | VLP liquid-full benchmark (thp 100, tvd 8000, q 3000, GOR = Rs = 600, id 1.995 — extrapolation) | BB: Pwf = 2412.7 psia; HB: Pwf = 2414.8 psia (hl = 1 exact, friction ≈ 0; matches independent analytical hydrostatic 2414.9 psia) |
 | VLP two-phase GOR > Rs (thp 100, tvd 8000, id 1.995, GOR 1000, Rs 600) | HB: Pwf ≈ 128 psia — published H-B density-ratio behavior (no-slip ρ_s in elevation; gas-dominated column); outside the published test envelope, flagged `CORRELATION_LIMITATION` |
 | HB correction audit (Aug 13, 2026) | Revision 1 holdup group (N_RE-based, missing pressure/diameter groups) replaced by the verbatim published form (N_GV^0.575, (p/14.7)^0.1, N_D, C_NL from N_L); circular 2414.8 benchmark replaced by independent analytical hydrostatic; published-form test added |
+| HB multiphase discrepancy investigation (Aug 13, 2026) | Multiphase result mismatch traced to Z-factor defaults: handler/engine default z = 1.0 vs predeclared benchmark z = 0.88; physical gas-density effect (lower z compresses free gas, raises ρ_g and hydrostatic column, ΔPwf ≈ +2.8 psi) — NOT a defect; reconciled |
+| HB owner live multiphase verification (Aug 14, 2026) | thp 300, tvd 4000, q 800, GOR 1200 > Rs 500, id 1.35 in (inside published 1.0–1.5 in range), z default 1.0: Pwf = 332.664 psia, elevation ≈ 32.5 psi, friction ≈ 0.18 psi — matches independent z = 1.0 arithmetic reference 332.74 psia within 0.08 psi (tolerance ±0.5) |
+| HB z-factor provenance transparency (Aug 14, 2026) | All VLP outputs report active Z-factor and its provenance ("user supplied" vs "default — not user supplied") plus the list of engine defaults used; metadata additions provably change no numerical results (guarded by regression tests) |
 
 Full details: `PRODUCTION_ENGINEERING_PHASE1_IPR_MODEL.md` (Phase 1 doc), `VLP_ENGINEERING_MODEL.md`, `NODAL_ENGINEERING_MODEL.md`, `PRODUCTION_OPTIMIZATION_MODEL.md` (Section 7), `HAGEDORN_BROWN_ENGINEERING_MODEL.md` (Phase 5A).
 
-## 6. Test inventory (161 total)
+## 6. Test inventory (177 total)
 
 | Module | Tests |
 |---|---|
 | IPR engine | 37 |
-| VLP engine | 38 (incl. 8 Hagedorn–Brown routing/regression tests, including an independent published-holdup-form check) |
+| VLP engine | 50 (incl. 8 Hagedorn–Brown routing/regression tests including an independent published-holdup-form check, 3 reconciled-multiphase Z-benchmark tests, and 7 Phase-5A closeout tests: z-factor provenance labels, input-default propagation, metadata-immunity guardrail, locked accepted benchmark 332.664 psia, frozen BB baselines) |
 | Nodal engine | 21 (incl. 3 Hagedorn–Brown nodal tests) |
 | Production optimizer (incl. unit formatting) | 38 (incl. 4 Hagedorn–Brown model-selection tests) |
-| Engineering corrections / NPV & Z-factor / plot shape / artificial-lift guards | 27 |
+| Engineering corrections / NPV & Z-factor / plot shape / artificial-lift guards | 31 (incl. 4 Hagedorn–Brown / liquid-friction closeout regression tests) |
 
 ## 7. Known limitations (transparent)
 
