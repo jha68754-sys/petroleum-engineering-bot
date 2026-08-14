@@ -1,0 +1,245 @@
+{
+  "cases": [
+    {
+      "case": "api_le_30",
+      "checks": [
+        {
+          "name": "Rs nonnegative",
+          "pass": true,
+          "units": "scf/STB",
+          "value": 650.0000000000001
+        },
+        {
+          "name": "Bo positive",
+          "pass": true,
+          "units": "rb/STB",
+          "value": 1.3045583667113225
+        },
+        {
+          "name": "Pb/Rs inverse",
+          "pass": true,
+          "units": "scf/STB",
+          "value": 650.0000000000001
+        }
+      ],
+      "inputs": {
+        "api": 28.0,
+        "rsb_scf_stb": 650.0,
+        "separator_pressure_psia": 100.0,
+        "separator_temperature_f": 100.0,
+        "sg_g": 0.72,
+        "temperature_f": 180.0
+      },
+      "values": {
+        "bob_rb_stb": 1.3045583667113225,
+        "pb_psia": 3888.7967787206035,
+        "rs_at_pb_scf_stb": 650.0000000000001,
+        "sg_corrected": 0.7129008792390928
+      }
+    },
+    {
+      "case": "api_gt_30",
+      "checks": [
+        {
+          "name": "Rs nonnegative",
+          "pass": true,
+          "units": "scf/STB",
+          "value": 850.0
+        },
+        {
+          "name": "Bo positive",
+          "pass": true,
+          "units": "rb/STB",
+          "value": 1.3985163071263302
+        },
+        {
+          "name": "Pb/Rs inverse",
+          "pass": true,
+          "units": "scf/STB",
+          "value": 850.0
+        }
+      ],
+      "inputs": {
+        "api": 38.0,
+        "rsb_scf_stb": 850.0,
+        "separator_pressure_psia": 100.0,
+        "separator_temperature_f": 100.0,
+        "sg_g": 0.78,
+        "temperature_f": 200.0
+      },
+      "values": {
+        "bob_rb_stb": 1.3985163071263302,
+        "pb_psia": 3560.4525253827373,
+        "rs_at_pb_scf_stb": 850.0,
+        "sg_corrected": 0.7695626022146188
+      }
+    },
+    {
+      "case": "undersaturated_oil",
+      "checks": [
+        {
+          "name": "Bo positive",
+          "pass": true,
+          "units": "rb/STB",
+          "value": 1.3103600790417644
+        },
+        {
+          "name": "oil viscosity positive",
+          "pass": true,
+          "units": "cP",
+          "value": 0.5867983678944902
+        }
+      ],
+      "inputs": {
+        "api": 35.0,
+        "pb_psia": 2500.0,
+        "pressure_psia": 3500.0,
+        "rsb_scf_stb": 700.0,
+        "separator_pressure_psia": 100.0,
+        "separator_temperature_f": 100.0,
+        "sg_g": 0.75,
+        "temperature_f": 180.0
+      },
+      "values": {
+        "bo_rb_stb": 1.3103600790417644,
+        "bob_rb_stb": 1.3281484455352814,
+        "co_1_psi": 1.3483857142857143e-05,
+        "mu_o_cp": 0.5867983678944902,
+        "mu_od_cp": 2.1851886061339547,
+        "mu_os_cp": 0.5294465569577512
+      }
+    },
+    {
+      "case": "dak_low",
+      "checks": [
+        {
+          "name": "Z positive",
+          "pass": true,
+          "units": "dimensionless",
+          "value": 0.923384402520087
+        },
+        {
+          "name": "Bg positive",
+          "pass": true,
+          "units": "rb/scf",
+          "value": 0.005222662180653612
+        },
+        {
+          "name": "DAK residual",
+          "pass": true,
+          "units": "dimensionless",
+          "value": -1.1102230246251565e-16
+        },
+        {
+          "name": "Bg unit identity",
+          "pass": true,
+          "units": "rb/Mscf",
+          "value": 5.222662180653612
+        }
+      ],
+      "inputs": {
+        "pressure_psia": 500.0,
+        "sg_g": 0.7,
+        "temperature_f": 100.0
+      },
+      "values": {
+        "bg_rb_mscf": 5.222662180653612,
+        "bg_rb_scf": 0.005222662180653612,
+        "dak_iterations": 5,
+        "dak_residual": -1.1102230246251565e-16,
+        "mu_g_cp": 0.011780307672866116,
+        "z": 0.923384402520087
+      }
+    },
+    {
+      "case": "dak_medium",
+      "checks": [
+        {
+          "name": "Z positive",
+          "pass": true,
+          "units": "dimensionless",
+          "value": 0.8604210642471299
+        },
+        {
+          "name": "Bg positive",
+          "pass": true,
+          "units": "rb/scf",
+          "value": 0.0011123523518586896
+        },
+        {
+          "name": "DAK residual",
+          "pass": true,
+          "units": "dimensionless",
+          "value": 1.1102230246251565e-15
+        },
+        {
+          "name": "Bg unit identity",
+          "pass": true,
+          "units": "rb/Mscf",
+          "value": 1.1123523518586895
+        }
+      ],
+      "inputs": {
+        "pressure_psia": 2500.0,
+        "sg_g": 0.7,
+        "temperature_f": 180.0
+      },
+      "values": {
+        "bg_rb_mscf": 1.1123523518586895,
+        "bg_rb_scf": 0.0011123523518586896,
+        "dak_iterations": 5,
+        "dak_residual": 1.1102230246251565e-15,
+        "mu_g_cp": 0.017747712356483997,
+        "z": 0.8604210642471299
+      }
+    },
+    {
+      "case": "dak_high",
+      "checks": [
+        {
+          "name": "Z positive",
+          "pass": true,
+          "units": "dimensionless",
+          "value": 1.2442757970145786
+        },
+        {
+          "name": "Bg positive",
+          "pass": true,
+          "units": "rb/scf",
+          "value": 0.000565523349743126
+        },
+        {
+          "name": "DAK residual",
+          "pass": true,
+          "units": "dimensionless",
+          "value": -2.220446049250313e-15
+        },
+        {
+          "name": "Bg unit identity",
+          "pass": true,
+          "units": "rb/Mscf",
+          "value": 0.565523349743126
+        }
+      ],
+      "inputs": {
+        "pressure_psia": 8000.0,
+        "sg_g": 0.7,
+        "temperature_f": 260.0
+      },
+      "values": {
+        "bg_rb_mscf": 0.565523349743126,
+        "bg_rb_scf": 0.000565523349743126,
+        "dak_iterations": 5,
+        "dak_residual": -2.220446049250313e-15,
+        "mu_g_cp": 0.03085350063415609,
+        "z": 1.2442757970145786
+      }
+    }
+  ],
+  "dak_residual_tolerance": 1e-10,
+  "equation_reproduction_tolerance": {
+    "absolute": 1e-08,
+    "relative": 1e-08
+  },
+  "source": "independent_reference_only"
+}

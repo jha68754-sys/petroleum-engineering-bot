@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------- #
 # Constants
@@ -122,6 +122,7 @@ class VLPResult:
         self.z_factor_provenance: Optional[str] = kw.get(
             "z_factor_provenance")  # "user supplied" | "default"
         self.input_defaults: List[str] = kw.get("input_defaults", [])
+        self.pvt_metadata: Dict[str, Any] = kw.get("pvt_metadata", {})
 
     @property
     def converged(self) -> bool:
@@ -304,7 +305,7 @@ def _segment_state(p: float, t_f: float, q_o: float, q_w: float,
                    gor: float, bo: float, bw: float, z: float,
                    gamma_g: float, gamma_w: float, mu_l: float,
                    api: float, wc: float, d_ft: float, rs: float,
-                   sigma: float) -> Dict[str, float]:
+                   sigma: float, mu_g: Optional[float] = None) -> Dict[str, float]:
     """Compute all local flow variables at a segment node (standard BB
     input set). Returns a dictionary of local properties."""
     a = PI * d_ft ** 2 / 4.0
@@ -323,7 +324,8 @@ def _segment_state(p: float, t_f: float, q_o: float, q_w: float,
     hl = max(hl, lam)
     rho_m = rho_l * hl + rho_g * (1.0 - hl)
     rho_s = rho_l * hl + rho_g * (1.0 - hl)
-    mu_g = _gas_viscosity_lee(t_f, p, gamma_g, z)
+    mu_g = (_gas_viscosity_lee(t_f, p, gamma_g, z)
+             if mu_g is None else mu_g)
     mu_m = mu_l * lam + mu_g * (1.0 - lam)
     re = 1488.0 * rho_m * vm * d_ft / mu_m if mu_m > 0 else 0.0
     ftp, fn = _bb_two_phase_friction(lam, hl, re, 0.00065, d_ft)
@@ -332,6 +334,83 @@ def _segment_state(p: float, t_f: float, q_o: float, q_w: float,
                 rho_l=rho_l, rho_g=rho_g, hl=hl, rho_m=rho_m,
                 rho_s=rho_s, mu_m=mu_m, mu_g=mu_g, re=re, ftp=ftp, fn=fn,
                 gm=gm)
+
+
+def _resolve_pvt_properties(pvt_provider: Any,
+                            pvt_context: Optional[Dict[str, Any]],
+                            pressure_psia: float,
+                            temperature_f: float,
+                            fallback: Dict[str, float],
+                            tracker: Dict[str, Any]) -> Dict[str, float]:
+    """Resolve optional pressure-dependent PVT properties for one node.
+
+    The provider is deliberately opt-in. With no provider, this returns the
+    original caller-supplied properties byte-for-byte. When enabled, the
+    provider is the only source of local Rs/Bo/co/mu_o/Z/Bg/mu_g values; the
+    VLP equations below remain unchanged.
+    """
+    if pvt_provider is None:
+        return fallback
+    if not pvt_context:
+        raise ValueError(
+            "INSUFFICIENT_DATA: pvt_context is required when pvt_provider "
+            "is enabled.")
+    try:
+        from services.black_oil_pvt import PvtState
+        state_kwargs = dict(pvt_context)
+        state_kwargs["pressure_psia"] = pressure_psia
+        state_kwargs["temperature_f"] = temperature_f
+        result = pvt_provider.evaluate(PvtState(**state_kwargs))
+    except TypeError as exc:
+        raise ValueError(
+            "PHYSICALLY_INVALID: invalid pvt_context for Black-Oil provider."
+        ) from exc
+    status = str(getattr(result, "status", "UNKNOWN"))
+    tracker["statuses"].add(status)
+    tracker["phase_regions"].add(str(getattr(result, "phase_region", "unknown")))
+    tracker["pressures"].append(float(pressure_psia))
+    provenance = getattr(result, "provenance", {}) or {}
+    tracker["provenance"] = provenance
+    for key in ("warnings", "limitations"):
+        for item in getattr(result, key, []) or []:
+            if item not in tracker[key]:
+                tracker[key].append(item)
+    if status not in ("OK", "CORRELATION_LIMITATION"):
+        raise ValueError(
+            f"{status}: Black-Oil provider failed at {pressure_psia:.6g} psia.")
+    values = {
+        "rs": getattr(result, "rs_scf_stb", None),
+        "bo": getattr(result, "bo_rb_stb", None),
+        "z": getattr(result, "z_factor", None),
+        "mu_l": getattr(result, "mu_o_cp", None),
+        "mu_g": getattr(result, "mu_g_cp", None),
+        "bg": getattr(result, "bg_rb_scf", None),
+    }
+    missing = [name for name, value in values.items()
+               if value is None or not math.isfinite(float(value))]
+    if missing:
+        raise ValueError(
+            "INSUFFICIENT_DATA: Black-Oil provider returned missing/non-finite "
+            f"properties: {', '.join(missing)}.")
+    return {name: float(value) for name, value in values.items()}
+
+
+def _finalize_pvt_metadata(pvt_provider: Any,
+                           tracker: Dict[str, Any]) -> Dict[str, Any]:
+    if pvt_provider is None:
+        return {}
+    pressures = tracker["pressures"]
+    return {
+        "enabled": True,
+        "mode": "pressure_dependent",
+        "provider": pvt_provider.__class__.__name__,
+        "pressure_range_psia": [min(pressures), max(pressures)] if pressures else [],
+        "phase_regions": sorted(tracker["phase_regions"]),
+        "statuses": sorted(tracker["statuses"]),
+        "provenance": tracker["provenance"],
+        "warnings": list(tracker["warnings"]),
+        "limitations": list(tracker["limitations"]),
+    }
 
 
 def _gradients(st: Dict[str, float], d_ft: float) -> Tuple[float, float]:
@@ -354,7 +433,9 @@ def traverse(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
              max_iters: int = DEFAULT_MAX_ITERS,
              vlp_model: Optional[str] = None,
              z_provenance: Optional[str] = None,
-             input_defaults: Optional[List[str]] = None) -> VLPResult:
+             input_defaults: Optional[List[str]] = None,
+             pvt_provider: Any = None,
+             pvt_context: Optional[Dict[str, Any]] = None) -> VLPResult:
     """Segmented pressure traverse, wellhead -> bottomhole.
 
     Model selection: 'beggs_brill' (default, original implementation) or
@@ -367,7 +448,8 @@ def traverse(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
             thp, tvd, q_o, q_w, gor, bo, bw, z_factor, gamma_g, gamma_w,
             mu_l, api, wc, tubing_id_in, rs, t_wh, geothermal, sigma,
             n_segments, tol, max_seg_iter, max_iters,
-            z_provenance=z_provenance, input_defaults=input_defaults)
+            z_provenance=z_provenance, input_defaults=input_defaults,
+            pvt_provider=pvt_provider, pvt_context=pvt_context)
 
     # Midpoint method per segment: properties evaluated at the arithmetic-mean
     # pressure of the segment endpoints, iterated until the segment delta-p
@@ -392,6 +474,21 @@ def traverse(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
     accel_psi = 0.0
     patterns: Dict[str, int] = {}
     seg_grads: List[Tuple[float, float]] = []
+    pvt_tracker: Dict[str, Any] = {
+        "pressures": [], "phase_regions": set(), "statuses": set(),
+        "provenance": {}, "warnings": [], "limitations": []}
+    last_pvt: Optional[Dict[str, float]] = None
+
+    def local_properties(p_eval: float, t_eval: float) -> Dict[str, float]:
+        nonlocal last_pvt
+        props = _resolve_pvt_properties(
+            pvt_provider, pvt_context, p_eval, t_eval,
+            {"rs": rs, "bo": bo, "z": z_factor, "mu_l": mu_l,
+             "mu_g": None, "bg": 0.0}, pvt_tracker)
+        if pvt_provider is not None:
+            last_pvt = props
+        return props
+
     for i in range(n_segments):
         t_f = t_wh + geothermal * (i + 0.5) * dl / 100.0
         # bisection on the downstream pressure p2
@@ -409,10 +506,15 @@ def traverse(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
         # unique root robustly, at the cost of a few extra property
         # evaluations per segment.
         try:
+            props_up = local_properties(p, t_f)
             st_up = _segment_state(
-                p, t_f, q_o, q_w, gor, bo, bw, z_factor, gamma_g, gamma_w,
-                mu_l, api, wc, d_ft, rs, sigma)
+                p, t_f, q_o, q_w, gor, props_up["bo"], bw,
+                props_up["z"], gamma_g, gamma_w, props_up["mu_l"],
+                api, wc, d_ft, props_up["rs"], sigma,
+                props_up["mu_g"])
         except (ValueError, ZeroDivisionError):
+            if pvt_provider is not None:
+                raise
             seg_dp_el, seg_dp_fr = 0.0, 0.0
         else:
             dp_up_el, dp_up_fr = _gradients(st_up, d_ft)
@@ -428,10 +530,15 @@ def traverse(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
                         "NUMERICAL_NON_CONVERGENCE: pressure collapsed "
                         "below 0.01 psia during the traverse.")
                 try:
+                    props_mid = local_properties(p_avg, t_f)
                     st = _segment_state(
-                        p_avg, t_f, q_o, q_w, gor, bo, bw, z_factor,
-                        gamma_g, gamma_w, mu_l, api, wc, d_ft, rs, sigma)
+                        p_avg, t_f, q_o, q_w, gor, props_mid["bo"], bw,
+                        props_mid["z"], gamma_g, gamma_w, props_mid["mu_l"],
+                        api, wc, d_ft, props_mid["rs"], sigma,
+                        props_mid["mu_g"])
                 except (ValueError, ZeroDivisionError):
+                    if pvt_provider is not None:
+                        raise
                     seg_dp_el, seg_dp_fr = 0.0, 0.0
                     break
                 dp_el, dp_fr = _gradients(st, d_ft)
@@ -439,14 +546,19 @@ def traverse(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
                 # kinetic-energy (acceleration) correction
                 p_mid = (lo + hi) / 2.0
                 try:
+                    t_next = t_f + geothermal * (i + 1) * dl / 100.0
+                    props_next = local_properties(p_mid, t_next)
                     st2 = _segment_state(
-                        p_mid, t_f + geothermal * (i + 1) * dl / 100.0,
-                        q_o, q_w, gor, bo, bw, z_factor, gamma_g, gamma_w,
-                        mu_l, api, wc, d_ft, rs, sigma)
+                        p_mid, t_next, q_o, q_w, gor, props_next["bo"], bw,
+                        props_next["z"], gamma_g, gamma_w,
+                        props_next["mu_l"], api, wc, d_ft,
+                        props_next["rs"], sigma, props_next["mu_g"])
                     dp_dvm = (st2["rho_s"] * st2["vm"]
                               - st["rho_s"] * st["vm"])
                     ek_prime = dp_dvm / GC / PSI_PSF
                 except (ValueError, ZeroDivisionError):
+                    if pvt_provider is not None:
+                        raise
                     ek_prime = 0.0
                 denom = 1.0 - ek_prime
                 dp = (dp_el + dp_fr) / (denom if abs(denom) > 1e-9 else 1e-9)
@@ -480,6 +592,7 @@ def traverse(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
             raise ValueError(
                 "NUMERICAL_NON_CONVERGENCE: bottomhole pressure collapsed "
                 "below the 0.01 psia floor; check wellhead/rate inputs.")
+    pvt_metadata = _finalize_pvt_metadata(pvt_provider, pvt_tracker)
     return VLPResult(
         status="CONVERGED", pwf=p, thp=thp, rate=q_o + q_w,
         water_cut=wc, gor=gor, tvd=tvd, tubing_id=tubing_id_in,
@@ -489,8 +602,13 @@ def traverse(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
         flow_pattern_counts=patterns,
         elevation_psi=elev_psi, friction_psi=fric_psi,
         acceleration_psi=accel_psi, iterations=total_iters,
-        z_factor=z_factor, z_factor_provenance=z_provenance,
-        input_defaults=input_defaults)
+        z_factor=(last_pvt["z"] if last_pvt is not None else z_factor),
+        z_factor_provenance=("BlackOilPvtProvider" if last_pvt is not None
+                             else z_provenance),
+        input_defaults=input_defaults,
+        warnings=pvt_metadata.get("warnings", []),
+        limitations=pvt_metadata.get("limitations", []),
+        pvt_metadata=pvt_metadata)
 
 
 def traverse_hb(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
@@ -503,7 +621,9 @@ def traverse_hb(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
                 max_seg_iter: int = DEFAULT_MAX_SEG_ITER,
                 max_iters: int = DEFAULT_MAX_ITERS,
                 z_provenance: Optional[str] = None,
-                input_defaults: Optional[List[str]] = None) -> VLPResult:
+                input_defaults: Optional[List[str]] = None,
+                pvt_provider: Any = None,
+                pvt_context: Optional[Dict[str, Any]] = None) -> VLPResult:
     """Segmented Hagedorn-Brown (1965) pressure traverse, wellhead ->
     bottomhole.
 
@@ -543,6 +663,21 @@ def traverse_hb(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
         warnings.append(
             f"CORRELATION_LIMITATION: liquid rate {q_total} STB/D is outside "
             f"the published H-B range {env['liquid_rate']} STB/D.")
+    pvt_tracker: Dict[str, Any] = {
+        "pressures": [], "phase_regions": set(), "statuses": set(),
+        "provenance": {}, "warnings": [], "limitations": []}
+    last_pvt: Optional[Dict[str, float]] = None
+
+    def local_properties(p_eval: float, t_eval: float) -> Dict[str, float]:
+        nonlocal last_pvt
+        props = _resolve_pvt_properties(
+            pvt_provider, pvt_context, p_eval, t_eval,
+            {"rs": rs, "bo": bo, "z": z_factor, "mu_l": mu_l,
+             "mu_g": None, "bg": 0.0}, pvt_tracker)
+        if pvt_provider is not None:
+            last_pvt = props
+        return props
+
     for i in range(n_segments):
         t_f = t_wh + geothermal * (i + 0.5) * dl / 100.0
         converged_seg = False
@@ -550,10 +685,15 @@ def traverse_hb(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
         p2 = p
         seg_st: Optional[Dict[str, float]] = None
         try:
+            props_up = local_properties(p, t_f)
             st_up = _hb.hb_segment_state(
-                p, t_f, q_o, q_w, gor, bo, bw, z_factor, gamma_g, gamma_w,
-                mu_l, api, wc, d_ft, rs, sigma)
+                p, t_f, q_o, q_w, gor, props_up["bo"], bw,
+                props_up["z"], gamma_g, gamma_w, props_up["mu_l"],
+                api, wc, d_ft, props_up["rs"], sigma,
+                mu_g=props_up["mu_g"])
         except (ValueError, ZeroDivisionError):
+            if pvt_provider is not None:
+                raise
             seg_dp_el, seg_dp_fr = 0.0, 0.0
         else:
             dp_up_el, dp_up_fr = _hb.hb_gradients(st_up, d_ft)
@@ -566,24 +706,34 @@ def traverse_hb(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
                         "NUMERICAL_NON_CONVERGENCE: pressure collapsed "
                         "below 0.01 psia during the traverse.")
                 try:
+                    props_mid = local_properties(p_avg, t_f)
                     st = _hb.hb_segment_state(
-                        p_avg, t_f, q_o, q_w, gor, bo, bw, z_factor,
-                        gamma_g, gamma_w, mu_l, api, wc, d_ft, rs, sigma)
+                        p_avg, t_f, q_o, q_w, gor, props_mid["bo"], bw,
+                        props_mid["z"], gamma_g, gamma_w, props_mid["mu_l"],
+                        api, wc, d_ft, props_mid["rs"], sigma,
+                        mu_g=props_mid["mu_g"])
                 except (ValueError, ZeroDivisionError):
+                    if pvt_provider is not None:
+                        raise
                     seg_dp_el, seg_dp_fr = 0.0, 0.0
                     break
                 dp_el, dp_fr = _hb.hb_gradients(st, d_ft)
                 seg_dp_el, seg_dp_fr = dp_el, dp_fr
                 p_mid = (lo + hi) / 2.0
                 try:
+                    t_next = t_f + geothermal * (i + 1) * dl / 100.0
+                    props_next = local_properties(p_mid, t_next)
                     st2 = _hb.hb_segment_state(
-                        p_mid, t_f + geothermal * (i + 1) * dl / 100.0,
-                        q_o, q_w, gor, bo, bw, z_factor, gamma_g, gamma_w,
-                        mu_l, api, wc, d_ft, rs, sigma)
+                        p_mid, t_next, q_o, q_w, gor, props_next["bo"], bw,
+                        props_next["z"], gamma_g, gamma_w,
+                        props_next["mu_l"], api, wc, d_ft,
+                        props_next["rs"], sigma, mu_g=props_next["mu_g"])
                     dp_dvm = (st2["rho_s"] * st2["vm"]
                               - st["rho_s"] * st["vm"])
                     ek_prime = dp_dvm / GC / PSI_PSF
                 except (ValueError, ZeroDivisionError):
+                    if pvt_provider is not None:
+                        raise
                     ek_prime = 0.0
                 denom = 1.0 - ek_prime
                 dp = (dp_el + dp_fr) / (denom if abs(denom) > 1e-9 else 1e-9)
@@ -623,9 +773,13 @@ def traverse_hb(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
         flow_pattern_counts={},
         elevation_psi=elev_psi, friction_psi=fric_psi,
         acceleration_psi=accel_psi, iterations=total_iters,
-        warnings=warnings, limitations=warnings,
-        z_factor=z_factor, z_factor_provenance=z_provenance,
-        input_defaults=input_defaults)
+        warnings=warnings + list(pvt_tracker["warnings"]),
+        limitations=warnings + list(pvt_tracker["limitations"]),
+        z_factor=(last_pvt["z"] if last_pvt is not None else z_factor),
+        z_factor_provenance=("BlackOilPvtProvider" if last_pvt is not None
+                             else z_provenance),
+        input_defaults=input_defaults,
+        pvt_metadata=_finalize_pvt_metadata(pvt_provider, pvt_tracker))
 
 
 # ---------------------------------------------------------------------- #
@@ -668,6 +822,8 @@ def vlp_curve(thp: float, tvd: float, gor: float, bo: float, bw: float,
               vlp_model: Optional[str] = None,
               z_provenance: Optional[str] = None,
               input_defaults: Optional[List[str]] = None,
+              pvt_provider: Any = None,
+              pvt_context: Optional[Dict[str, Any]] = None,
               **_kwargs) -> Tuple[List[float],
                                                          List[float]]:
     """Calculated VLP curve: Pwf vs total rate. Rates are swept linearly;
@@ -694,7 +850,8 @@ def vlp_curve(thp: float, tvd: float, gor: float, bo: float, bw: float,
             mu_l, api, wc, tubing_id_in, rs, t_wh, geothermal, sigma,
             n_segments, vlp_model=vlp_model,
             z_provenance=z_provenance if z_provenance else "default",
-            input_defaults=input_defaults)
+            input_defaults=input_defaults,
+            pvt_provider=pvt_provider, pvt_context=pvt_context)
         qs.append(q_total)
         ps.append(res.pwf if res.pwf is not None else 0.0)
     return qs, ps

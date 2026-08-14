@@ -191,7 +191,8 @@ def hb_segment_state(p: float, t_f: float, q_o: float, q_w: float,
                      gamma_g: float, gamma_w: float, mu_l: float,
                      api: float, wc: float, d_ft: float, rs: float,
                      sigma: float,
-                     q_g_inj: float = 0.0) -> Dict[str, float]:
+                     q_g_inj: float = 0.0,
+                     mu_g: Optional[float] = None) -> Dict[str, float]:
     """All local Hagedorn-Brown flow variables at one segment node.
 
     Published H-B forms only (see module docstring). Returns: vm, vsl,
@@ -217,7 +218,8 @@ def hb_segment_state(p: float, t_f: float, q_o: float, q_w: float,
     rho_l = _rho_l(api, rs, gamma_g, bo, gamma_w, wc)
     sigma_l = _sigma_l(wc, sigma)
     rho_g = _rho_g(p, z, t_f, gamma_g)
-    mu_g = _gas_viscosity_lee(t_f, p, gamma_g, z)
+    mu_g = (_gas_viscosity_lee(t_f, p, gamma_g, z)
+             if mu_g is None else mu_g)
 
     dims = _dim_numbers(vsl, vsg, d_ft, rho_l, sigma_l, mu_l)
     cn_l = _cn_l(dims["n_l"])
