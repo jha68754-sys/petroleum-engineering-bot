@@ -57,11 +57,34 @@ Note that the two-phase live result for GOR > Rs at low THP (≈ 125–138 psia 
 
 The Revision 1 test package contained one physics benchmark (2414.8 psia) derived from the engine's own output — **circular, and explicitly acknowledged as such**. Revision 2 removes all circularity: the liquid-full benchmark is now the standard analytical hydrostatic (black-oil density, independent of the correlation), and a new test (`test_hb_published_holdup_form`) re-derives the published dimensionless groups, C_NL, H group, and H_L/ψ curve with plain arithmetic and compares against the module — the reference implementation in the test is independent code, not the engine under test. Remaining tests exercise solver plumbing, model routing, and cross-model ordering (H-B vs BB), which are behavior tests, not validation benchmarks.
 
-## 6. Live verification command (corrected, in validated range)
+## 6. Multiphase discrepancy investigation (Aug 13, 2026) — reconciled
+
+The owner live multiphase test returned Pwf = 332.664 psia against the predeclared benchmark of 335.52 psia (error 2.86 psi, outside the declared ±2 psi tolerance). The investigation classified the discrepancy as **D — DIFFERENT PROPERTY ASSUMPTIONS**; no engine defect was found.
+
+| Investigation step | Result |
+|---|---|
+| Production convergence study (20/40/80/160/320 segments) | 332.605 / 332.646 / 332.664 / 332.667 / 332.655 psia — converged to ±0.02 psi; discretization contributes < 0.05 psi |
+| Independent 80-segment rerun, z = 0.88, same midpoint scheme | 335.50 vs production 335.37 — Δ 0.13 psi |
+| Segment-by-segment comparison (depths 25–3975 ft) | N_LV, N_GV, N_D, N_L, C_NL, H, ψ(B), hl, ρ_s, dP_el, dP_fr match to print precision |
+| Live command vs benchmark inputs | The live command did not supply z; the handler defaults to z = 1.0, while the benchmark was computed with z = 0.88 |
+| Production 80-segment with z = 1.0 | 332.664 psia — **exact match** to the live result |
+| Independent 80-segment with z = 1.0 | 332.74 psia — matches the live result within 0.08 psi |
+
+The 2.78-psi gap is the physical z-factor gas-density effect (ρ_g = 2.6989·γ_g·p/(z·(T+460))): the lower z compresses the free gas, raises the no-slip mixture density, and raises the hydrostatic column by ≈ 2.7 psi. Average holdup differs only 0.058 vs 0.056 — in the hl ≥ λ regime, ρ_s is dominated by gas density, so holdup barely affects the hydrostatic term. A documented sanity check confirms the liquid-full case is insensitive to z (no free gas). The test package now records both governing references (`TestHBMultiphaseZBenchmark`): R1 (z = 1.0, handler default) Pwf = 332.7 ± 0.5 psi and R2 (z = 0.88) Pwf = 335.5 ± 0.5 psi, plus the z-effect magnitude band (2.0–3.5 psi).
+
+## 7. Live verification commands (corrected, in validated range)
 
 ```
 /calc vlp thp=100 tvd=8000 id=1.35 q=600 gor=600 rs=600 api=35 gamma_g=0.65 mu_l=2 bo=1.3 t_wh=120 geothermal=1.5 vlp_model=hagedorn_brown
 ```
 
 Inputs: ID 1.35 in (inside the published 1.0–1.5 in test range), q = 600 STB/D (inside 50–1200 test range), GOR = Rs = 600 (liquid-full, free gas = 0).
-Expected: **Pwf ≈ 2592.9 psia** (analytical liquid column: ρ_l = 44.87 lbm/ft³ → 100 + 44.87·8000/144 = 2592.9 psia; temperature variation through the geothermal gradient shifts this by < 1 psia), hydrostatic ≈ 2492.9 psi, friction < 0.001 psi. Acceptable tolerance: **±3 psi** (0.1%).
+Expected: **Pwf ≈ 2592.9 psia** (analytical liquid column: ρ_l = 44.87 lbm/ft³ → 100 + 44.87·8000/144 = 2592.9 psia; temperature variation through the geothermal gradient shifts this by < 1 psia), hydrostatic ≈ 2492.9 psi, friction < 0.001 psi. Acceptable tolerance: **±3 psi** (0.1%). **STATUS: VERIFIED PASSING by owner live test (2592.89 psia live vs 2592.9 benchmark).**
+
+### Multiphase retest (corrected governing assumption: z not supplied, z = 1.0)
+
+```
+/calc vlp thp=300 tvd=4000 id=1.35 q=800 gor=1200 rs=500 api=35 gamma_g=0.65 mu_l=2 bo=1.3 t_wh=120 geothermal=1.5 vlp_model=hagedorn_brown
+```
+
+Expected: **Pwf ≈ 332.7 psia** (hydrostatic ≈ 32.6 psi, friction ≈ 0.2 psi; R1 tolerance ±0.5 psi). This matches the Aug-13 live result of 332.664 psia exactly. If z = 0.88 is supplied explicitly, the governing reference is R2: Pwf ≈ 335.5 psia (hydrostatic ≈ 35.3 psi; tolerance ±0.5 psi).

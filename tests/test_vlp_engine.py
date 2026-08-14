@@ -481,5 +481,82 @@ class TestHagedornBrownRouting(unittest.TestCase):
         self.assertAlmostEqual(st["cn_l"], cnl, places=5)
 
 
+class TestHBMultiphaseZBenchmark(unittest.TestCase):
+    """Reconciled multiphase benchmark after the Aug-13, 2026 discrepancy
+    investigation (PHASE 5A MULTIPHASE DISCREPANCY INVESTIGATION).
+
+    Case: thp=300, tvd=4000, id=1.35 (published 1.0-1.5 in), q=800 STB/D
+    (published 50-1200), gor=1200, rs=500 (free gas 700 scf/STB), api=35,
+    gamma_g=0.65, mu_l=2, bo=1.3, t_wh=120, geothermal=1.5, wc=0.
+
+    Two governing references (both from the published H-B equations applied
+    with plain arithmetic, 80-segment midpoint march, independent of the
+    production module's equations code):
+      R1  z = 1.0  (handler default when z is not supplied)
+          -> Pwf = 332.74 psia, hydrostatic = 32.56 psi, friction = 0.17 psi
+      R2  z = 0.88 (explicit z-factor input)
+          -> Pwf = 335.52 psia, hydrostatic = 35.28 psi, friction = 0.24 psi
+    The 2.78-psi difference between R1 and R2 is a PHYSICAL gas-density
+    effect (rho_g = 2.6989*gamma_g*p/(z*(T+460))), not a defect: the lower
+    z compresses the free gas, raises rho_g and the no-slip mixture
+    density, and therefore raises the hydrostatic column.
+
+    Live verification (Aug 13, 2026, z NOT supplied -> z=1.0):
+      Pwf = 332.664 psia, hydrostatic = 32.5 psi, friction = 0.18 psi
+      -> matches R1 within 0.08 psi (R1 tolerance +/-0.5 psi).
+    """
+
+    def test_hb_multiphase_z_default_matches_reference(self):
+        """z = 1.0 (default): production must match R1 within tolerance."""
+        res = vlp_engine.traverse(
+            300.0, 4000.0, 800.0, 0.0, 1200.0, 1.3, 1.01, 1.0, 0.65,
+            1.07, 2.0, 35.0, 0.0, 1.35, 500.0, 120.0, 1.5,
+            vlp_model="hagedorn_brown")
+        self.assertEqual(res.status, "CONVERGED")
+        self.assertAlmostEqual(res.pwf, 332.7, delta=0.5)
+        self.assertAlmostEqual(res.components["elevation"], 32.6, delta=0.5)
+        self.assertAlmostEqual(res.components["friction"], 0.2, delta=0.3)
+        # holdup must reflect the corrected published form (not no-slip)
+        self.assertGreater(res.friction_psi, 0.0)
+
+    def test_hb_multiphase_explicit_z_matches_reference(self):
+        """z = 0.88 (explicit): production must match R2 within tolerance."""
+        res = vlp_engine.traverse(
+            300.0, 4000.0, 800.0, 0.0, 1200.0, 1.3, 1.01, 0.88, 0.65,
+            1.07, 2.0, 35.0, 0.0, 1.35, 500.0, 120.0, 1.5,
+            vlp_model="hagedorn_brown")
+        self.assertEqual(res.status, "CONVERGED")
+        self.assertAlmostEqual(res.pwf, 335.5, delta=0.5)
+        self.assertAlmostEqual(res.components["elevation"], 35.3, delta=0.5)
+
+    def test_hb_z_factor_physical_effect(self):
+        """Documented: lower z -> higher gas density -> higher BHP.
+        The sign and magnitude (~2.8 psi) must be reproducible."""
+        r1 = vlp_engine.traverse(
+            300.0, 4000.0, 800.0, 0.0, 1200.0, 1.3, 1.01, 1.0, 0.65,
+            1.07, 2.0, 35.0, 0.0, 1.35, 500.0, 120.0, 1.5,
+            vlp_model="hagedorn_brown")
+        r2 = vlp_engine.traverse(
+            300.0, 4000.0, 800.0, 0.0, 1200.0, 1.3, 1.01, 0.88, 0.65,
+            1.07, 2.0, 35.0, 0.0, 1.35, 500.0, 120.0, 1.5,
+            vlp_model="hagedorn_brown")
+        self.assertGreater(r2.pwf - r1.pwf, 2.0)
+        self.assertLess(r2.pwf - r1.pwf, 3.5)
+
+    def test_hb_liquid_full_z_factor_effect(self):
+        """Sanity: with no free gas (gor = rs) z has NO effect on the
+        liquid-full column, confirming the free-gas channel is the only
+        z-sensitivity in the correlation."""
+        r1 = vlp_engine.traverse(
+            300.0, 4000.0, 800.0, 0.0, 600.0, 1.3, 1.01, 1.0, 0.65,
+            1.07, 2.0, 35.0, 0.0, 1.35, 600.0, 120.0, 1.5,
+            vlp_model="hagedorn_brown")
+        r2 = vlp_engine.traverse(
+            300.0, 4000.0, 800.0, 0.0, 600.0, 1.3, 1.01, 0.88, 0.65,
+            1.07, 2.0, 35.0, 0.0, 1.35, 600.0, 120.0, 1.5,
+            vlp_model="hagedorn_brown")
+        self.assertAlmostEqual(r1.pwf, r2.pwf, places=1)
+
+
 if __name__ == "__main__":
     unittest.main()
