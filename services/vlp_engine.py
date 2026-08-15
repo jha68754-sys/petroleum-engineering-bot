@@ -338,46 +338,49 @@ def _segment_state(p: float, t_f: float, q_o: float, q_w: float,
 
 def _resolve_pvt_properties(pvt_provider: Any,
                             pvt_context: Optional[Dict[str, Any]],
-                            pressure_psia: float,
-                            temperature_f: float,
                             fallback: Dict[str, float],
                             tracker: Dict[str, Any]) -> Dict[str, float]:
-    """Resolve optional pressure-dependent PVT properties for one node.
+    """Resolve optional PVT properties once at an explicit provider state.
 
     The provider is deliberately opt-in. With no provider, this returns the
     original caller-supplied properties byte-for-byte. When enabled, the
-    provider is the only source of local Rs/Bo/co/mu_o/Z/Bg/mu_g values; the
-    VLP equations below remain unchanged.
+    context must contain the explicit ``pressure_psia`` and ``temperature_f``
+    used for one deterministic provider evaluation; the resulting properties
+    are held fixed across the VLP traverse.
     """
     if pvt_provider is None:
         return fallback
     if not pvt_context:
         raise ValueError(
-            "INSUFFICIENT_DATA: pvt_context is required when pvt_provider "
-            "is enabled.")
+            "INSUFFICIENT_DATA: pvt_context with explicit pressure_psia and "
+            "temperature_f is required when pvt_provider is enabled.")
     try:
         from services.black_oil_pvt import PvtState
         state_kwargs = dict(pvt_context)
-        state_kwargs["pressure_psia"] = pressure_psia
-        state_kwargs["temperature_f"] = temperature_f
-        result = pvt_provider.evaluate(PvtState(**state_kwargs))
-    except TypeError as exc:
+        pressure_psia = state_kwargs.pop("pressure_psia")
+        temperature_f = state_kwargs.pop("temperature_f")
+        result = pvt_provider.evaluate(PvtState(
+            pressure_psia=pressure_psia,
+            temperature_f=temperature_f,
+            **state_kwargs))
+    except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(
-            "PHYSICALLY_INVALID: invalid pvt_context for Black-Oil provider."
+            "PHYSICALLY_INVALID: pvt_context must contain a valid explicit "
+            "pressure_psia/temperature_f state for the Black-Oil provider."
         ) from exc
     status = str(getattr(result, "status", "UNKNOWN"))
     tracker["statuses"].add(status)
     tracker["phase_regions"].add(str(getattr(result, "phase_region", "unknown")))
     tracker["pressures"].append(float(pressure_psia))
-    provenance = getattr(result, "provenance", {}) or {}
-    tracker["provenance"] = provenance
+    tracker["provenance"] = getattr(result, "provenance", {}) or {}
     for key in ("warnings", "limitations"):
         for item in getattr(result, key, []) or []:
             if item not in tracker[key]:
                 tracker[key].append(item)
     if status not in ("OK", "CORRELATION_LIMITATION"):
         raise ValueError(
-            f"{status}: Black-Oil provider failed at {pressure_psia:.6g} psia.")
+            f"{status}: Black-Oil provider failed at {float(pressure_psia):.6g} "
+            "psia.")
     values = {
         "rs": getattr(result, "rs_scf_stb", None),
         "bo": getattr(result, "bo_rb_stb", None),
@@ -402,8 +405,9 @@ def _finalize_pvt_metadata(pvt_provider: Any,
     pressures = tracker["pressures"]
     return {
         "enabled": True,
-        "mode": "pressure_dependent",
+        "mode": "explicit_state",
         "provider": pvt_provider.__class__.__name__,
+        "pressure_psia": pressures[0] if pressures else None,
         "pressure_range_psia": [min(pressures), max(pressures)] if pressures else [],
         "phase_regions": sorted(tracker["phase_regions"]),
         "statuses": sorted(tracker["statuses"]),
@@ -458,9 +462,9 @@ def traverse(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
     # silent answer). Pressure floor 0.01 psia is enforced with an error.
 
     # q_o, q_w: STB/day (total rates, water cut already accounted for in
-    # q_w). GOR: scf/STB (produced). rs: scf/STB at local average pressure.
-    # If rs is not supplied per-segment (single value), it is held constant —
-    # see the "PVT INTEGRATION" contract.
+    # q_w). GOR: scf/STB (produced). rs: scf/STB from the caller or the
+    # explicitly supplied provider state; provider properties are held fixed
+    # across this traverse.
     if n_segments < 4:
         raise ValueError(
             "PHYSICALLY_INVALID: segment count must be >= 4 for a stable "
@@ -477,17 +481,13 @@ def traverse(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
     pvt_tracker: Dict[str, Any] = {
         "pressures": [], "phase_regions": set(), "statuses": set(),
         "provenance": {}, "warnings": [], "limitations": []}
-    last_pvt: Optional[Dict[str, float]] = None
+    pvt_properties = _resolve_pvt_properties(
+        pvt_provider, pvt_context,
+        {"rs": rs, "bo": bo, "z": z_factor, "mu_l": mu_l,
+         "mu_g": None, "bg": 0.0}, pvt_tracker)
 
-    def local_properties(p_eval: float, t_eval: float) -> Dict[str, float]:
-        nonlocal last_pvt
-        props = _resolve_pvt_properties(
-            pvt_provider, pvt_context, p_eval, t_eval,
-            {"rs": rs, "bo": bo, "z": z_factor, "mu_l": mu_l,
-             "mu_g": None, "bg": 0.0}, pvt_tracker)
-        if pvt_provider is not None:
-            last_pvt = props
-        return props
+    def local_properties(_p_eval: float, _t_eval: float) -> Dict[str, float]:
+        return pvt_properties
 
     for i in range(n_segments):
         t_f = t_wh + geothermal * (i + 0.5) * dl / 100.0
@@ -602,8 +602,9 @@ def traverse(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
         flow_pattern_counts=patterns,
         elevation_psi=elev_psi, friction_psi=fric_psi,
         acceleration_psi=accel_psi, iterations=total_iters,
-        z_factor=(last_pvt["z"] if last_pvt is not None else z_factor),
-        z_factor_provenance=("BlackOilPvtProvider" if last_pvt is not None
+        z_factor=(pvt_properties["z"] if pvt_provider is not None
+                   else z_factor),
+        z_factor_provenance=("BlackOilPvtProvider" if pvt_provider is not None
                              else z_provenance),
         input_defaults=input_defaults,
         warnings=pvt_metadata.get("warnings", []),
@@ -666,17 +667,13 @@ def traverse_hb(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
     pvt_tracker: Dict[str, Any] = {
         "pressures": [], "phase_regions": set(), "statuses": set(),
         "provenance": {}, "warnings": [], "limitations": []}
-    last_pvt: Optional[Dict[str, float]] = None
+    pvt_properties = _resolve_pvt_properties(
+        pvt_provider, pvt_context,
+        {"rs": rs, "bo": bo, "z": z_factor, "mu_l": mu_l,
+         "mu_g": None, "bg": 0.0}, pvt_tracker)
 
-    def local_properties(p_eval: float, t_eval: float) -> Dict[str, float]:
-        nonlocal last_pvt
-        props = _resolve_pvt_properties(
-            pvt_provider, pvt_context, p_eval, t_eval,
-            {"rs": rs, "bo": bo, "z": z_factor, "mu_l": mu_l,
-             "mu_g": None, "bg": 0.0}, pvt_tracker)
-        if pvt_provider is not None:
-            last_pvt = props
-        return props
+    def local_properties(_p_eval: float, _t_eval: float) -> Dict[str, float]:
+        return pvt_properties
 
     for i in range(n_segments):
         t_f = t_wh + geothermal * (i + 0.5) * dl / 100.0
@@ -775,8 +772,9 @@ def traverse_hb(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
         acceleration_psi=accel_psi, iterations=total_iters,
         warnings=warnings + list(pvt_tracker["warnings"]),
         limitations=warnings + list(pvt_tracker["limitations"]),
-        z_factor=(last_pvt["z"] if last_pvt is not None else z_factor),
-        z_factor_provenance=("BlackOilPvtProvider" if last_pvt is not None
+        z_factor=(pvt_properties["z"] if pvt_provider is not None
+                   else z_factor),
+        z_factor_provenance=("BlackOilPvtProvider" if pvt_provider is not None
                              else z_provenance),
         input_defaults=input_defaults,
         pvt_metadata=_finalize_pvt_metadata(pvt_provider, pvt_tracker))

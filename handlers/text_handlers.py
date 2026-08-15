@@ -35,7 +35,6 @@ from services.visualization import format_plot_response, generate_pvt_plot
 from services.production_engine import IPREngine, MODEL_DISPLAY
 from services import vlp_engine
 from services import nodal_engine
-from services.black_oil_pvt import BlackOilPvtProvider
 from services import production_optimizer
 from services.production_optimizer import (
     FEASIBLE, NO_OPERATING_POINT, MULTIPLE_OPERATING_POINTS,
@@ -58,68 +57,6 @@ def _fmt_loss(value: float) -> str:
     return "0.0"
 
 logger = get_logger(__name__)
-
-
-def _build_vlp_pvt_binding(kwargs: Dict[str, Any],
-                           floats: Dict[str, float]):
-    """Resolve the optional Telegram Black-Oil provider binding.
-
-    The VLP engine remains provider-free unless the user explicitly supplies
-    ``pvt_model=black_oil`` (or an equivalent alias) and the minimum separator
-    and saturation context. This keeps the Phase 5A handler path unchanged.
-    """
-    raw = str(kwargs.get("pvt_model", "none")).strip().lower()
-    if raw in ("", "none", "default", "off", "false", "0"):
-        return None, None, None
-    if raw not in ("black_oil", "black-oil", "blackoil", "bo",
-                   "black_oil_v1"):
-        return None, None, (
-            "Error: unknown pvt_model. Use 'none' (default) or "
-            "'black_oil'.")
-
-    def first_value(*keys):
-        for key in keys:
-            if key in floats:
-                return floats[key]
-        return None
-
-    separator_pressure = first_value(
-        "pvt_sep_p", "separator_pressure_psia", "sep_p")
-    separator_temperature = first_value(
-        "pvt_sep_t", "separator_temperature_f", "sep_t")
-    bubble_point = first_value("pvt_pb", "bubble_point_psia", "pb")
-    solution_gor = first_value(
-        "pvt_rsb", "solution_gor_scf_stb", "rsb")
-    missing = []
-    if separator_pressure is None:
-        missing.append("pvt_sep_p")
-    if separator_temperature is None:
-        missing.append("pvt_sep_t")
-    if bubble_point is None and solution_gor is None:
-        missing.append("pvt_pb or pvt_rsb")
-    if missing:
-        return None, None, (
-            "Engineering Data Requirement — pvt_model=black_oil requires: "
-            + ", ".join(missing) + ".")
-
-    pvt_gamma_g = first_value(
-        "pvt_gamma_g", "pvt_sg_g", "gas_specific_gravity")
-    context = {
-        "oil_api": floats["api"],
-        "gas_specific_gravity": floats["gamma_g"] if pvt_gamma_g is None
-        else pvt_gamma_g,
-        "separator_pressure_psia": separator_pressure,
-        "separator_temperature_f": separator_temperature,
-    }
-    if bubble_point is not None:
-        context["bubble_point_psia"] = bubble_point
-    if solution_gor is not None:
-        context["solution_gor_scf_stb"] = solution_gor
-    non_hydrocarbon = first_value(
-        "pvt_non_hc", "non_hydrocarbon_fraction")
-    if non_hydrocarbon is not None:
-        context["non_hydrocarbon_fraction"] = non_hydrocarbon
-    return BlackOilPvtProvider(), context, None
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -556,9 +493,7 @@ _VLP_USAGE = (
     "temperatures in degF; viscosities in cP.\n\n"
     "Required: thp tvd id q gor api gamma_g mu_l bo rs t_wh geothermal\n"
     "Optional: wc (default 0), q_w (alternative to wc), gamma_w (1.07),\n"
-    "  bw (1.01), z (1.0), sigma (30 dyne/cm), segments (80)\n"
-    "Optional pressure-dependent PVT: pvt_model=black_oil with\n"
-    "  pvt_sep_p=100 pvt_sep_t=100 and pvt_pb=2500 (or pvt_rsb=700)\n\n"
+    "  bw (1.01), z (1.0), sigma (30 dyne/cm), segments (80)\n\n"
     "Single-rate example:\n"
     "  /calc vlp thp=100 tvd=8000 id=1.995 q=3000 gor=1000 rs=600 api=35\n"
     "    gamma_g=0.65 mu_l=1 bo=1.4 t_wh=120 geothermal=1.5\n\n"
@@ -591,11 +526,6 @@ _VLP_REQUIRED_HINTS = {
     "segments": "Number of traverse segments (default 80)",
     "plot": "Set plot=1 to also return the calculated VLP plot as PNG",
     "vlp_model": "VLP correlation: 'beggs_brill' (default) or 'hagedorn_brown'",
-    "pvt_model": "Optional PVT provider: 'black_oil' (default is none)",
-    "pvt_sep_p": "Black-Oil separator pressure, psia",
-    "pvt_sep_t": "Black-Oil separator temperature, degF",
-    "pvt_pb": "Black-Oil bubble point pressure, psia",
-    "pvt_rsb": "Black-Oil solution GOR at bubble point, scf/STB",
 }
 
 
@@ -644,23 +574,10 @@ def _vlp_result_lines(thp: float, tvd: float, q_o: float, q_w: float,
     if z_prov == "user supplied":
         lines.append("")
         lines.append(f"Gas Z-factor = {z_active:.2f} (user supplied)")
-    elif z_prov == "BlackOilPvtProvider":
-        lines.append("")
-        lines.append(f"Gas Z-factor = {z_active:.2f} (Black-Oil provider)")
     else:
         lines.append("")
         lines.append(f"Gas Z-factor = {z_active:.2f} (default — not user "
                      "supplied)")
-    pvt_meta = result.pvt_metadata or {}
-    if pvt_meta.get("enabled"):
-        lines.append("")
-        lines.append("PVT model: Black-Oil V1 (pressure-dependent)")
-        if pvt_meta.get("pressure_range_psia"):
-            p_lo, p_hi = pvt_meta["pressure_range_psia"]
-            lines.append(f"PVT pressure range: {p_lo:.1f} .. {p_hi:.1f} psia")
-        if pvt_meta.get("phase_regions"):
-            lines.append("PVT phase regions: " + ", ".join(
-                pvt_meta["phase_regions"]))
     if result.input_defaults:
         lines.append("")
         lines.append("Engine defaults used (inputs not supplied by user):")
@@ -1043,7 +960,7 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
                 continue
             _key, _, _val = _part.partition("=")
             _key, _val = _key.strip().lower(), _val.strip()
-            if _key in ("plot", "vlp_model", "pvt_model"):
+            if _key in ("plot", "vlp_model"):
                 kwargs[_key] = _val
                 continue
     _numeric = parse_kv_args(args_str)
@@ -1095,22 +1012,12 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
         floats = {}
         for _k in ("thp", "tvd", "id", "q", "gor", "api", "gamma_g", "mu_l",
                    "bo", "rs", "t_wh", "geothermal", "wc", "q_w", "gamma_w",
-                   "bw", "z", "sigma", "segments", "q_min", "q_max", "pb", "rsb",
-                   "pvt_sep_p", "pvt_sep_t", "pvt_pb", "pvt_rsb", "pvt_gamma_g",
-                   "pvt_sg_g", "pvt_non_hc", "separator_pressure_psia",
-                   "separator_temperature_f", "bubble_point_psia",
-                   "solution_gor_scf_stb", "gas_specific_gravity",
-                   "non_hydrocarbon_fraction"):
+                   "bw", "z", "sigma", "segments", "q_min", "q_max"):
             _v = kwargs.get(_k)
             if _v is not None:
                 floats[_k] = float(_v)
     except (TypeError, ValueError):
         return ("Error: all parameter values must be numeric.\n\n" + _VLP_USAGE), None, None
-
-    pvt_provider, pvt_context, pvt_error = _build_vlp_pvt_binding(
-        kwargs, floats)
-    if pvt_error:
-        return pvt_error, None, None
 
     if curve_mode:
         # --- Calculated VLP curve + plot ---
@@ -1155,9 +1062,7 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
                     n_segments=int(floats.get("segments", 80)),
                     vlp_model=vlp_model,
                     z_provenance=z_prov,
-                    input_defaults=input_defaults,
-                    pvt_provider=pvt_provider,
-                    pvt_context=pvt_context).pwf)
+                    input_defaults=input_defaults).pwf)
         else:
             qs, ps = [], []
             for i in range(n_pts):
@@ -1189,8 +1094,6 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
             "Calculated VLP Curve",
             "=" * 50,
             f"Method: {vlp_engine.MODEL_DISPLAY[vlp_model]}",
-            *(["PVT model: Black-Oil V1 (pressure-dependent)"]
-              if pvt_provider is not None else []),
             f"THP = {floats['thp']:g} psia  |  TVD = {floats['tvd']:g} ft  |  "
             f"ID = {floats['id']:g} in",
             f"GOR = {floats['gor']:g} scf/STB (Rs = {floats['rs']:g})  |  "
@@ -1246,8 +1149,6 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
             vlp_model=vlp_model,
             z_provenance=z_prov_single,
             input_defaults=input_defaults_single,
-            pvt_provider=pvt_provider,
-            pvt_context=pvt_context,
         )
     except ValueError as _e:
         _msg = str(_e)
