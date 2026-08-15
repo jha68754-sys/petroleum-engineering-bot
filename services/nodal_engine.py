@@ -99,9 +99,11 @@ class NodalResult:
     # tests) can re-evaluate curves through the engine's own inverters
     # without duplicating calibration or inversion logic.
     ipr_params: Optional[Tuple] = None
-    vlp_kwargs: Optional[Dict[str, float]] = None
+    vlp_kwargs: Optional[Dict[str, Any]] = None
+
     inputs_summary: Dict[str, Any] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
+    pvt_metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 class NodalError(Exception):
@@ -110,6 +112,18 @@ class NodalError(Exception):
         self.kind = kind
         self.message = message
         super().__init__(message)
+
+
+def _vlp_error_kind(exc: Exception) -> str:
+    """Preserve explicit VLP/provider failure kinds at the Nodal boundary."""
+    message = str(exc)
+    for kind in ("INSUFFICIENT_DATA", "PHYSICALLY_INVALID",
+                 "NUMERICAL_NON_CONVERGENCE"):
+        if kind in message:
+            return kind
+    if "INVALID_INPUT" in message:
+        return "PHYSICALLY_INVALID"
+    return "NUMERICAL_NON_CONVERGENCE"
 
 
 DEFAULT_PRES_TOL = 0.1        # psi — residual requirement at a root
@@ -250,7 +264,7 @@ class NodalEngine:
     # ------------------------------------------------------------------
 
     def pwf_vlp(self, q_total: float, params: Tuple,
-                vlp_kwargs: Optional[Dict[str, float]] = None) -> float:
+                vlp_kwargs: Optional[Dict[str, Any]] = None) -> float:
         """Public invert: required Pwf from the VLP curve at rate q_total.
         Uses the resolved IPR params only to read Pr (wellbore depth anchor)."""
         kw = dict(vlp_kwargs) if vlp_kwargs is not None else {}
@@ -286,13 +300,14 @@ class NodalEngine:
         except (ValueError, TypeError, NodalError) as exc:
             # TypeError covers e.g. a complex result from the Lee viscosity
             # exponent at collapsed segment pressures — must never crash.
-            raise NodalError("NUMERICAL_NON_CONVERGENCE",
-                             f"VLP evaluation failed at q={q_total:g} "
-                             f"STB/day: {exc}")
+            raise NodalError(
+                _vlp_error_kind(exc),
+                f"VLP evaluation failed at q={q_total:g} STB/day: {exc}")
         return res.pwf
 
-    def _pwf_vlp(self, q_total: float, vlp_kwargs: Dict[str, float],
-                 cache: Dict[float, Optional[float]]) -> float:
+    def _pwf_vlp(self, q_total: float, vlp_kwargs: Dict[str, Any],
+                 cache: Dict[float, Optional[float]],
+                 pvt_metadata: Optional[Dict[str, Any]] = None) -> float:
         """Required flowing BHP for the total rate; cached per solve."""
         key = round(q_total, 6)
         cached = cache.get(key)
@@ -318,12 +333,15 @@ class NodalEngine:
             kw = dict(vlp_kwargs)
             kw["q_o"] = q_total   # vlp_kwargs already carries q_w=0.0
             res = vlp_engine.traverse(**kw)
+            if pvt_metadata is not None:
+                pvt_metadata.clear()
+                pvt_metadata.update(getattr(res, "pvt_metadata", {}))
         except (ValueError, TypeError, NodalError) as exc:
             msg = str(exc)
             cache[key] = None
-            raise NodalError("NUMERICAL_NON_CONVERGENCE",
-                             f"VLP evaluation failed at q={q_total:g} "
-                             f"STB/day: {msg}")
+            raise NodalError(
+                _vlp_error_kind(exc),
+                f"VLP evaluation failed at q={q_total:g} STB/day: {msg}")
         cache[key] = res.pwf
         return res.pwf
 
@@ -404,6 +422,8 @@ class NodalEngine:
         pressure_tol: float = DEFAULT_PRES_TOL,
         grid_pressure_tol: float = DEFAULT_GRID_TOL,
         max_refine_iter: int = DEFAULT_MAX_REFINE_ITER,
+        pvt_provider: Any = None,
+        pvt_context: Optional[Dict[str, Any]] = None,
     ) -> NodalResult:
         """Full deterministic nodal analysis. Raises NodalError for
         guardrail violations; otherwise returns a classified NodalResult."""
@@ -457,12 +477,15 @@ class NodalEngine:
                 "q_max is unrealistically large (> 1e6 STB/day).")
 
         # ---- VLP kwargs: reuse vlp_engine exact validation ---------------
-        vlp_kwargs: Dict[str, float] = dict(
+        vlp_kwargs: Dict[str, Any] = dict(
             thp=thp, tvd=tvd, tubing_id_in=tubing_id_in, gor=gor, rs=rs,
             api=api, gamma_g=gamma_g, mu_l=mu_l, bo=bo, t_wh=t_wh,
             geothermal=geothermal, wc=wc, gamma_w=gamma_w, bw=bw,
             z_factor=z_factor, sigma=sigma, n_segments=n_segments,
         )
+        if pvt_provider is not None:
+            vlp_kwargs["pvt_provider"] = pvt_provider
+            vlp_kwargs["pvt_context"] = pvt_context
         # VLP correlation selector (routed through the same vlp_engine API).
         try:
             vlp_kwargs["vlp_model"] = vlp_engine._resolve_model(vlp_model)
@@ -489,12 +512,18 @@ class NodalEngine:
 
         # ---- Grid evaluation of F(q) -------------------------------------
         cache: Dict[float, Optional[float]] = {}
+        pvt_metadata: Dict[str, Any] = {}
         q_grid = [q_min + (q_max - q_min) * i / (n_points - 1)
                   for i in range(n_points)]
 
+        def eval_vlp(q: float) -> float:
+            if pvt_provider is None:
+                return self._pwf_vlp(q, vlp_kwargs, cache)
+            return self._pwf_vlp(q, vlp_kwargs, cache, pvt_metadata)
+
         def f_of_q(q: float) -> float:
             try:
-                pwf_vlp = self._pwf_vlp(q, vlp_kwargs, cache)
+                pwf_vlp = eval_vlp(q)
             except NodalError:
                 raise
             try:
@@ -513,6 +542,8 @@ class NodalEngine:
             try:
                 f_vals.append(f_of_q(q))
             except (NodalError, ValueError, TypeError) as exc:
+                if pvt_provider is not None:
+                    raise
                 # ValueError/TypeError cover non-convergence artefacts that
                 # surface deeper in the stack (e.g. complex arithmetic in
                 # the Lee-Gonzalez-Eakin viscosity at collapsed segment
@@ -535,6 +566,8 @@ class NodalEngine:
                     min(pressure_tol / 10.0, pressure_tol * 0.5),
                     max_refine_iter)
             except (NodalError, ValueError, TypeError):
+                if pvt_provider is not None:
+                    raise
                 return None
             if not (q_min - 1e-9 <= q_root <= q_max + 1e-9):
                 return None
@@ -545,9 +578,11 @@ class NodalEngine:
                 # final pressure-consistency check below is the authority.
                 return None
             try:
-                pwf_vlp = self._pwf_vlp(q_root, vlp_kwargs, cache)
+                pwf_vlp = eval_vlp(q_root)
                 pwf_ipr = self._pwf_ipr_from_rate(params, q_root)
             except NodalError:
+                if pvt_provider is not None:
+                    raise
                 return None
             if not (0.0 <= pwf_ipr <= pr + 1e-9) or pwf_vlp < 0:
                 return None
@@ -583,8 +618,10 @@ class NodalEngine:
                 # directly at the grid point instead of refining.
                 try:
                     pwf_ipr = self._pwf_ipr_from_rate(params, q)
-                    pwf_vlp = self._pwf_vlp(q, vlp_kwargs, cache)
+                    pwf_vlp = eval_vlp(q)
                 except NodalError:
+                    if pvt_provider is not None:
+                        raise
                     continue
                 if abs(pwf_ipr - pwf_vlp) <= pressure_tol \
                         and 0.0 <= pwf_ipr <= pr + 1e-6:
@@ -620,8 +657,10 @@ class NodalEngine:
         for rt in dedup:
             try:
                 pwf_ipr = self._pwf_ipr_from_rate(params, rt.q)
-                pwf_vlp = self._pwf_vlp(rt.q, vlp_kwargs, cache)
+                pwf_vlp = eval_vlp(rt.q)
             except NodalError:
+                if pvt_provider is not None:
+                    raise
                 continue
             residual = abs(pwf_ipr - pwf_vlp)
             # The bracketed bisection stops on bracket width < pressure_tol,
@@ -658,6 +697,7 @@ class NodalEngine:
                                 z_factor=z_factor, q_test=q_test,
                                 pwf_test=pwf_test, j=j, j_star=j_star,
                                 qmax=qmax),
+            pvt_metadata=pvt_metadata,
         )
 
         if not final:
