@@ -275,9 +275,231 @@ def test_provider_nonconvergence_propagates_for_both_models():
                 model=model, pvt_provider=provider, pvt_context=PVT_CONTEXT)
 
 
-def test_increment_4_does_not_add_telegram_routing():
+def test_increment_5_routing_is_limited_to_vlp_and_nodal_handlers():
     from pathlib import Path
 
     handler_text = Path("handlers/text_handlers.py").read_text()
-    assert "pvt_model" not in handler_text
-    assert "BlackOilPvtProvider" not in handler_text
+    assert "def handle_calc_vlp(" in handler_text
+    assert "def handle_calc_nodal(" in handler_text
+    assert "def handle_calc_vlp_compare(" in handler_text
+
+
+TELEGRAM_PVT_ARGS = (
+    "pvt_mode=pressure_dependent pvt_model=black_oil_v1 "
+    "pvt_pressure_psia=1000 pvt_temperature_f=140 pvt_oil_api=35 "
+    "pvt_gas_specific_gravity=0.75 pvt_separator_pressure_psia=100 "
+    "pvt_separator_temperature_f=100 pvt_bubble_point_psia=2500 "
+    "pvt_solution_gor_scf_stb=700"
+)
+
+
+def _telegram_message(command: str):
+    return {"text": command, "chat": {"id": 1001}}
+
+
+def _text_handler_module():
+    import os
+
+    os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
+    from handlers import text_handlers
+
+    return text_handlers
+
+
+def test_telegram_vlp_default_path_preserves_legacy_response():
+    handlers = _text_handler_module()
+    response, png, error = handlers.handle_calc_vlp(
+        _telegram_message(
+            "/calc vlp thp=100 tvd=8000 id=1.995 q=3000 gor=1000 "
+            "api=35 gamma_g=0.65 mu_l=1 bo=1.4 rs=600 t_wh=120 "
+            "geothermal=1.5"
+        ),
+        None,
+    )
+    assert error is None
+    assert png is None
+    assert response.startswith("VLP Calculation Result")
+    assert "Pressure-Dependent PVT Provenance:" not in response
+
+
+def test_telegram_vlp_pressure_dependent_provider_returns_provenance():
+    handlers = _text_handler_module()
+    response, png, error = handlers.handle_calc_vlp(
+        _telegram_message(
+            "/calc vlp thp=100 tvd=8000 id=1.995 q=3000 gor=1000 "
+            "api=35 gamma_g=0.65 mu_l=1 bo=1.4 rs=600 t_wh=120 "
+            "geothermal=1.5 " + TELEGRAM_PVT_ARGS
+        ),
+        None,
+    )
+    assert error is None
+    assert png is None
+    assert "Pressure-Dependent PVT Provenance:" in response
+    assert "PVT Mode: pressure_dependent" in response
+    assert "PVT Model: black_oil_v1" in response
+    assert "PVT Provider: BlackOilPvtProvider" in response
+    assert "Pressure Range Evaluated:" in response
+    assert "Phase Region(s):" in response
+    assert "PVT Status:" in response
+    assert "Traceback" not in response
+
+
+def test_telegram_vlp_curve_routes_provider_and_reports_provenance():
+    handlers = _text_handler_module()
+    response, png, error = handlers.handle_calc_vlp(
+        _telegram_message(
+            "/calc vlp thp=100 tvd=8000 id=1.995 gor=1000 api=35 "
+            "gamma_g=0.65 mu_l=1 bo=1.4 rs=600 t_wh=120 geothermal=1.5 "
+            "q_min=500 q_max=1500 n_points=3 " + TELEGRAM_PVT_ARGS
+        ),
+        None,
+    )
+    assert error is None
+    assert png is None
+    assert "Calculated VLP Curve" in response
+    assert "Pressure-Dependent PVT Provenance:" in response
+    assert "PVT Status:" in response
+
+
+def test_telegram_nodal_pressure_dependent_provider_returns_provenance():
+    handlers = _text_handler_module()
+    response, png, error = handlers.handle_calc_nodal(
+        _telegram_message(
+            "/calc nodal model=linear pr=3000 j=1.5 thp=100 tvd=8000 "
+            "id=1.995 gor=1000 rs=600 api=35 gamma_g=0.65 mu_l=1 "
+            "bo=1.4 t_wh=120 geothermal=1.5 " + TELEGRAM_PVT_ARGS
+        ),
+        None,
+    )
+    assert error is None
+    assert png is None
+    assert "Nodal Analysis Result" in response
+    assert "Pressure-Dependent PVT Provenance:" in response
+    assert "PVT Mode: pressure_dependent" in response
+    assert "PVT Provider: BlackOilPvtProvider" in response
+    assert "PVT Status:" in response
+    assert "Traceback" not in response
+
+
+def test_telegram_pvt_missing_context_is_actionable_and_deterministic():
+    handlers = _text_handler_module()
+    incomplete = TELEGRAM_PVT_ARGS.replace("pvt_separator_temperature_f=100 ", "")
+    response, png, error = handlers.handle_calc_vlp(
+        _telegram_message(
+            "/calc vlp thp=100 tvd=8000 id=1.995 q=3000 gor=1000 "
+            "api=35 gamma_g=0.65 mu_l=1 bo=1.4 rs=600 t_wh=120 "
+            "geothermal=1.5 " + incomplete
+        ),
+        None,
+    )
+    assert png is None
+    assert error is None
+    assert "Engineering Data Requirement" in response
+    assert "pvt_separator_temperature_f" in response
+
+
+def test_telegram_pvt_provider_failure_has_no_traceback_or_fallback():
+    handlers = _text_handler_module()
+    response, png, error = handlers.handle_calc_vlp(
+        _telegram_message(
+            "/calc vlp thp=100 tvd=8000 id=1.995 q=3000 gor=1000 "
+            "api=35 gamma_g=0.65 mu_l=1 bo=1.4 rs=600 t_wh=120 "
+            "geothermal=1.5 pvt_mode=pressure_dependent "
+            "pvt_model=black_oil_v1 pvt_pressure_psia=-1 "
+            "pvt_temperature_f=140 pvt_oil_api=35 "
+            "pvt_gas_specific_gravity=0.75 pvt_separator_pressure_psia=100 "
+            "pvt_separator_temperature_f=100 pvt_bubble_point_psia=2500 "
+            "pvt_solution_gor_scf_stb=700"
+        ),
+        None,
+    )
+    assert png is None
+    assert error is None
+    assert "physically invalid Black-Oil PVT input" in response
+    assert "Traceback" not in response
+    assert "VLP calculation error" not in response
+
+
+def test_telegram_pvt_option_is_not_enabled_for_vlp_compare():
+    handlers = _text_handler_module()
+    response, png, error = handlers.handle_calc_vlp_compare(
+        _telegram_message(
+            "/calc vlp_compare thp=100 tvd=8000 id=1.995 q_min=500 "
+            "q_max=1000 gor=1000 api=35 gamma_g=0.65 mu_l=1 bo=1.4 "
+            "rs=600 t_wh=120 geothermal=1.5 " + TELEGRAM_PVT_ARGS
+        ),
+        None,
+    )
+    assert png is None
+    assert error is None
+    assert "supported only for /calc vlp and /calc nodal" in response.lower()
+    assert "Pressure-Dependent PVT Provenance:" not in response
+
+
+# A legacy import seam remains intentionally free of Telegram integration;
+# only /calc vlp and /calc nodal receive the explicit provider binding.
+
+def test_increment_5_does_not_add_provider_to_plot_or_unrelated_handlers():
+    from pathlib import Path
+
+    handler_text = Path("handlers/text_handlers.py").read_text()
+    assert "def handle_plot(" in handler_text or "def handle_calc_plot(" in handler_text
+    assert "pvt_provider=pvt_provider" in handler_text
+    assert "handle_calc_vlp_compare" in handler_text
+    assert "pvt_mode" not in handler_text.split("def handle_calc_vlp_compare", 1)[1].split("def ", 1)[0]
+
+
+def test_telegram_pvt_selector_values_are_normalized():
+    handlers = _text_handler_module()
+    response, png, error = handlers.handle_calc_vlp(
+        _telegram_message(
+            "/calc vlp thp=100 tvd=8000 id=1.995 q=3000 gor=1000 "
+            "api=35 gamma_g=0.65 mu_l=1 bo=1.4 rs=600 t_wh=120 "
+            "geothermal=1.5 pvt_mode=PRESSURE_DEPENDENT "
+            "pvt_model=BLACK_OIL_V1 " + TELEGRAM_PVT_ARGS.split("pvt_mode=pressure_dependent pvt_model=black_oil_v1 ", 1)[1]
+        ),
+        None,
+    )
+    assert error is None
+    assert png is None
+    assert "PVT Mode: pressure_dependent" in response
+    assert "PVT Model: black_oil_v1" in response
+
+
+def test_telegram_unsupported_pvt_model_is_rejected_without_fallback():
+    handlers = _text_handler_module()
+    response, png, error = handlers.handle_calc_vlp(
+        _telegram_message(
+            "/calc vlp thp=100 tvd=8000 id=1.995 q=3000 gor=1000 "
+            "api=35 gamma_g=0.65 mu_l=1 bo=1.4 rs=600 t_wh=120 "
+            "geothermal=1.5 pvt_mode=pressure_dependent "
+            "pvt_model=unsupported_model"
+        ),
+        None,
+    )
+    assert png is None
+    assert error is None
+    assert "unsupported pvt_model" in response
+    assert "VLP calculation error" not in response
+
+
+def test_telegram_provider_nonconvergence_is_typed_and_no_traceback(monkeypatch):
+    handlers = _text_handler_module()
+
+    class FailingProvider(handlers.BlackOilPvtProvider):
+        DAK_MAX_ITERATIONS = 0
+
+    monkeypatch.setattr(handlers, "BlackOilPvtProvider", FailingProvider)
+    response, png, error = handlers.handle_calc_vlp(
+        _telegram_message(
+            "/calc vlp thp=100 tvd=8000 id=1.995 q=3000 gor=1000 "
+            "api=35 gamma_g=0.65 mu_l=1 bo=1.4 rs=600 t_wh=120 "
+            "geothermal=1.5 " + TELEGRAM_PVT_ARGS
+        ),
+        None,
+    )
+    assert png is None
+    assert error is None
+    assert "Black-Oil PVT numerical non-convergence" in response
+    assert "Traceback" not in response
+    assert "VLP calculation error" not in response

@@ -456,6 +456,7 @@ def _finalize_pvt_metadata(pvt_provider: Any,
                                   max(tracker["temperatures"])]
                                  if tracker["temperatures"] else []),
         "pvt_evaluations": tracker["pvt_evaluations"],
+        "statuses": sorted(tracker["statuses"]),
         "unique_pressure_states": len({key[0] for key in tracker["unique_states"]}),
         "phase_regions": sorted(tracker["phase_regions"]),
         "bubble_point_psia": bubble_points[0] if len(bubble_points) == 1 else bubble_points,

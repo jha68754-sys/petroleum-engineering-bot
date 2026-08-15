@@ -35,6 +35,7 @@ from services.visualization import format_plot_response, generate_pvt_plot
 from services.production_engine import IPREngine, MODEL_DISPLAY
 from services import vlp_engine
 from services import nodal_engine
+from services.black_oil_pvt import BlackOilPvtProvider
 from services import production_optimizer
 from services.production_optimizer import (
     FEASIBLE, NO_OPERATING_POINT, MULTIPLE_OPERATING_POINTS,
@@ -45,8 +46,8 @@ from logging_config import get_logger
 
 def _fmt_loss(value: float) -> str:
     """Format a pressure-loss component so tiny (but real) losses are never
-    displayed as 0.0: use more decimals when the value is < 1 psi so the
-    user can distinguish 'physically negligible' from 'not computed'."""
+    displayed as 0.0: use more decimals when the value is < 1 psi so the user
+    can distinguish 'physically negligible' from 'not computed'."""
     v = abs(value) if value is not None else 0.0
     if v >= 1.0:
         return f"{value:.1f}"
@@ -56,7 +57,135 @@ def _fmt_loss(value: float) -> str:
         return f"{value:.4f}"
     return "0.0"
 
+
+_PVT_REQUIRED_CONTEXT = (
+    ("pvt_pressure_psia", "pressure_psia"),
+    ("pvt_temperature_f", "temperature_f"),
+    ("pvt_oil_api", "oil_api"),
+    ("pvt_gas_specific_gravity", "gas_specific_gravity"),
+    ("pvt_separator_pressure_psia", "separator_pressure_psia"),
+    ("pvt_separator_temperature_f", "separator_temperature_f"),
+)
+_PVT_OPTIONAL_CONTEXT = {
+    "pvt_bubble_point_psia": "bubble_point_psia",
+    "pvt_solution_gor_scf_stb": "solution_gor_scf_stb",
+    "pvt_non_hydrocarbon_fraction": "non_hydrocarbon_fraction",
+}
+_PVT_RECOGNIZED_KEYS = {
+    "pvt_mode", "pvt_model",
+    *(key for key, _ in _PVT_REQUIRED_CONTEXT),
+    *_PVT_OPTIONAL_CONTEXT,
+}
+
+
+def _bind_black_oil_pvt(kwargs: Dict[str, Any]):
+    """Bind the explicit Telegram PVT selector to the approved provider API."""
+    pvt_keys = {key for key in kwargs if key.startswith("pvt_")}
+    unknown = sorted(pvt_keys - _PVT_RECOGNIZED_KEYS)
+    if unknown:
+        return None, None, "Error: unsupported PVT option(s): " + ", ".join(unknown)
+
+    raw_mode = kwargs.get("pvt_mode")
+    raw_model = kwargs.get("pvt_model")
+    state_keys = pvt_keys - {"pvt_mode", "pvt_model"}
+    if raw_mode is None:
+        if raw_model is not None or state_keys:
+            return (None, None,
+                    "Error: pvt_model and pvt_* state options require "
+                    "pvt_mode=pressure_dependent.")
+        return None, None, None
+
+    pvt_mode = str(raw_mode).strip().lower()
+    if pvt_mode != "pressure_dependent":
+        return None, None, (
+            "Error: unsupported pvt_mode. Use exactly "
+            "pvt_mode=pressure_dependent.")
+    if raw_model is None:
+        return None, None, (
+            "Error: pvt_model=black_oil_v1 is required when "
+            "pvt_mode=pressure_dependent is selected.")
+    pvt_model = str(raw_model).strip().lower()
+    if pvt_model != "black_oil_v1":
+        return None, None, (
+            "Error: unsupported pvt_model. Use exactly "
+            "pvt_model=black_oil_v1 with "
+            "pvt_mode=pressure_dependent.")
+
+    missing = [key for key, _ in _PVT_REQUIRED_CONTEXT
+               if kwargs.get(key) is None]
+    if (kwargs.get("pvt_bubble_point_psia") is None and
+            kwargs.get("pvt_solution_gor_scf_stb") is None):
+        missing.append("pvt_bubble_point_psia or pvt_solution_gor_scf_stb")
+    if missing:
+        return None, None, (
+            "Engineering Data Requirement — pressure-dependent Black-Oil "
+            "PVT is missing: " + ", ".join(missing) + ".")
+
+    try:
+        context = {
+            provider_key: float(kwargs[telegram_key])
+            for telegram_key, provider_key in _PVT_REQUIRED_CONTEXT
+        }
+        for telegram_key, provider_key in _PVT_OPTIONAL_CONTEXT.items():
+            if kwargs.get(telegram_key) is not None:
+                context[provider_key] = float(kwargs[telegram_key])
+    except (TypeError, ValueError):
+        return None, None, (
+            "Error: all pressure-dependent Black-Oil PVT state values "
+            "must be numeric.")
+    return BlackOilPvtProvider(), context, None
+
+
+def _pvt_provenance_lines(metadata: Dict[str, Any], pvt_mode: str,
+                          pvt_model: str) -> List[str]:
+    """Render concise provider provenance; full trace remains in engine metadata."""
+    if not metadata or not metadata.get("enabled"):
+        return []
+    pressure_range = metadata.get("pressure_range_psia") or []
+    if len(pressure_range) == 2:
+        pressure_text = f"{pressure_range[0]:.1f} .. {pressure_range[1]:.1f} psia"
+    else:
+        pressure_text = "not reported"
+    phases = metadata.get("phase_regions") or []
+    statuses = metadata.get("statuses") or []
+    if not statuses:
+        statuses = ["CORRELATION_LIMITATION" if metadata.get("limitations")
+                    else "OK"]
+    lines = [
+        "",
+        "Pressure-Dependent PVT Provenance:",
+        f"  PVT Mode: {pvt_mode}",
+        f"  PVT Model: {pvt_model}",
+        f"  PVT Provider: {metadata.get('provider', 'unknown')}",
+        f"  Pressure Range Evaluated: {pressure_text}",
+        f"  Phase Region(s): {', '.join(phases) if phases else 'not reported'}",
+        f"  Pb Crossing: {'Yes' if metadata.get('pb_crossed') else 'No'}",
+        f"  PVT Status: {', '.join(str(status) for status in statuses)}",
+    ]
+    if metadata.get("warnings"):
+        lines.append("  Warnings: " + " | ".join(metadata["warnings"]))
+    if metadata.get("limitations"):
+        lines.append("  Limitations: " + " | ".join(metadata["limitations"]))
+    return lines
+
+
+def _provider_failure_message(prefix: str, error: Exception) -> str:
+    """Map typed provider failures into concise engineering-facing text."""
+    text = str(error)
+    for kind, label in (
+        ("INSUFFICIENT_DATA", "missing required Black-Oil PVT data"),
+        ("PHYSICALLY_INVALID", "physically invalid Black-Oil PVT input"),
+        ("INVALID_INPUT", "invalid Black-Oil PVT input"),
+        ("NUMERICAL_NON_CONVERGENCE", "Black-Oil PVT numerical non-convergence"),
+        ("CORRELATION_LIMITATION", "Black-Oil PVT correlation limitation"),
+    ):
+        if kind in text:
+            return f"{prefix} — {label}.\n{text}"
+    return f"{prefix}. Please check the supplied engineering inputs."
+
+
 logger = get_logger(__name__)
+
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -493,7 +622,13 @@ _VLP_USAGE = (
     "temperatures in degF; viscosities in cP.\n\n"
     "Required: thp tvd id q gor api gamma_g mu_l bo rs t_wh geothermal\n"
     "Optional: wc (default 0), q_w (alternative to wc), gamma_w (1.07),\n"
-    "  bw (1.01), z (1.0), sigma (30 dyne/cm), segments (80)\n\n"
+    "  bw (1.01), z (1.0), sigma (30 dyne/cm), segments (80)\n"
+    "Optional Black-Oil mode (explicit opt-in):\n"
+    "  pvt_mode=pressure_dependent pvt_model=black_oil_v1\n"
+    "  pvt_pressure_psia pvt_temperature_f pvt_oil_api\n"
+    "  pvt_gas_specific_gravity pvt_separator_pressure_psia\n"
+    "  pvt_separator_temperature_f and one of\n"
+    "  pvt_bubble_point_psia or pvt_solution_gor_scf_stb\n\n"
     "Single-rate example:\n"
     "  /calc vlp thp=100 tvd=8000 id=1.995 q=3000 gor=1000 rs=600 api=35\n"
     "    gamma_g=0.65 mu_l=1 bo=1.4 t_wh=120 geothermal=1.5\n\n"
@@ -526,6 +661,16 @@ _VLP_REQUIRED_HINTS = {
     "segments": "Number of traverse segments (default 80)",
     "plot": "Set plot=1 to also return the calculated VLP plot as PNG",
     "vlp_model": "VLP correlation: 'beggs_brill' (default) or 'hagedorn_brown'",
+    "pvt_mode": "Explicit PVT mode: pressure_dependent",
+    "pvt_model": "Explicit PVT model: black_oil_v1",
+    "pvt_pressure_psia": "Initial Black-Oil state pressure, psia",
+    "pvt_temperature_f": "Initial Black-Oil state temperature, degF",
+    "pvt_oil_api": "Black-Oil state oil API gravity",
+    "pvt_gas_specific_gravity": "Black-Oil state gas specific gravity",
+    "pvt_separator_pressure_psia": "Separator pressure for gas-gravity correction, psia",
+    "pvt_separator_temperature_f": "Separator temperature for gas-gravity correction, degF",
+    "pvt_bubble_point_psia": "Black-Oil bubble-point pressure, psia",
+    "pvt_solution_gor_scf_stb": "Black-Oil solution GOR, scf/STB",
 }
 
 
@@ -547,7 +692,8 @@ def _vlp_missing_message(missing: List[str]) -> str:
 
 def _vlp_result_lines(thp: float, tvd: float, q_o: float, q_w: float,
                       result,
-                      vlp_model: str = "beggs_brill") -> List[str]:
+                      vlp_model: str = "beggs_brill",
+                      pvt_mode: str = "", pvt_model: str = "") -> List[str]:
     """Format a single-rate VLP engine result for Telegram."""
     lines = [
         "VLP Calculation Result",
@@ -598,6 +744,8 @@ def _vlp_result_lines(thp: float, tvd: float, q_o: float, q_w: float,
         lines.append("Correlation limitations:")
         for lim in result.limitations:
             lines.append(f"  \u2022 {lim}")
+    lines.extend(_pvt_provenance_lines(
+        getattr(result, "pvt_metadata", {}), pvt_mode, pvt_model))
     lines.append("")
     model_name = vlp_engine.MODEL_DISPLAY.get(vlp_model, vlp_model)
     lines.append(f"NOTE: Results are CALCULATED ({model_name} correlation "
@@ -620,6 +768,12 @@ _NODAL_USAGE = (
     "Optional VLP inputs:\n"
     "  wc (default 0)  gamma_w (1.07)  bw (1.01)  z (0.9)\n"
     "  sigma (30 dyne/cm)  segments (80)\n"
+    "Optional pressure-dependent Black-Oil PVT:\n"
+    "  pvt_mode=pressure_dependent pvt_model=black_oil_v1\n"
+    "  pvt_pressure_psia pvt_temperature_f pvt_oil_api\n"
+    "  pvt_gas_specific_gravity pvt_separator_pressure_psia\n"
+    "  pvt_separator_temperature_f and one of\n"
+    "  pvt_bubble_point_psia or pvt_solution_gor_scf_stb\n"
     "Solver inputs:\n"
     "  q_min (default 0)  q_max (default IPR theoretical maximum)\n"
     "  n_points (default 201)\n\n"
@@ -652,6 +806,16 @@ _NODAL_HINTS = {
     "rs": "Solution GOR (scf/STB)",
     "t_wh": "Wellhead temperature (degF)",
     "geothermal": "Geothermal gradient (degF/100 ft)",
+    "pvt_mode": "Explicit PVT mode: pressure_dependent",
+    "pvt_model": "Explicit PVT model: black_oil_v1",
+    "pvt_pressure_psia": "Initial Black-Oil state pressure, psia",
+    "pvt_temperature_f": "Initial Black-Oil state temperature, degF",
+    "pvt_oil_api": "Black-Oil state oil API gravity",
+    "pvt_gas_specific_gravity": "Black-Oil state gas specific gravity",
+    "pvt_separator_pressure_psia": "Separator pressure for gas-gravity correction, psia",
+    "pvt_separator_temperature_f": "Separator temperature for gas-gravity correction, degF",
+    "pvt_bubble_point_psia": "Black-Oil bubble-point pressure, psia",
+    "pvt_solution_gor_scf_stb": "Black-Oil solution GOR, scf/STB",
 }
 
 
@@ -685,7 +849,8 @@ def _nodal_missing_message(missing: List[str]) -> str:
     return "\n".join(lines)
 
 
-def _nodal_result_lines(result: nodal_engine.NodalResult) -> List[str]:
+def _nodal_result_lines(result: nodal_engine.NodalResult,
+                        pvt_mode: str = "", pvt_model: str = "") -> List[str]:
     lines = ["Nodal Analysis Result", "=" * 50]
     lines.append("Status: " + result.status)
     lines.append("")
@@ -723,6 +888,8 @@ def _nodal_result_lines(result: nodal_engine.NodalResult) -> List[str]:
         lines.append("Solver warnings:")
         for w in result.warnings:
             lines.append(f"  \u2022 {w}")
+    lines.extend(_pvt_provenance_lines(
+        getattr(result, "pvt_metadata", {}), pvt_mode, pvt_model))
     lines.append("")
     lines.append("NOTE: Results are CALCULATED (verified deterministic IPR "
                  "and VLP engines coupled by a bracketed root solver), "
@@ -750,13 +917,18 @@ def handle_calc_nodal(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes]
                 continue
             _key, _, _val = _part.partition("=")
             _key, _val = _key.strip().lower(), _val.strip()
-            if _key in ("model", "plot", "vlp_model"):
+            if _key in ("model", "plot", "vlp_model", "pvt_mode", "pvt_model"):
                 kwargs[_key] = _val
                 continue
     _numeric = parse_kv_args(args_str)
     if isinstance(_numeric, dict):
         _numeric.update(kwargs)
         kwargs = _numeric
+    pvt_provider, pvt_context, pvt_error = _bind_black_oil_pvt(kwargs)
+    if pvt_error:
+        return pvt_error, None, None
+    pvt_mode = str(kwargs.get("pvt_mode", "")).strip().lower()
+    pvt_model = str(kwargs.get("pvt_model", "")).strip().lower()
 
     # --- Hard validation (guardrails) ---
     vlp_model_raw = str(kwargs.get("vlp_model", "beggs_brill")).strip().lower()
@@ -866,14 +1038,22 @@ def handle_calc_nodal(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes]
             q_min=floats.get("q_min"),
             q_max=floats.get("q_max"),
             n_points=int(floats.get("n_points", 201)),
+            pvt_provider=pvt_provider,
+            pvt_context=pvt_context,
         )
     except nodal_engine.NodalError as _e:
         _msg = str(_e)
+        if pvt_provider:
+            return _provider_failure_message(
+                "Pressure-dependent Black-Oil Nodal analysis failed", _e), None, None
         if "PHYSICALLY_INVALID" in _msg:
             return ("Engineering Guardrail — inputs rejected as physically "
                     "invalid.\n" + _msg), None, None
         return ("Engineering Guardrail — inputs rejected.\n" + _msg), None, None
     except Exception as _e:
+        if pvt_provider:
+            return _provider_failure_message(
+                "Pressure-dependent Black-Oil Nodal analysis failed", _e), None, None
         return f"Nodal analysis error: {_e}. Please check your inputs.", \
             None, None
 
@@ -904,7 +1084,7 @@ def handle_calc_nodal(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes]
         qs_curve, ps_ipr, ps_vlp = [], [], []
 
     # --- Response ---
-    out = _nodal_result_lines(result)
+    out = _nodal_result_lines(result, pvt_mode=pvt_mode, pvt_model=pvt_model)
     out.append("")
     out.append("Calculated Nodal curve points (rate on X):")
     for _q, _p_ipr, _p_vlp in zip(qs_curve, ps_ipr, ps_vlp):
@@ -960,12 +1140,17 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
                 continue
             _key, _, _val = _part.partition("=")
             _key, _val = _key.strip().lower(), _val.strip()
-            if _key in ("plot", "vlp_model"):
+            if _key in ("plot", "vlp_model", "pvt_mode", "pvt_model"):
                 kwargs[_key] = _val
                 continue
     _numeric = parse_kv_args(args_str)
     _numeric.update(kwargs)
     kwargs = _numeric
+    pvt_provider, pvt_context, pvt_error = _bind_black_oil_pvt(kwargs)
+    if pvt_error:
+        return pvt_error, None, None
+    pvt_mode = str(kwargs.get("pvt_mode", "")).strip().lower()
+    pvt_model = str(kwargs.get("pvt_model", "")).strip().lower()
     # Normalize the VLP correlation selector (string key, not numeric).
     vlp_model = str(kwargs.get("vlp_model", "beggs_brill")).strip().lower()
     try:
@@ -1028,6 +1213,7 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
         # Input defaults list for auditability: every engine default the
         # calculation relied on because the user did not supply the input.
         input_defaults = []
+        curve_pvt_metadata: Dict[str, Any] = {}
         if "gamma_w" not in floats:
             input_defaults.append("gamma_w = 1.07 (default)")
         if "bw" not in floats:
@@ -1052,7 +1238,7 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
                     floats.get("gamma_w", 1.07), floats.get("z", 1.0)).pwf)
             else:
                 q_o_s, q_w_s = q_min_v * (1.0 - wc), q_min_v * wc
-                ps.append(vlp_engine.traverse(
+                _curve_result = vlp_engine.traverse(
                     floats["thp"], floats["tvd"], q_o_s, q_w_s,
                     floats["gor"], floats["bo"], floats.get("bw", 1.01),
                     floats.get("z", 1.0), floats["gamma_g"],
@@ -1062,7 +1248,11 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
                     n_segments=int(floats.get("segments", 80)),
                     vlp_model=vlp_model,
                     z_provenance=z_prov,
-                    input_defaults=input_defaults).pwf)
+                    input_defaults=input_defaults,
+                    pvt_provider=pvt_provider,
+                    pvt_context=pvt_context)
+                curve_pvt_metadata = getattr(_curve_result, "pvt_metadata", {})
+                ps.append(_curve_result.pwf)
         else:
             qs, ps = [], []
             for i in range(n_pts):
@@ -1077,7 +1267,7 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
                 else:
                     q_o_s, q_w_s = q_total * (1.0 - wc), q_total * wc
                     qs.append(q_total)
-                    ps.append(vlp_engine.traverse(
+                    _curve_result = vlp_engine.traverse(
                         floats["thp"], floats["tvd"], q_o_s, q_w_s,
                         floats["gor"], floats["bo"], floats.get("bw", 1.01),
                         floats.get("z", 1.0), floats["gamma_g"],
@@ -1087,7 +1277,11 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
                         n_segments=int(floats.get("segments", 80)),
                         vlp_model=vlp_model,
                         z_provenance=z_prov,
-                        input_defaults=input_defaults).pwf)
+                        input_defaults=input_defaults,
+                        pvt_provider=pvt_provider,
+                        pvt_context=pvt_context)
+                    curve_pvt_metadata = getattr(_curve_result, "pvt_metadata", {})
+                    ps.append(_curve_result.pwf)
         if not qs:
             return "VLP curve error: empty rate sweep.", None, None
         out = [
@@ -1105,6 +1299,8 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
         ]
         for _q, _p in zip(qs, ps):
             out.append(f"  q = {_q:g}  ->  Pwf = {_p:.1f}")
+        out.extend(_pvt_provenance_lines(
+            curve_pvt_metadata, pvt_mode, pvt_model))
         png = None
         if bool(kwargs.get("plot")):
             png = generate_pvt_plot(
@@ -1149,18 +1345,27 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
             vlp_model=vlp_model,
             z_provenance=z_prov_single,
             input_defaults=input_defaults_single,
+            pvt_provider=pvt_provider,
+            pvt_context=pvt_context,
         )
     except ValueError as _e:
         _msg = str(_e)
+        if pvt_provider:
+            return _provider_failure_message(
+                "Pressure-dependent Black-Oil VLP failed", _e), None, None
         if "PHYSICALLY_INVALID" in _msg:
             return ("Engineering Guardrail — inputs rejected as physically "
                     "invalid.\n" + _msg), None, None
         return ("Engineering Guardrail — inputs rejected.\n" + _msg), None, None
     except Exception as _e:
+        if pvt_provider:
+            return _provider_failure_message(
+                "Pressure-dependent Black-Oil VLP failed", _e), None, None
         return f"VLP calculation error: {_e}. Please check your inputs.", None, None
 
-    out = _vlp_result_lines(floats["thp"], floats["tvd"], q_o, q_w, result,
-                            vlp_model=vlp_model)
+    out = _vlp_result_lines(
+        floats["thp"], floats["tvd"], q_o, q_w, result,
+        vlp_model=vlp_model, pvt_mode=pvt_mode, pvt_model=pvt_model)
 
     png = None
     if bool(kwargs.get("plot")):
@@ -1201,6 +1406,9 @@ def handle_calc_vlp_compare(message: Dict[str, Any], tg
     _numeric = parse_kv_args(args_str)
     _numeric.update(kwargs)
     kwargs = _numeric
+    if any(key.startswith("pvt_") for key in kwargs):
+        return ("Error: pressure-dependent Black-Oil PVT is supported only "
+                "for /calc vlp and /calc nodal."), None, None
 
     # --- Hard validation (guardrails) ---
     err = vlp_engine.validate_inputs(kwargs)

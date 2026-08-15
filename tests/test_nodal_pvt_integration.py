@@ -152,7 +152,8 @@ def test_provider_nonconvergence_is_not_replaced_by_legacy_values(vlp_model):
         )
 
 
-def test_increment_3_does_not_add_telegram_routing():
+def test_increment_5_routing_is_limited_to_vlp_and_nodal_handlers():
     handler_text = Path("handlers/text_handlers.py").read_text()
-    assert "pvt_model" not in handler_text
-    assert "BlackOilPvtProvider" not in handler_text
+    assert "def handle_calc_vlp(" in handler_text
+    assert "def handle_calc_nodal(" in handler_text
+    assert "def handle_plot(" in handler_text
