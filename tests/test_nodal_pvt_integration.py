@@ -80,10 +80,12 @@ def test_nodal_explicit_black_oil_provider_converges(vlp_model):
     assert len(result.roots) == 1
     assert result.roots[0].q > 0.0
     assert result.pvt_metadata["enabled"] is True
-    assert result.pvt_metadata["mode"] == "explicit_state"
+    assert result.pvt_metadata["mode"] == "pressure_dependent_segment"
     assert result.pvt_metadata["provider"] == "BlackOilPvtProvider"
-    assert result.pvt_metadata["pressure_psia"] == pytest.approx(1000.0)
-    assert result.pvt_metadata["pressure_range_psia"] == [1000.0, 1000.0]
+    assert result.pvt_metadata["pressure_psia"] == pytest.approx(
+        result.pvt_metadata["pressure_range_psia"][0])
+    assert result.pvt_metadata["pressure_range_psia"][0] < result.pvt_metadata["pressure_range_psia"][1]
+    assert result.pvt_metadata["pvt_evaluations"] > 1
     assert result.pvt_metadata["provenance"]["package_version"] == "black_oil_v1"
     assert result.vlp_kwargs["pvt_context"] == PVT_CONTEXT
 
@@ -107,11 +109,13 @@ def test_provider_context_is_propagated_through_nodal_into_vlp():
 
     assert result.status == "UNIQUE_OPERATING_POINT"
     assert provider.states
-    assert all(state.pressure_psia == pytest.approx(1000.0)
-               for state in provider.states)
-    assert all(state.temperature_f == pytest.approx(140.0)
-               for state in provider.states)
-    assert result.pvt_metadata["pressure_range_psia"] == [1000.0, 1000.0]
+    assert len({state.pressure_psia for state in provider.states}) > 1
+    assert min(state.pressure_psia for state in provider.states) < max(
+        state.pressure_psia for state in provider.states)
+    assert min(state.temperature_f for state in provider.states) > 0.0
+    assert max(state.temperature_f for state in provider.states) > min(
+        state.temperature_f for state in provider.states)
+    assert result.pvt_metadata["pressure_range_psia"][0] < result.pvt_metadata["pressure_range_psia"][1]
 
 
 @pytest.mark.parametrize("vlp_model", ["beggs_brill", "hagedorn_brown"])

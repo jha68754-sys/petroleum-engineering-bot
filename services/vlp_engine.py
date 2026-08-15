@@ -339,14 +339,16 @@ def _segment_state(p: float, t_f: float, q_o: float, q_w: float,
 def _resolve_pvt_properties(pvt_provider: Any,
                             pvt_context: Optional[Dict[str, Any]],
                             fallback: Dict[str, float],
-                            tracker: Dict[str, Any]) -> Dict[str, float]:
-    """Resolve optional PVT properties once at an explicit provider state.
+                            tracker: Dict[str, Any],
+                            pressure_psia: Optional[float] = None,
+                            temperature_f: Optional[float] = None) -> Dict[str, float]:
+    """Resolve PVT at the local pressure/temperature for one VLP state.
 
-    The provider is deliberately opt-in. With no provider, this returns the
-    original caller-supplied properties byte-for-byte. When enabled, the
-    context must contain the explicit ``pressure_psia`` and ``temperature_f``
-    used for one deterministic provider evaluation; the resulting properties
-    are held fixed across the VLP traverse.
+    The provider remains strictly opt-in. With no provider, the original
+    caller-supplied properties are returned unchanged. With a provider, the
+    context supplies the approved explicit Black-Oil inputs and the local
+    segment pressure/temperature override only the state coordinates. Exact
+    state memoization is deterministic and does not alter numerical behavior.
     """
     if pvt_provider is None:
         return fallback
@@ -357,21 +359,51 @@ def _resolve_pvt_properties(pvt_provider: Any,
     try:
         from services.black_oil_pvt import PvtState
         state_kwargs = dict(pvt_context)
-        pressure_psia = state_kwargs.pop("pressure_psia")
-        temperature_f = state_kwargs.pop("temperature_f")
-        result = pvt_provider.evaluate(PvtState(
-            pressure_psia=pressure_psia,
-            temperature_f=temperature_f,
-            **state_kwargs))
+        context_pressure = state_kwargs.pop("pressure_psia")
+        context_temperature = state_kwargs.pop("temperature_f")
+        local_pressure = context_pressure if pressure_psia is None else pressure_psia
+        local_temperature = (context_temperature if temperature_f is None
+                             else temperature_f)
+        numeric_values = (context_pressure, context_temperature,
+                          local_pressure, local_temperature)
+        if any(isinstance(value, bool)
+               or not isinstance(value, (int, float))
+               or not math.isfinite(float(value))
+               for value in numeric_values):
+            raise TypeError("pressure_psia and temperature_f must be finite numeric values")
+        if float(context_pressure) <= 0.0 or float(context_temperature) <= -459.67:
+            raise ValueError("pressure_psia/temperature_f context is physically invalid")
+        local_pressure = float(local_pressure)
+        local_temperature = float(local_temperature)
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(
             "PHYSICALLY_INVALID: pvt_context must contain a valid explicit "
             "pressure_psia/temperature_f state for the Black-Oil provider."
         ) from exc
+
+    cache = tracker.setdefault("cache", {})
+    cache_key = (local_pressure, local_temperature)
+    if cache_key in cache:
+        tracker["last_properties"] = cache[cache_key]
+        return cache[cache_key]
+
+    # Do not catch provider exceptions here: an explicitly selected provider
+    # must expose its engineering failure kind to the caller.
+    result = pvt_provider.evaluate(PvtState(
+        pressure_psia=local_pressure,
+        temperature_f=local_temperature,
+        **state_kwargs))
+    tracker["pvt_evaluations"] += 1
+    tracker["pressures"].append(local_pressure)
+    tracker["temperatures"].append(local_temperature)
     status = str(getattr(result, "status", "UNKNOWN"))
     tracker["statuses"].add(status)
-    tracker["phase_regions"].add(str(getattr(result, "phase_region", "unknown")))
-    tracker["pressures"].append(float(pressure_psia))
+    phase_region = getattr(result, "phase_region", None)
+    if phase_region is not None:
+        tracker["phase_regions"].add(str(phase_region))
+    pb = getattr(result, "pb_psia", None)
+    if pb is not None and math.isfinite(float(pb)):
+        tracker["bubble_points"].add(float(pb))
     tracker["provenance"] = getattr(result, "provenance", {}) or {}
     for key in ("warnings", "limitations"):
         for item in getattr(result, key, []) or []:
@@ -379,7 +411,7 @@ def _resolve_pvt_properties(pvt_provider: Any,
                 tracker[key].append(item)
     if status not in ("OK", "CORRELATION_LIMITATION"):
         raise ValueError(
-            f"{status}: Black-Oil provider failed at {float(pressure_psia):.6g} "
+            f"{status}: Black-Oil provider failed at {local_pressure:.6g} "
             "psia.")
     values = {
         "rs": getattr(result, "rs_scf_stb", None),
@@ -395,7 +427,11 @@ def _resolve_pvt_properties(pvt_provider: Any,
         raise ValueError(
             "INSUFFICIENT_DATA: Black-Oil provider returned missing/non-finite "
             f"properties: {', '.join(missing)}.")
-    return {name: float(value) for name, value in values.items()}
+    resolved = {name: float(value) for name, value in values.items()}
+    cache[cache_key] = resolved
+    tracker["unique_states"].add(cache_key)
+    tracker["last_properties"] = resolved
+    return resolved
 
 
 def _finalize_pvt_metadata(pvt_provider: Any,
@@ -403,14 +439,27 @@ def _finalize_pvt_metadata(pvt_provider: Any,
     if pvt_provider is None:
         return {}
     pressures = tracker["pressures"]
+    bubble_points = sorted(tracker["bubble_points"])
+    pressure_min = min(pressures) if pressures else None
+    pressure_max = max(pressures) if pressures else None
+    pb_crossed = any(pressure_min < pb < pressure_max
+                     for pb in bubble_points
+                     if pressure_min is not None and pressure_max is not None)
     return {
         "enabled": True,
-        "mode": "explicit_state",
+        "mode": "pressure_dependent_segment",
         "provider": pvt_provider.__class__.__name__,
         "pressure_psia": pressures[0] if pressures else None,
-        "pressure_range_psia": [min(pressures), max(pressures)] if pressures else [],
+        "pressure_range_psia": ([pressure_min, pressure_max]
+                                if pressures else []),
+        "temperature_range_f": ([min(tracker["temperatures"]),
+                                  max(tracker["temperatures"])]
+                                 if tracker["temperatures"] else []),
+        "pvt_evaluations": tracker["pvt_evaluations"],
+        "unique_pressure_states": len({key[0] for key in tracker["unique_states"]}),
         "phase_regions": sorted(tracker["phase_regions"]),
-        "statuses": sorted(tracker["statuses"]),
+        "bubble_point_psia": bubble_points[0] if len(bubble_points) == 1 else bubble_points,
+        "pb_crossed": pb_crossed,
         "provenance": tracker["provenance"],
         "warnings": list(tracker["warnings"]),
         "limitations": list(tracker["limitations"]),
@@ -444,7 +493,7 @@ def traverse(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
 
     Model selection: 'beggs_brill' (default, original implementation) or
     'hagedorn_brown' (dispatches to traverse_hb). Beggs-Brill code path is
-    unchanged when vlp_model is None.
+    unchanged when vlp_model is None; provider behavior is opt-in.
     """
     resolved = _resolve_model(vlp_model)
     if resolved == _MODEL_HAGEDORN_BROWN:
@@ -463,8 +512,7 @@ def traverse(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
 
     # q_o, q_w: STB/day (total rates, water cut already accounted for in
     # q_w). GOR: scf/STB (produced). rs: scf/STB from the caller or the
-    # explicitly supplied provider state; provider properties are held fixed
-    # across this traverse.
+    # pressure-resolved provider state at each local segment evaluation.
     if n_segments < 4:
         raise ValueError(
             "PHYSICALLY_INVALID: segment count must be >= 4 for a stable "
@@ -479,15 +527,18 @@ def traverse(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
     patterns: Dict[str, int] = {}
     seg_grads: List[Tuple[float, float]] = []
     pvt_tracker: Dict[str, Any] = {
-        "pressures": [], "phase_regions": set(), "statuses": set(),
-        "provenance": {}, "warnings": [], "limitations": []}
-    pvt_properties = _resolve_pvt_properties(
-        pvt_provider, pvt_context,
-        {"rs": rs, "bo": bo, "z": z_factor, "mu_l": mu_l,
-         "mu_g": None, "bg": 0.0}, pvt_tracker)
+        "pressures": [], "temperatures": [], "phase_regions": set(),
+        "statuses": set(), "bubble_points": set(), "unique_states": set(),
+        "pvt_evaluations": 0, "cache": {}, "provenance": {},
+        "warnings": [], "limitations": []}
+    fallback_properties = {
+        "rs": rs, "bo": bo, "z": z_factor, "mu_l": mu_l,
+        "mu_g": None, "bg": 0.0}
 
-    def local_properties(_p_eval: float, _t_eval: float) -> Dict[str, float]:
-        return pvt_properties
+    def local_properties(p_eval: float, t_eval: float) -> Dict[str, float]:
+        return _resolve_pvt_properties(
+            pvt_provider, pvt_context, fallback_properties, pvt_tracker,
+            pressure_psia=p_eval, temperature_f=t_eval)
 
     for i in range(n_segments):
         t_f = t_wh + geothermal * (i + 0.5) * dl / 100.0
@@ -593,6 +644,7 @@ def traverse(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
                 "NUMERICAL_NON_CONVERGENCE: bottomhole pressure collapsed "
                 "below the 0.01 psia floor; check wellhead/rate inputs.")
     pvt_metadata = _finalize_pvt_metadata(pvt_provider, pvt_tracker)
+    last_pvt = pvt_tracker.get("last_properties", {})
     return VLPResult(
         status="CONVERGED", pwf=p, thp=thp, rate=q_o + q_w,
         water_cut=wc, gor=gor, tvd=tvd, tubing_id=tubing_id_in,
@@ -602,7 +654,7 @@ def traverse(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
         flow_pattern_counts=patterns,
         elevation_psi=elev_psi, friction_psi=fric_psi,
         acceleration_psi=accel_psi, iterations=total_iters,
-        z_factor=(pvt_properties["z"] if pvt_provider is not None
+        z_factor=(last_pvt["z"] if pvt_provider is not None
                    else z_factor),
         z_factor_provenance=("BlackOilPvtProvider" if pvt_provider is not None
                              else z_provenance),
@@ -665,15 +717,18 @@ def traverse_hb(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
             f"CORRELATION_LIMITATION: liquid rate {q_total} STB/D is outside "
             f"the published H-B range {env['liquid_rate']} STB/D.")
     pvt_tracker: Dict[str, Any] = {
-        "pressures": [], "phase_regions": set(), "statuses": set(),
-        "provenance": {}, "warnings": [], "limitations": []}
-    pvt_properties = _resolve_pvt_properties(
-        pvt_provider, pvt_context,
-        {"rs": rs, "bo": bo, "z": z_factor, "mu_l": mu_l,
-         "mu_g": None, "bg": 0.0}, pvt_tracker)
+        "pressures": [], "temperatures": [], "phase_regions": set(),
+        "statuses": set(), "bubble_points": set(), "unique_states": set(),
+        "pvt_evaluations": 0, "cache": {}, "provenance": {},
+        "warnings": [], "limitations": []}
+    fallback_properties = {
+        "rs": rs, "bo": bo, "z": z_factor, "mu_l": mu_l,
+        "mu_g": None, "bg": 0.0}
 
-    def local_properties(_p_eval: float, _t_eval: float) -> Dict[str, float]:
-        return pvt_properties
+    def local_properties(p_eval: float, t_eval: float) -> Dict[str, float]:
+        return _resolve_pvt_properties(
+            pvt_provider, pvt_context, fallback_properties, pvt_tracker,
+            pressure_psia=p_eval, temperature_f=t_eval)
 
     for i in range(n_segments):
         t_f = t_wh + geothermal * (i + 0.5) * dl / 100.0
@@ -761,6 +816,8 @@ def traverse_hb(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
             raise ValueError(
                 "NUMERICAL_NON_CONVERGENCE: bottomhole pressure collapsed "
                 "below the 0.01 psia floor; check wellhead/rate inputs.")
+    pvt_metadata = _finalize_pvt_metadata(pvt_provider, pvt_tracker)
+    last_pvt = pvt_tracker.get("last_properties", {})
     return VLPResult(
         status="CONVERGED", pwf=p, thp=thp, rate=q_o + q_w,
         water_cut=wc, gor=gor, tvd=tvd, tubing_id=tubing_id_in,
@@ -772,12 +829,12 @@ def traverse_hb(thp: float, tvd: float, q_o: float, q_w: float, gor: float,
         acceleration_psi=accel_psi, iterations=total_iters,
         warnings=warnings + list(pvt_tracker["warnings"]),
         limitations=warnings + list(pvt_tracker["limitations"]),
-        z_factor=(pvt_properties["z"] if pvt_provider is not None
+        z_factor=(last_pvt["z"] if pvt_provider is not None
                    else z_factor),
         z_factor_provenance=("BlackOilPvtProvider" if pvt_provider is not None
                              else z_provenance),
         input_defaults=input_defaults,
-        pvt_metadata=_finalize_pvt_metadata(pvt_provider, pvt_tracker))
+        pvt_metadata=pvt_metadata)
 
 
 # ---------------------------------------------------------------------- #

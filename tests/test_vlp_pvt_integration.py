@@ -1,7 +1,7 @@
 import pytest
 
 from services import vlp_engine
-from services.black_oil_pvt import BlackOilPvtProvider
+from services.black_oil_pvt import BlackOilPvtProvider, PvtResult, PvtState
 
 
 WELL = dict(
@@ -52,7 +52,33 @@ def run_traverse(model=None, **kwargs):
         n_segments=args.pop("n_segments", 80), **model_kwargs, **args)
 
 
-def test_default_path_preserves_phase5a_contract_and_metadata_is_empty():
+class TrackingProvider(BlackOilPvtProvider):
+    def __init__(self):
+        super().__init__()
+        self.states = []
+        self.results = []
+
+    def evaluate(self, state):
+        self.states.append(state)
+        result = super().evaluate(state)
+        self.results.append(result)
+        return result
+
+
+def assert_dynamic_metadata(result):
+    metadata = result.pvt_metadata
+    assert metadata["enabled"] is True
+    assert metadata["mode"] == "pressure_dependent_segment"
+    assert metadata["provider"] == "TrackingProvider"
+    assert metadata["pvt_evaluations"] > 1
+    assert metadata["unique_pressure_states"] > 1
+    assert metadata["pressure_range_psia"][0] < metadata["pressure_range_psia"][1]
+    assert metadata["provenance"]["package_version"] == "black_oil_v1"
+    assert metadata["phase_regions"]
+    assert metadata["pressure_psia"] == pytest.approx(metadata["pressure_range_psia"][0])
+
+
+def test_default_beggs_brill_path_preserves_phase5a_contract():
     result = run_traverse()
     assert result.status == "CONVERGED"
     assert result.pwf == pytest.approx(356.5, abs=2.0)
@@ -70,69 +96,155 @@ def test_default_hagedorn_brown_path_preserves_frozen_control():
 
 
 @pytest.mark.parametrize("model", ["beggs_brill", "hagedorn_brown"])
-def test_explicit_provider_state_converges_and_reports_provenance(model):
+def test_provider_evaluates_multiple_local_pressures_and_reports_metadata(model):
+    provider = TrackingProvider()
     result = run_traverse(
         model=model,
-        pvt_provider=BlackOilPvtProvider(),
+        pvt_provider=provider,
         pvt_context=PVT_CONTEXT,
+        n_segments=12,
     )
-
     assert result.status == "CONVERGED"
     assert result.pwf > WELL["thp"]
-    assert result.pvt_metadata["enabled"] is True
-    assert result.pvt_metadata["mode"] == "explicit_state"
-    assert result.pvt_metadata["provider"] == "BlackOilPvtProvider"
-    assert result.pvt_metadata["pressure_psia"] == pytest.approx(1000.0)
-    assert result.pvt_metadata["pressure_range_psia"] == [1000.0, 1000.0]
-    assert set(result.pvt_metadata["statuses"]) <= {"OK", "CORRELATION_LIMITATION"}
-    assert "OK" in result.pvt_metadata["statuses"]
-    assert result.pvt_metadata["phase_regions"]
-    assert result.pvt_metadata["provenance"]["package_version"] == "black_oil_v1"
+    assert_dynamic_metadata(result)
+    assert len(provider.states) == result.pvt_metadata["pvt_evaluations"]
+    assert len({state.pressure_psia for state in provider.states}) > 1
+    assert min(state.pressure_psia for state in provider.states) < max(
+        state.pressure_psia for state in provider.states)
     assert result.z_factor_provenance == "BlackOilPvtProvider"
 
 
-def test_explicit_provider_state_is_evaluated_once_per_traverse():
-    class CountingProvider(BlackOilPvtProvider):
-        def __init__(self):
-            super().__init__()
-            self.calls = 0
-
-        def evaluate(self, state):
-            self.calls += 1
-            return super().evaluate(state)
-
-    provider = CountingProvider()
+def test_pressure_resolved_properties_are_carried_from_provider():
+    provider = TrackingProvider()
     result = run_traverse(
         pvt_provider=provider,
         pvt_context=PVT_CONTEXT,
         n_segments=12,
     )
-
     assert result.status == "CONVERGED"
-    assert provider.calls == 1
-    assert result.pvt_metadata["pressure_range_psia"] == [1000.0, 1000.0]
+    for field_name in ("rs_scf_stb", "bo_rb_stb", "mu_o_cp", "z_factor",
+                       "bg_rb_scf", "mu_g_cp"):
+        values = [getattr(item, field_name) for item in provider.results]
+        assert all(value is not None for value in values)
+        assert all(value > 0.0 for value in values)
+        assert len({round(value, 10) for value in values}) > 1
 
 
-def test_explicit_provider_is_passed_through_vlp_curve():
-    provider = BlackOilPvtProvider()
-    baseline_q, baseline_p = vlp_engine.vlp_curve(
-        WELL["thp"], WELL["tvd"], WELL["gor"], WELL["bo"], WELL["bw"],
-        WELL["z_factor"], WELL["gamma_g"], WELL["gamma_w"], WELL["mu_l"],
-        WELL["api"], WELL["wc"], WELL["tubing_id_in"], WELL["rs"],
-        WELL["t_wh"], WELL["geothermal"], 500.0, 1500.0, 3,
+def test_saturated_rs_changes_across_local_pressure_traverse():
+    provider = TrackingProvider()
+    result = run_traverse(
+        pvt_provider=provider,
+        pvt_context=dict(PVT_CONTEXT, bubble_point_psia=10000.0),
+        n_segments=12,
+    )
+    assert result.status == "CONVERGED"
+    saturated = [
+        item for state, item in zip(provider.states, provider.results)
+        if state.pressure_psia < 10000.0
+    ]
+    assert len(saturated) > 1
+    assert {item.phase_region for item in saturated} == {"saturated"}
+    assert len({round(item.rs_scf_stb, 10) for item in saturated}) > 1
+
+
+def test_pressure_entirely_above_pb_uses_undersaturated_branch():
+    provider = TrackingProvider()
+    result = run_traverse(
+        pvt_provider=provider,
+        pvt_context=dict(PVT_CONTEXT, bubble_point_psia=50.0),
         n_segments=8,
     )
-    provider_q, provider_p = vlp_engine.vlp_curve(
+    assert result.status == "CONVERGED"
+    assert result.pvt_metadata["pressure_range_psia"][0] > 50.0
+    assert {item.phase_region for item in provider.results} == {"undersaturated"}
+    assert result.pvt_metadata["pb_crossed"] is False
+
+
+def test_pressure_entirely_below_pb_uses_saturated_branch():
+    provider = TrackingProvider()
+    result = run_traverse(
+        pvt_provider=provider,
+        pvt_context=dict(PVT_CONTEXT, bubble_point_psia=10000.0),
+        n_segments=8,
+    )
+    assert result.status == "CONVERGED"
+    assert result.pvt_metadata["pressure_range_psia"][1] < 10000.0
+    assert {item.phase_region for item in provider.results} == {"saturated"}
+    assert result.pvt_metadata["pb_crossed"] is False
+
+
+def test_traverse_crossing_pb_records_both_phase_regions():
+    provider = TrackingProvider()
+    result = run_traverse(
+        pvt_provider=provider,
+        pvt_context=dict(PVT_CONTEXT, bubble_point_psia=250.0),
+        n_segments=12,
+    )
+    assert result.status == "CONVERGED"
+    pressure_min, pressure_max = result.pvt_metadata["pressure_range_psia"]
+    assert pressure_min < 250.0 < pressure_max
+    assert {item.phase_region for item in provider.results} >= {
+        "saturated", "undersaturated"
+    }
+    assert result.pvt_metadata["pb_crossed"] is True
+
+
+def test_exact_pb_evaluation_is_deterministic_bubble_point_state():
+    context = dict(PVT_CONTEXT)
+    context["pressure_psia"] = context["bubble_point_psia"]
+    result = BlackOilPvtProvider().evaluate(PvtState(**context))
+    assert result.status == "OK"
+    assert result.phase_region == "bubble_point"
+    assert result.pressure_psia == pytest.approx(context["bubble_point_psia"])
+    assert result.rs_scf_stb == pytest.approx(context["solution_gor_scf_stb"])
+
+
+def test_zero_rate_static_column_remains_frictionless():
+    result = vlp_engine.static_gradient(
+        WELL["thp"], WELL["tvd"], WELL["t_wh"], WELL["geothermal"],
+        WELL["gamma_g"], WELL["gamma_w"], WELL["z_factor"])
+    assert result.status == "CONVERGED"
+    assert result.rate == 0.0
+    assert result.components["friction"] == 0.0
+    assert result.components["acceleration"] == 0.0
+
+
+def test_provider_passes_dynamic_states_through_vlp_curve():
+    provider = TrackingProvider()
+    rates, pressures = vlp_engine.vlp_curve(
         WELL["thp"], WELL["tvd"], WELL["gor"], WELL["bo"], WELL["bw"],
         WELL["z_factor"], WELL["gamma_g"], WELL["gamma_w"], WELL["mu_l"],
         WELL["api"], WELL["wc"], WELL["tubing_id_in"], WELL["rs"],
         WELL["t_wh"], WELL["geothermal"], 500.0, 1500.0, 3,
         n_segments=8, pvt_provider=provider, pvt_context=PVT_CONTEXT,
     )
+    assert rates == [500.0, 1000.0, 1500.0]
+    assert all(value > WELL["thp"] for value in pressures)
+    assert len({state.pressure_psia for state in provider.states}) > 1
 
-    assert provider_q == baseline_q == [500.0, 1000.0, 1500.0]
-    assert all(value > WELL["thp"] for value in provider_p)
-    assert any(abs(a - b) > 1.0e-8 for a, b in zip(baseline_p, provider_p))
+
+def test_provider_failure_during_intermediate_segment_propagates():
+    class FailingProvider(BlackOilPvtProvider):
+        def evaluate(self, state):
+            if state.pressure_psia > 150.0:
+                return PvtResult(
+                    pressure_psia=state.pressure_psia,
+                    temperature_f=state.temperature_f,
+                    pb_psia=None, rs_scf_stb=None, bo_rb_stb=None,
+                    co_1_psi=None, mu_o_cp=None, z_factor=None,
+                    bg_rb_scf=None, mu_g_cp=None, phase_region=None,
+                    status="NUMERICAL_NON_CONVERGENCE",
+                    provenance={"package_version": "test"},
+                    warnings=("forced intermediate failure",),
+                )
+            return super().evaluate(state)
+
+    with pytest.raises(ValueError, match="NUMERICAL_NON_CONVERGENCE"):
+        run_traverse(
+            pvt_provider=FailingProvider(),
+            pvt_context=PVT_CONTEXT,
+            n_segments=8,
+        )
 
 
 def test_provider_requires_context():
@@ -154,11 +266,18 @@ def test_invalid_provider_context_propagates_as_physical_input_error():
         run_traverse(pvt_provider=BlackOilPvtProvider(), pvt_context=context)
 
 
-@pytest.mark.parametrize("model", ["beggs_brill", "hagedorn_brown"])
-def test_provider_nonconvergence_propagates(model):
-    provider = BlackOilPvtProvider()
-    provider.DAK_MAX_ITERATIONS = 0
+def test_provider_nonconvergence_propagates_for_both_models():
+    for model in ("beggs_brill", "hagedorn_brown"):
+        provider = BlackOilPvtProvider()
+        provider.DAK_MAX_ITERATIONS = 0
+        with pytest.raises(ValueError, match="NUMERICAL_NON_CONVERGENCE"):
+            run_traverse(
+                model=model, pvt_provider=provider, pvt_context=PVT_CONTEXT)
 
-    with pytest.raises(ValueError, match="NUMERICAL_NON_CONVERGENCE"):
-        run_traverse(
-            model=model, pvt_provider=provider, pvt_context=PVT_CONTEXT)
+
+def test_increment_4_does_not_add_telegram_routing():
+    from pathlib import Path
+
+    handler_text = Path("handlers/text_handlers.py").read_text()
+    assert "pvt_model" not in handler_text
+    assert "BlackOilPvtProvider" not in handler_text
