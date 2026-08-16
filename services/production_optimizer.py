@@ -461,7 +461,9 @@ class ProductionOptimizer:
                  objective: str,
                  constraints: Optional[Dict[str, Any]] = None,
                  base_kwargs: Optional[Dict[str, float]] = None,
-                 ipr_kwargs: Optional[Dict[str, Optional[float]]] = None
+                 ipr_kwargs: Optional[Dict[str, Optional[float]]] = None,
+                 pvt_provider: Any = None,
+                 pvt_context: Optional[Dict[str, Any]] = None
                  ) -> OptimizationResult:
         """Constrained candidate comparison. `values` is the explicit
         candidate list supplied by the user; `constraints` maps supported
@@ -493,7 +495,9 @@ class ProductionOptimizer:
 
         for v in values:
             try:
-                nodal = self._solve(variable, v, base_kwargs, ipr_kwargs)
+                nodal = self._solve(
+                    variable, v, base_kwargs, ipr_kwargs,
+                    pvt_provider=pvt_provider, pvt_context=pvt_context)
             except (NodalError, ValueError, TypeError) as exc:
                 point = SensitivityPoint.from_nodal(
                     v, None, solve_error=f"{type(exc).__name__}: {exc}")

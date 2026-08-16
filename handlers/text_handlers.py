@@ -2343,7 +2343,7 @@ def handle_calc_optimize(message: Dict[str, Any], tg
     first_space = text.find(" ")
     args_str = text[first_space + 1:] if first_space >= 0 else ""
 
-    kwargs = _common_string_keys(args_str, ())
+    kwargs = _common_string_keys(args_str, ("pvt_mode", "pvt_model"))
     _numeric = parse_kv_args(args_str)
     _numeric.update(kwargs)
     kwargs = _numeric
@@ -2429,12 +2429,17 @@ def handle_calc_optimize(message: Dict[str, Any], tg
             except (TypeError, ValueError):
                 return f"Error: {_cname} must be numeric.", None, None
 
+    pvt_provider, pvt_context, pvt_error = _bind_black_oil_pvt(kwargs)
+    if pvt_error:
+        return pvt_error, None, None
+
     opt = production_optimizer.ProductionOptimizer()
     try:
         result = opt.optimize(
             variable, values=values, objective=objective,
             constraints=constraints or None,
-            base_kwargs=vlp_kwargs, ipr_kwargs=ipr_kwargs)
+            base_kwargs=vlp_kwargs, ipr_kwargs=ipr_kwargs,
+            pvt_provider=pvt_provider, pvt_context=pvt_context)
     except production_optimizer.OptimizationError as _e:
         if _e.kind == "PHYSICALLY_INVALID":
             return ("Engineering Guardrail — inputs rejected as physically "
@@ -2454,6 +2459,9 @@ def handle_calc_optimize(message: Dict[str, Any], tg
              "layer over the verified IPR/VLP/Nodal engines)", "=" * 60]
     lines.append(f"Objective: {result.objective}")
     lines.append(f"Variable optimized: {var_display}")
+    lines.append(f"Candidate count: {len(result.candidates)}")
+    lines.append("Feasible candidate count: " + str(sum(
+        1 for c in result.candidates if c.classification == FEASIBLE)))
     lines.append("")
     bc = result.base_candidate
     if bc is not None:
@@ -2515,6 +2523,17 @@ def handle_calc_optimize(message: Dict[str, Any], tg
                      "review).")
     for w in result.warnings:
         lines.append(f"NOTE: {w}")
+    if pvt_provider is not None:
+        pvt_points = []
+        if result.base_candidate is not None:
+            pvt_points.append(result.base_candidate.point)
+        pvt_points.extend(c.point for c in result.candidates)
+        pvt_metadata = next(
+            (point.nodal.pvt_metadata for point in pvt_points
+             if point.nodal is not None and point.nodal.pvt_metadata),
+            {"enabled": True, "provider": type(pvt_provider).__name__})
+        lines.extend(_pvt_provenance_lines(
+            pvt_metadata, "pressure_dependent", "black_oil_v1"))
     lines.append("")
     lines.append("Interpretation (engine layer): model sensitivity is "
                  "not a field instruction. Field implementation requires "
