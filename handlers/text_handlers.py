@@ -2101,7 +2101,7 @@ def handle_calc_sensitivity(message: Dict[str, Any], tg
     first_space = text.find(" ")
     args_str = text[first_space + 1:] if first_space >= 0 else ""
 
-    kwargs = _common_string_keys(args_str, ())
+    kwargs = _common_string_keys(args_str, ("pvt_mode", "pvt_model"))
     _numeric = parse_kv_args(args_str)
     _numeric.update(kwargs)
     kwargs = _numeric
@@ -2214,6 +2214,10 @@ def handle_calc_sensitivity(message: Dict[str, Any], tg
             return "Error: base value must be numeric.\n\n" \
                    + _SENSITIVITY_USAGE, None, None
 
+    pvt_provider, pvt_context, pvt_error = _bind_black_oil_pvt(kwargs)
+    if pvt_error:
+        return pvt_error, None, None
+
     opt = production_optimizer.ProductionOptimizer()
     try:
         result = opt.sensitivity(
@@ -2222,7 +2226,8 @@ def handle_calc_sensitivity(message: Dict[str, Any], tg
             hi=float(hi) if hi is not None else None,
             n_points=int(n_points) if n_points is not None else None,
             base_value=base_value, base_kwargs=vlp_kwargs,
-            ipr_kwargs=ipr_kwargs)
+            ipr_kwargs=ipr_kwargs,
+            pvt_provider=pvt_provider, pvt_context=pvt_context)
     except production_optimizer.OptimizationError as _e:
         if _e.kind == "PHYSICALLY_INVALID":
             return ("Engineering Guardrail — inputs rejected as physically "
@@ -2265,6 +2270,17 @@ def handle_calc_sensitivity(message: Dict[str, Any], tg
             lines.append(_delta_line(d, bp.q_op))
     for w in result.warnings:
         lines.append(f"NOTE: {w}")
+    if pvt_provider is not None:
+        pvt_points = []
+        if result.base_point is not None:
+            pvt_points.append(result.base_point)
+        pvt_points.extend(result.points)
+        pvt_metadata = next(
+            (point.nodal.pvt_metadata for point in pvt_points
+             if point.nodal is not None and point.nodal.pvt_metadata),
+            {"enabled": True, "provider": type(pvt_provider).__name__})
+        lines.extend(_pvt_provenance_lines(
+            pvt_metadata, "pressure_dependent", "black_oil_v1"))
     lines.append("")
     lines.append("Interpretation (engine layer): this is a calculated "
                  "model sensitivity — field implementation requires "

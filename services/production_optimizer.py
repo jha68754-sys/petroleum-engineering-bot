@@ -283,17 +283,24 @@ class ProductionOptimizer:
     # ------------------------------------------------------------------
     def _solve(self, variable: str, value: float,
                base_kwargs: Dict[str, float],
-               ipr_kwargs: Dict[str, Optional[float]]) -> Optional[NodalResult]:
+               ipr_kwargs: Dict[str, Optional[float]],
+               pvt_provider: Any = None,
+               pvt_context: Optional[Dict[str, Any]] = None
+               ) -> Optional[NodalResult]:
         kw = dict(base_kwargs)
         kw[_SENSVAR_MAP[variable][0]] = value
         ipr = dict(ipr_kwargs)
         try:
-            return self.nodal.solve(ipr_model=ipr.pop("ipr_model", "auto"),
-                                    pr=ipr["pr"], pb=ipr.get("pb"),
-                                    j=ipr.get("j"), j_star=ipr.get("j_star"),
-                                    qmax=ipr.get("qmax"),
-                                    q_test=ipr.get("q_test"),
-                                    pwf_test=ipr.get("pwf_test"), **kw)
+            return self.nodal.solve(
+                ipr_model=ipr.pop("ipr_model", "auto"),
+                pr=ipr["pr"], pb=ipr.get("pb"),
+                j=ipr.get("j"), j_star=ipr.get("j_star"),
+                qmax=ipr.get("qmax"),
+                q_test=ipr.get("q_test"),
+                pwf_test=ipr.get("pwf_test"),
+                pvt_provider=pvt_provider,
+                pvt_context=pvt_context,
+                **kw)
         except (NodalError, ValueError, TypeError) as exc:
             raise exc
 
@@ -361,7 +368,9 @@ class ProductionOptimizer:
                     n_points: Optional[int] = None,
                     base_value: Optional[float] = None,
                     base_kwargs: Optional[Dict[str, float]] = None,
-                    ipr_kwargs: Optional[Dict[str, Optional[float]]] = None
+                    ipr_kwargs: Optional[Dict[str, Optional[float]]] = None,
+                    pvt_provider: Any = None,
+                    pvt_context: Optional[Dict[str, Any]] = None
                     ) -> SensitivityResult:
         """One-variable deterministic sensitivity over the verified Nodal
         solver. base_kwargs holds the VLP inputs EXCLUDING the swept
@@ -392,7 +401,9 @@ class ProductionOptimizer:
         warnings: List[str] = []
         base_point = None
         try:
-            nodal = self._solve(variable, base_value, base_kwargs, ipr_kwargs)
+            nodal = self._solve(
+                variable, base_value, base_kwargs, ipr_kwargs,
+                pvt_provider=pvt_provider, pvt_context=pvt_context)
         except (NodalError, ValueError, TypeError) as exc:
             nodal = None
             warnings.append(f"Base case ({variable}={base_value:g}) could "
@@ -407,7 +418,9 @@ class ProductionOptimizer:
         points: List[SensitivityPoint] = []
         for v in sweep:
             try:
-                nodal = self._solve(variable, v, base_kwargs, ipr_kwargs)
+                nodal = self._solve(
+                    variable, v, base_kwargs, ipr_kwargs,
+                    pvt_provider=pvt_provider, pvt_context=pvt_context)
                 points.append(SensitivityPoint.from_nodal(v, nodal))
             except (NodalError, ValueError, TypeError) as exc:
                 points.append(SensitivityPoint.from_nodal(
