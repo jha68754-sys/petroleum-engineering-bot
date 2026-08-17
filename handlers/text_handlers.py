@@ -42,6 +42,7 @@ from services.production_optimizer import (
     PHYSICALLY_INVALID,
 )
 from services.gas_lift_engine import GasLiftEngine, GasLiftError, GasLiftInput
+from services.choke_engine import ChokeEngine, ChokeError, ChokeInput
 from logging_config import get_logger
 
 
@@ -278,7 +279,7 @@ def handle_calc(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Opti
             "Usage: /calc <type> key=value ...\n\n"
             "Types: api, ooip, ogip, darcy, recovery_factor,\n"
             "  productivity_index, hydrostatic, mud_weight_required,\n"
-            "  ecd, water_cut, wor, gor_produced, npv, gas_lift\n\n"
+            "  ecd, water_cut, wor, gor_produced, npv, gas_lift, choke\n\n"
             "Example: /calc ooip area=500 h=50 phi=0.2 sw=0.3 bo=1.3"
         ), None, None
 
@@ -288,6 +289,11 @@ def handle_calc(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Opti
     if formula_key.lower() in ("gas_lift", "gaslift"):
         text, png, caption = handle_calc_gas_lift(
             {"text": "/gas_lift " + args_str}, tg
+        )
+        return text, png, caption
+    if formula_key.lower() in ("choke", "surface_choke"):
+        text, png, caption = handle_calc_choke(
+            {"text": "/choke " + args_str}, tg
         )
         return text, png, caption
     if formula_key.lower() == "vlp":
@@ -518,6 +524,118 @@ def handle_calc_gas_lift(message: Dict[str, Any], tg) -> Tuple[str, Optional[byt
         result.pvt_metadata["mode_selector"] = str(pvt_kwargs.get("pvt_mode"))
         result.pvt_metadata["model_selector"] = str(pvt_kwargs.get("pvt_model"))
     return _format_gas_lift_result(result), None, None
+
+
+def _choke_numeric_value(kwargs: Dict[str, Any], aliases: Tuple[str, ...]) -> Any:
+    for alias in aliases:
+        if alias in kwargs:
+            return kwargs[alias]
+    return None
+
+
+def _format_choke_result(result) -> str:
+    lines = [
+        "Choke Performance",
+        "=" * 50,
+        f"Status: {result.status}",
+        "",
+        f"Model: {result.choke_model}",
+        f"Upstream Pressure: {result.upstream_pressure_psia:.2f} psia",
+        f"Downstream Pressure: {result.downstream_pressure_psia:.2f} psia",
+        f"Choke Size: {result.choke_size_64th_in:.2f}/64 in",
+        f"GOR: {result.gor_scf_stb:.2f} scf/STB",
+    ]
+    if result.calculated_rate_bpd is not None:
+        lines.append(f"Calculated Rate: {result.calculated_rate_bpd:.2f} bbl/day")
+    if result.supplied_rate_bpd is not None:
+        lines.append(f"Supplied Liquid Rate: {result.supplied_rate_bpd:.2f} bbl/day")
+    if result.correlation_pressure_psia is not None:
+        lines.append(
+            f"Gilbert Correlation Pressure: {result.correlation_pressure_psia:.2f} psia"
+        )
+    lines.extend([
+        f"Pressure Ratio: {result.pressure_ratio:.4f}",
+        f"Flow Regime: {result.flow_regime}",
+        "",
+        "Provenance:",
+        f"Choke Model: {result.provenance}",
+        f"Source: {result.source}",
+        f"Units: {result.units}",
+    ])
+    if result.input_defaults:
+        lines.append("Input Notes: " + " | ".join(result.input_defaults))
+    if result.warnings:
+        lines.append("")
+        lines.append("Warnings:")
+        lines.extend(f" • {warning}" for warning in result.warnings)
+    if result.limitations:
+        lines.append("")
+        lines.append("Limitations:")
+        lines.extend(f" • {limitation}" for limitation in result.limitations)
+    lines.extend([
+        "",
+        "NOTE: Results are CALCULATED deterministic Gilbert V1 model results, not measured field data or operating instructions.",
+    ])
+    return "\\n".join(lines)
+
+
+@registry.register("choke", aliases=["surface_choke"])
+def handle_calc_choke(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
+    """Handle ``/calc choke`` using the isolated ChokeEngine V1."""
+    text = message.get("text", "")
+    first_space = text.find(" ")
+    args_str = text[first_space + 1:] if first_space >= 0 else ""
+    kwargs = parse_kv_args(args_str)
+    raw_tokens = {}
+    for token in args_str.split():
+        if "=" in token:
+            key, value = token.split("=", 1)
+            raw_tokens[key.strip().lower()] = value.strip()
+
+    def numeric(aliases: Tuple[str, ...]):
+        return _choke_numeric_value(kwargs, aliases)
+
+    missing = []
+    p_up = numeric(("p_up", "upstream_pressure_psia", "p_upstream"))
+    p_down = numeric(("p_down", "downstream_pressure_psia", "p_downstream"))
+    choke_size = numeric(("choke", "choke_size", "choke_size_64th_in", "d"))
+    gor = numeric(("gor", "glr", "gor_scf_stb"))
+    if p_up is None:
+        missing.append("p_up")
+    if p_down is None:
+        missing.append("p_down")
+    if choke_size is None:
+        missing.append("choke")
+    if gor is None:
+        missing.append("gor")
+    if missing:
+        return (
+            "Engineering Data Requirement — /calc choke is missing: "
+            + ", ".join(missing)
+            + ". Required units: p_up/p_down=psia, choke=64ths-inch, "
+              "gor=scf/STB; q_liquid is optional for rate solving."
+        ), None, None
+
+    model = raw_tokens.get("choke_model", raw_tokens.get("model", "gilbert_1954"))
+    q_liquid = numeric(("q_liquid", "liquid_rate_bpd", "q"))
+    api = numeric(("api", "oil_api"))
+    gamma_g = numeric(("gamma_g", "gas_specific_gravity"))
+    try:
+        result = ChokeEngine().calculate(
+            ChokeInput(
+                upstream_pressure_psia=p_up,
+                downstream_pressure_psia=p_down,
+                choke_size_64th_in=choke_size,
+                gor_scf_stb=gor,
+                liquid_rate_bpd=q_liquid,
+                oil_api=api,
+                gas_specific_gravity=gamma_g,
+                choke_model=model,
+            )
+        )
+    except ChokeError as exc:
+        return f"Error: {exc.code}: {exc.message}", None, None
+    return _format_choke_result(result), None, None
 
 
 # ═══════════════════════════════════════════════════════════════════════
