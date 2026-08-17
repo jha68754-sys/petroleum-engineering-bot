@@ -41,6 +41,7 @@ from services.production_optimizer import (
     FEASIBLE, NO_OPERATING_POINT, MULTIPLE_OPERATING_POINTS,
     PHYSICALLY_INVALID,
 )
+from services.gas_lift_engine import GasLiftEngine, GasLiftError, GasLiftInput
 from logging_config import get_logger
 
 
@@ -277,13 +278,18 @@ def handle_calc(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Opti
             "Usage: /calc <type> key=value ...\n\n"
             "Types: api, ooip, ogip, darcy, recovery_factor,\n"
             "  productivity_index, hydrostatic, mud_weight_required,\n"
-            "  ecd, water_cut, wor, gor_produced, npv\n\n"
+            "  ecd, water_cut, wor, gor_produced, npv, gas_lift\n\n"
             "Example: /calc ooip area=500 h=50 phi=0.2 sw=0.3 bo=1.3"
         ), None, None
 
     formula_key = parts[1]
     args_str = parts[2] if len(parts) > 2 else ""
 
+    if formula_key.lower() in ("gas_lift", "gaslift"):
+        text, png, caption = handle_calc_gas_lift(
+            {"text": "/gas_lift " + args_str}, tg
+        )
+        return text, png, caption
     if formula_key.lower() == "vlp":
         # Deterministic Production VLP engine (Phase 2: VLP only); handled
         # separately from EXACT_FORMULAS so that Beggs-Brill guardrails and
@@ -339,6 +345,150 @@ def handle_calc(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Opti
 
     result = run_exact_calculation(formula_key, kwargs)
     return result, None, None
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  /calc gas_lift — Deterministic continuous Gas-Lift V1
+
+
+_GAS_LIFT_ALIASES = {
+    "thp": "thp_psia",
+    "thp_psia": "thp_psia",
+    "tvd": "tvd_ft",
+    "tvd_ft": "tvd_ft",
+    "p_inj": "injection_pressure_psia",
+    "injection_pressure": "injection_pressure_psia",
+    "injection_pressure_psia": "injection_pressure_psia",
+    "q_gas": "gas_injection_rate_mscfd",
+    "gas_injection_rate": "gas_injection_rate_mscfd",
+    "gas_injection_rate_mscfd": "gas_injection_rate_mscfd",
+    "gamma_g": "gas_specific_gravity",
+    "gas_specific_gravity": "gas_specific_gravity",
+    "t_avg": "average_temperature_f",
+    "average_temperature": "average_temperature_f",
+    "average_temperature_f": "average_temperature_f",
+    "q_liquid": "liquid_rate_stbd",
+    "liquid_rate": "liquid_rate_stbd",
+    "liquid_rate_stbd": "liquid_rate_stbd",
+    "tubing_gradient": "tubing_gradient_psi_ft",
+    "tubing_gradient_psi_ft": "tubing_gradient_psi_ft",
+    "injection_depth": "injection_depth_ft",
+    "injection_depth_ft": "injection_depth_ft",
+    "pr": "reservoir_pressure_psia",
+    "reservoir_pressure": "reservoir_pressure_psia",
+    "reservoir_pressure_psia": "reservoir_pressure_psia",
+    "j": "productivity_index_stbd_psi",
+    "productivity_index": "productivity_index_stbd_psi",
+    "productivity_index_stbd_psi": "productivity_index_stbd_psi",
+    "wc": "water_cut",
+    "water_cut": "water_cut",
+    "api": "oil_api",
+    "oil_api": "oil_api",
+    "z": "z_factor",
+    "z_factor": "z_factor",
+    "bo": "oil_fvf_rb_stb",
+    "oil_fvf": "oil_fvf_rb_stb",
+    "oil_fvf_rb_stb": "oil_fvf_rb_stb",
+    "bw": "water_fvf_rb_stb",
+    "water_fvf": "water_fvf_rb_stb",
+    "water_fvf_rb_stb": "water_fvf_rb_stb",
+}
+_GAS_LIFT_REQUIRED = (
+    "thp_psia", "tvd_ft", "injection_pressure_psia",
+    "gas_injection_rate_mscfd", "gas_specific_gravity",
+    "average_temperature_f", "liquid_rate_stbd",
+)
+_GAS_LIFT_ALLOWED = set(_GAS_LIFT_ALIASES)
+
+
+def _gas_lift_float_kwargs(args_str: str) -> Tuple[Dict[str, Any], Optional[str]]:
+    """Parse Gas-Lift numeric tokens and preserve a typed user-facing error."""
+    raw: Dict[str, Any] = {}
+    unknown: List[str] = []
+    for part in args_str.split():
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        key = key.strip().lower()
+        if key.startswith("pvt_"):
+            return {}, (
+                "Error: INVALID_INPUT: Black-Oil/PVT Gas-Lift integration is "
+                "reserved for Increment 9; do not pass pvt_* options in Increment 8."
+            )
+        if key not in _GAS_LIFT_ALLOWED:
+            unknown.append(key)
+            continue
+        try:
+            raw[_GAS_LIFT_ALIASES[key]] = float(value)
+        except ValueError:
+            return {}, f"Error: INVALID_INPUT: {key} must be numeric."
+    if unknown:
+        return {}, "Error: INVALID_INPUT: unsupported Gas-Lift option(s): " + ", ".join(sorted(set(unknown)))
+    missing = [key for key in _GAS_LIFT_REQUIRED if key not in raw]
+    if missing:
+        return {}, "Error: INSUFFICIENT_INPUT: missing " + ", ".join(missing) + "."
+    return raw, None
+
+
+def _format_gas_lift_result(result) -> str:
+    lines = [
+        "Gas-Lift Calculation Result",
+        "============================================================",
+        "Model: Continuous Gas-Lift V1 — steady-state pressure balance",
+        "",
+        "INPUTS",
+        f" THP = {result.thp_psia:.2f} psia",
+        f" TVD = {result.tvd_ft:.2f} ft",
+        f" Surface injection pressure = {result.injection_pressure_psia:.2f} psia",
+        f" Gas injection rate = {result.gas_injection_rate_mscfd:.2f} Mscf/day",
+        f" Liquid rate = {result.liquid_in_situ_bpd:.2f} bbl/day in-situ equivalent",
+        "",
+        "CALCULATED RESULTS",
+        f" Injection depth = {result.injection_depth_ft:.2f} ft TVD",
+        f" Tubing pressure at injection point = {result.tubing_pressure_at_injection_psia:.2f} psia",
+        f" Required surface injection pressure = {result.required_surface_injection_pressure_psia:.2f} psia",
+        f" Injection pressure margin = {result.pressure_margin_at_injection_psi:.2f} psi",
+        f" Representative pressure = {result.representative_pressure_psia:.2f} psia",
+        f" Injected gas in-situ volume = {result.injected_gas_in_situ_bpd:.2f} bbl/day equivalent",
+        f" Gas fraction in homogeneous V1 mixture = {result.gas_fraction:.4f}",
+        f" Base pressure gradient = {result.base_gradient_psi_ft:.5f} psi/ft",
+        f" Lifted pressure gradient = {result.lifted_gradient_psi_ft:.5f} psi/ft",
+        f" BHP without lift = {result.bottomhole_pressure_without_lift_psia:.2f} psia",
+        f" BHP with V1 lift response = {result.bottomhole_pressure_with_lift_psia:.2f} psia",
+    ]
+    if result.predicted_liquid_rate_stbd is None:
+        lines.append(" Predicted liquid/oil rate = unavailable (supply pr and j for linear IPR response)")
+    else:
+        lines.append(f" Predicted liquid rate = {result.predicted_liquid_rate_stbd:.2f} STB/day")
+        lines.append(f" Predicted oil rate = {result.predicted_oil_rate_stbd:.2f} STB/day")
+    lines.extend([
+        "",
+        "ENGINEERING STATUS",
+        f" Status: {result.status}",
+        f" Provenance: {result.provenance}",
+        "",
+        "LIMITATIONS / WARNINGS",
+    ])
+    lines.extend(f" • {item}" for item in result.limitations)
+    lines.append("")
+    lines.append("NOTE: Results are deterministic model calculations, not field operating instructions or measured data.")
+    return "\n".join(lines)
+
+
+@registry.register("gas_lift")
+def handle_calc_gas_lift(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
+    """Handle ``/calc gas_lift`` using the isolated GasLiftEngine."""
+    text = message.get("text", "")
+    first_space = text.find(" ")
+    args_str = text[first_space + 1:] if first_space >= 0 else ""
+    kwargs, parse_error = _gas_lift_float_kwargs(args_str)
+    if parse_error:
+        return parse_error, None, None
+    try:
+        result = GasLiftEngine().calculate(GasLiftInput(**kwargs))
+    except GasLiftError as exc:
+        return f"Error: {exc.code}: {exc.message}", None, None
+    return _format_gas_lift_result(result), None, None
 
 
 # ═══════════════════════════════════════════════════════════════════════
