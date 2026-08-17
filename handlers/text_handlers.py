@@ -402,7 +402,7 @@ _GAS_LIFT_ALLOWED = set(_GAS_LIFT_ALIASES)
 
 
 def _gas_lift_float_kwargs(args_str: str) -> Tuple[Dict[str, Any], Optional[str]]:
-    """Parse Gas-Lift numeric tokens and preserve a typed user-facing error."""
+    """Parse Gas-Lift values and preserve the shared PVT selector as strings."""
     raw: Dict[str, Any] = {}
     unknown: List[str] = []
     for part in args_str.split():
@@ -410,11 +410,16 @@ def _gas_lift_float_kwargs(args_str: str) -> Tuple[Dict[str, Any], Optional[str]
             continue
         key, value = part.split("=", 1)
         key = key.strip().lower()
+        value = value.strip()
         if key.startswith("pvt_"):
-            return {}, (
-                "Error: INVALID_INPUT: Black-Oil/PVT Gas-Lift integration is "
-                "reserved for Increment 9; do not pass pvt_* options in Increment 8."
-            )
+            if key in {"pvt_mode", "pvt_model"}:
+                raw[key] = value
+            else:
+                try:
+                    raw[key] = float(value)
+                except ValueError:
+                    return {}, f"Error: INVALID_INPUT: {key} must be numeric."
+            continue
         if key not in _GAS_LIFT_ALLOWED:
             unknown.append(key)
             continue
@@ -466,6 +471,12 @@ def _format_gas_lift_result(result) -> str:
         "ENGINEERING STATUS",
         f" Status: {result.status}",
         f" Provenance: {result.provenance}",
+    ])
+    if result.pvt_metadata.get("enabled"):
+        pvt_mode = result.pvt_metadata.get("mode_selector", "pressure_dependent")
+        pvt_model = result.pvt_metadata.get("model_selector", "black_oil_v1")
+        lines.extend(_pvt_provenance_lines(result.pvt_metadata, pvt_mode, pvt_model))
+    lines.extend([
         "",
         "LIMITATIONS / WARNINGS",
     ])
@@ -484,10 +495,28 @@ def handle_calc_gas_lift(message: Dict[str, Any], tg) -> Tuple[str, Optional[byt
     kwargs, parse_error = _gas_lift_float_kwargs(args_str)
     if parse_error:
         return parse_error, None, None
+    pvt_kwargs = {key: value for key, value in kwargs.items() if key.startswith("pvt_")}
+    gas_kwargs = {key: value for key, value in kwargs.items() if not key.startswith("pvt_")}
+    pvt_provider, pvt_context, pvt_error = _bind_black_oil_pvt(pvt_kwargs)
+    if pvt_error:
+        if pvt_kwargs.get("pvt_mode") is not None and pvt_kwargs.get("pvt_model") is None:
+            return (
+                "Error: INVALID_INPUT: Black-Oil/PVT Gas-Lift integration is "
+                "reserved for Increment 9; complete pvt_model and Black-Oil state "
+                "are required."
+            ), None, None
+        return pvt_error, None, None
     try:
-        result = GasLiftEngine().calculate(GasLiftInput(**kwargs))
+        result = GasLiftEngine().calculate(
+            GasLiftInput(**gas_kwargs),
+            pvt_provider=pvt_provider,
+            pvt_context=pvt_context,
+        )
     except GasLiftError as exc:
         return f"Error: {exc.code}: {exc.message}", None, None
+    if pvt_provider is not None:
+        result.pvt_metadata["mode_selector"] = str(pvt_kwargs.get("pvt_mode"))
+        result.pvt_metadata["model_selector"] = str(pvt_kwargs.get("pvt_model"))
     return _format_gas_lift_result(result), None, None
 
 
