@@ -674,7 +674,7 @@ def handle_calc_choke(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes]
         marker = "NOTE: Results are CALCULATED deterministic Gilbert V1 model results, not measured field data or operating instructions."
         formatted = formatted.replace(
             marker,
-            "\\n" + "\\n".join(provenance_lines) + marker,
+            "\\n" + "\\n".join(provenance_lines) + "\\n" + marker,
         )
     return formatted, None, None
 

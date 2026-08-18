@@ -70,6 +70,7 @@ def test_b_explicit_selector_binds_the_existing_black_oil_provider():
     assert "PVT Model: black_oil_v1" in text
     assert "PVT Provider: BlackOilPvtProvider" in text
     assert "Pressure-Dependent PVT Provenance" in text
+    assert "PVT Status: OK\\nNOTE: Results are CALCULATED" in text
     assert "Traceback" not in text
 
 
