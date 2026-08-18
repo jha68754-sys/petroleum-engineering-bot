@@ -553,6 +553,11 @@ def _format_choke_result(result) -> str:
         lines.append(
             f"Gilbert Correlation Pressure: {result.correlation_pressure_psia:.2f} psia"
         )
+    if result.pvt_metadata.get("enabled"):
+        lines.append(
+            f"Pressure Differential: "
+            f"{result.upstream_pressure_psia - result.downstream_pressure_psia:.2f} psi"
+        )
     lines.extend([
         f"Pressure Ratio: {result.pressure_ratio:.4f}",
         f"Flow Regime: {result.flow_regime}",
@@ -591,6 +596,22 @@ def handle_calc_choke(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes]
         if "=" in token:
             key, value = token.split("=", 1)
             raw_tokens[key.strip().lower()] = value.strip()
+
+    pvt_kwargs: Dict[str, Any] = {}
+    for key, value in raw_tokens.items():
+        if not key.startswith("pvt_"):
+            continue
+        if key in {"pvt_mode", "pvt_model"}:
+            pvt_kwargs[key] = value
+            continue
+        try:
+            pvt_kwargs[key] = float(value)
+        except ValueError:
+            return f"Error: INVALID_INPUT: {key} must be numeric.", None, None
+
+    pvt_provider, pvt_context, pvt_error = _bind_black_oil_pvt(pvt_kwargs)
+    if pvt_error:
+        return pvt_error, None, None
 
     def numeric(aliases: Tuple[str, ...]):
         return _choke_numeric_value(kwargs, aliases)
@@ -631,11 +652,31 @@ def handle_calc_choke(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes]
                 oil_api=api,
                 gas_specific_gravity=gamma_g,
                 choke_model=model,
-            )
+            ),
+            pvt_provider=pvt_provider,
+            pvt_context=pvt_context,
         )
     except ChokeError as exc:
         return f"Error: {exc.code}: {exc.message}", None, None
-    return _format_choke_result(result), None, None
+    if pvt_provider is not None:
+        result.pvt_metadata["mode_selector"] = str(pvt_kwargs.get("pvt_mode"))
+        result.pvt_metadata["model_selector"] = str(pvt_kwargs.get("pvt_model"))
+    if result.pvt_metadata.get("enabled"):
+        pvt_mode = result.pvt_metadata.get("mode_selector", "pressure_dependent")
+        pvt_model = result.pvt_metadata.get("model_selector", "black_oil_v1")
+        provenance_lines = _pvt_provenance_lines(
+            result.pvt_metadata, pvt_mode, pvt_model
+        )
+    else:
+        provenance_lines = []
+    formatted = _format_choke_result(result)
+    if provenance_lines:
+        marker = "NOTE: Results are CALCULATED deterministic Gilbert V1 model results, not measured field data or operating instructions."
+        formatted = formatted.replace(
+            marker,
+            "\\n" + "\\n".join(provenance_lines) + marker,
+        )
+    return formatted, None, None
 
 
 # ═══════════════════════════════════════════════════════════════════════
