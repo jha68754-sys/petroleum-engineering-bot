@@ -43,6 +43,7 @@ from services.production_optimizer import (
 )
 from services.gas_lift_engine import GasLiftEngine, GasLiftError, GasLiftInput
 from services.choke_engine import ChokeEngine, ChokeError, ChokeInput
+from services.system_engine import IntegratedSystemEngine, SystemError, SystemInput
 from logging_config import get_logger
 
 
@@ -294,6 +295,11 @@ def handle_calc(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Opti
     if formula_key.lower() in ("choke", "surface_choke"):
         text, png, caption = handle_calc_choke(
             {"text": "/choke " + args_str}, tg
+        )
+        return text, png, caption
+    if formula_key.lower() == "system":
+        text, png, caption = handle_calc_system(
+            {"text": "/system " + args_str}, tg
         )
         return text, png, caption
     if formula_key.lower() == "vlp":
@@ -677,6 +683,163 @@ def handle_calc_choke(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes]
             "\\n" + "\\n".join(provenance_lines) + "\\n" + marker,
         )
     return formatted, None, None
+
+
+_SYSTEM_USAGE = (
+    "Usage: /calc system model=auto|linear|vogel|composite "
+    "pr=<psia> [thp_guess=<psia>] tvd=<ft> id=<in> gor=<scf/STB> "
+    "choke=<64ths> p_down=<psia> "
+    "api=<API> gamma_g=<sg> mu_l=<cP> bo=<rb/STB> rs=<scf/STB> "
+    "t_wh=<degF> geothermal=<degF/100ft> "
+    "[j=<STB/day/psi>|qmax=<STB/day>|q_test=<STB/day> pwf_test=<psia>]"
+)
+
+
+def _format_system_result(result: SystemResult) -> str:
+    lines = [
+        "Integrated Well + Choke Operating Point V1",
+        "==================================================",
+        f"Status: {result.status}",
+        "",
+        f"IPR model: {result.ipr_model}",
+        f"VLP model: {result.vlp_model}",
+        f"Choke model: {result.choke_model}",
+        f"Downstream pressure: {result.downstream_pressure_psia:.2f} psia",
+        f"Choke size: {result.choke_size_64th_in:.2f}/64 in",
+        f"Solver: {result.solver_method}",
+        f"Convergence: {result.convergence}",
+        f"Solver residual |Pwh_well - Pwh_choke|: "
+        f"{result.solver_residual_psi:.4f} psi" if result.solver_residual_psi is not None
+        else "Solver residual |Pwh_well - Pwh_choke|: unavailable",
+        f"Solver evaluations/iterations: {result.solver_iterations}",
+    ]
+    if result.operating_rate_bpd is not None:
+        lines.extend([
+            "",
+            "OPERATING POINT",
+            f" q_op = {result.operating_rate_bpd:.2f} STB/day",
+            f" Pwf = {result.pwf_psia:.2f} psia",
+            f" Required wellhead pressure = {result.wellhead_pressure_psia:.2f} psia",
+            f" Required choke upstream pressure = {result.upstream_pressure_psia:.2f} psia",
+            f" Choke flow regime: {result.choke_flow_regime}",
+        ])
+    else:
+        lines.extend(["", f"Reason: {result.reason}"])
+    if result.pvt_metadata.get("enabled"):
+        mode = result.pvt_metadata.get("mode", "pressure_dependent")
+        model = result.pvt_metadata.get("model", "black_oil_v1")
+        lines.extend(_pvt_provenance_lines(result.pvt_metadata, mode, model))
+    if result.warnings or result.limitations:
+        lines.extend(["", "LIMITATIONS / WARNINGS"])
+        for warning in result.warnings:
+            lines.append(f" • {warning}")
+        for limitation in result.limitations:
+            lines.append(f" • {limitation}")
+    lines.extend([
+        "",
+        "NOTE: Results are CALCULATED deterministic integrated well/choke model results, not measured field data or operating instructions.",
+    ])
+    return "\n".join(lines)
+
+
+@registry.register("system")
+def handle_calc_system(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
+    """Handle the Increment 12 integrated well + choke calculation."""
+    text = message.get("text", "")
+    first_space = text.find(" ")
+    args_str = text[first_space + 1:] if first_space >= 0 else ""
+    kwargs = parse_kv_args(args_str)
+    raw_tokens: Dict[str, str] = {}
+    for token in args_str.split():
+        if "=" in token:
+            key, value = token.split("=", 1)
+            raw_tokens[key.strip().lower()] = value.strip()
+    for key in ("model", "vlp_model", "choke_model", "pvt_mode", "pvt_model"):
+        if key in raw_tokens:
+            kwargs[key] = raw_tokens[key]
+    pvt_kwargs: Dict[str, Any] = {}
+    for key, value in raw_tokens.items():
+        if not key.startswith("pvt_"):
+            continue
+        if key in {"pvt_mode", "pvt_model"}:
+            pvt_kwargs[key] = value
+        else:
+            try:
+                pvt_kwargs[key] = float(value)
+            except ValueError:
+                return f"Error: INVALID_INPUT: {key} must be numeric.", None, None
+    pvt_provider, pvt_context, pvt_error = _bind_black_oil_pvt(pvt_kwargs)
+    if pvt_error:
+        return pvt_error, None, None
+
+    def numeric(aliases: Tuple[str, ...], default: Any = None):
+        for alias in aliases:
+            if alias in kwargs and kwargs[alias] is not None:
+                return kwargs[alias]
+        return default
+
+    required = []
+    required_map = {
+        "pr": ("pr",), "tvd": ("tvd",),
+        "id": ("id", "tubing_id_in"), "gor": ("gor", "gor_scf_stb"),
+        "rs": ("rs", "rs_scf_stb"), "api": ("api",),
+        "gamma_g": ("gamma_g",), "mu_l": ("mu_l",), "bo": ("bo",),
+        "t_wh": ("t_wh",), "geothermal": ("geothermal",),
+        "choke": ("choke", "choke_size", "choke_size_64th_in"),
+        "p_down": ("p_down", "downstream_pressure_psia", "p_downstream"),
+    }
+    for label, aliases in required_map.items():
+        if numeric(aliases) is None:
+            required.append(label)
+    model = str(kwargs.get("model", "auto")).strip().lower()
+    if model == "linear" and numeric(("j",)) is None and (numeric(("q_test",)) is None or numeric(("pwf_test",)) is None):
+        required.append("j or q_test plus pwf_test")
+    elif model == "vogel" and numeric(("qmax",)) is None and (numeric(("q_test",)) is None or numeric(("pwf_test",)) is None):
+        required.append("qmax or q_test plus pwf_test")
+    elif model == "composite":
+        for key in ("pb",):
+            if numeric((key,)) is None:
+                required.append(key)
+        if numeric(("j_star", "j")) is None and (numeric(("q_test",)) is None or numeric(("pwf_test",)) is None):
+            required.append("j or q_test plus pwf_test")
+    elif model == "auto":
+        if (numeric(("j",)) is None and numeric(("qmax",)) is None and
+                (numeric(("q_test",)) is None or numeric(("pwf_test",)) is None)):
+            required.append("j or qmax or q_test plus pwf_test")
+    if required:
+        return "Engineering Data Requirement — /calc system is missing: " + ", ".join(required) + ".\n\n" + _SYSTEM_USAGE, None, None
+
+    try:
+        inp = SystemInput(
+            pr=float(numeric(("pr",))),
+            thp=float(numeric(("thp", "thp_guess"), 100.0)),
+            tvd=float(numeric(("tvd",))), tubing_id_in=float(numeric(("id", "tubing_id_in"))),
+            gor_scf_stb=float(numeric(("gor", "gor_scf_stb"))), rs_scf_stb=float(numeric(("rs", "rs_scf_stb"))),
+            api=float(numeric(("api",))), gamma_g=float(numeric(("gamma_g",))),
+            mu_l_cp=float(numeric(("mu_l",))), bo_rb_stb=float(numeric(("bo",))),
+            t_wh_f=float(numeric(("t_wh",))), geothermal_f_100ft=float(numeric(("geothermal",))),
+            choke_size_64th_in=float(numeric(("choke", "choke_size", "choke_size_64th_in"))),
+            downstream_pressure_psia=float(numeric(("p_down", "downstream_pressure_psia", "p_downstream"))),
+            choke_model=str(kwargs.get("choke_model", "gilbert_1954")), ipr_model=model,
+            vlp_model=str(kwargs.get("vlp_model", "beggs_brill")), pb=numeric(("pb",)),
+            j=numeric(("j",)), j_star=numeric(("j_star",)), qmax=numeric(("qmax",)),
+            q_test=numeric(("q_test",)), pwf_test=numeric(("pwf_test",)), wc=float(numeric(("wc",), 0.0)),
+            gamma_w=float(numeric(("gamma_w",), 1.07)), bw=float(numeric(("bw",), 1.01)),
+            z_factor=float(numeric(("z",), 0.9)), sigma=float(numeric(("sigma",), 30.0)),
+            n_segments=int(numeric(("segments",), 80)), q_min=float(numeric(("q_min",), 1.0)),
+            q_max=numeric(("q_max",)), n_points=int(numeric(("n_points",), 41)),
+            pressure_tol=float(numeric(("pressure_tol",), 0.1)),
+            max_refine_iter=int(numeric(("max_refine_iter",), 60)),
+        )
+        result = IntegratedSystemEngine().calculate(inp, pvt_provider=pvt_provider, pvt_context=pvt_context)
+    except SystemError as exc:
+        return f"Error: {exc.code}: {exc.message}", None, None
+    except (TypeError, ValueError) as exc:
+        return f"Error: INVALID_INPUT: {exc}", None, None
+    if pvt_provider is not None:
+        result.pvt_metadata["mode"] = str(pvt_kwargs.get("pvt_mode"))
+        result.pvt_metadata["model"] = str(pvt_kwargs.get("pvt_model"))
+    return _format_system_result(result), None, None
 
 
 # ═══════════════════════════════════════════════════════════════════════
