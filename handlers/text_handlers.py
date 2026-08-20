@@ -49,6 +49,8 @@ from services.engineering_case import (
     EngineeringCase,
     build_system_case,
     build_system_failure_case,
+    build_choke_case,
+    build_choke_failure_case,
     replay_case,
     replay_matches,
 )
@@ -632,6 +634,8 @@ def handle_calc_choke(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes]
             key, value = token.split("=", 1)
             raw_tokens[key.strip().lower()] = value.strip()
 
+    case_requested, report_requested = _case_flags(raw_tokens)
+    case_requested = case_requested or report_requested
     pvt_kwargs: Dict[str, Any] = {}
     for key, value in raw_tokens.items():
         if not key.startswith("pvt_"):
@@ -676,22 +680,40 @@ def handle_calc_choke(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes]
     q_liquid = numeric(("q_liquid", "liquid_rate_bpd", "q"))
     api = numeric(("api", "oil_api"))
     gamma_g = numeric(("gamma_g", "gas_specific_gravity"))
+    inp = ChokeInput(
+        upstream_pressure_psia=p_up,
+        downstream_pressure_psia=p_down,
+        choke_size_64th_in=choke_size,
+        gor_scf_stb=gor,
+        liquid_rate_bpd=q_liquid,
+        oil_api=api,
+        gas_specific_gravity=gamma_g,
+        choke_model=model,
+    )
     try:
         result = ChokeEngine().calculate(
-            ChokeInput(
-                upstream_pressure_psia=p_up,
-                downstream_pressure_psia=p_down,
-                choke_size_64th_in=choke_size,
-                gor_scf_stb=gor,
-                liquid_rate_bpd=q_liquid,
-                oil_api=api,
-                gas_specific_gravity=gamma_g,
-                choke_model=model,
-            ),
+            inp,
             pvt_provider=pvt_provider,
             pvt_context=pvt_context,
         )
     except ChokeError as exc:
+        if case_requested:
+            failure_case = build_choke_failure_case(
+                inp,
+                code=exc.code,
+                message=exc.message,
+                request={"calculation": "choke", "arguments": raw_tokens},
+                pvt_context=pvt_context,
+                pvt_mode=pvt_kwargs.get("pvt_mode"),
+                pvt_model=pvt_kwargs.get("pvt_model"),
+            )
+            _remember_engineering_case(failure_case)
+            if report_requested:
+                return generate_report_v1(failure_case), None, None
+            return (
+                f"Error: {exc.code}: {exc.message}\n"
+                f"Engineering Case ID: {failure_case.case_id}"
+            ), None, None
         return f"Error: {exc.code}: {exc.message}", None, None
     if pvt_provider is not None:
         result.pvt_metadata["mode_selector"] = str(pvt_kwargs.get("pvt_mode"))
@@ -711,6 +733,19 @@ def handle_calc_choke(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes]
             marker,
             "\\n" + "\\n".join(provenance_lines) + "\\n" + marker,
         )
+    if case_requested:
+        engineering_case = build_choke_case(
+            inp,
+            result,
+            request={"calculation": "choke", "arguments": raw_tokens},
+            pvt_context=pvt_context,
+            pvt_mode=pvt_kwargs.get("pvt_mode"),
+            pvt_model=pvt_kwargs.get("pvt_model"),
+        )
+        _remember_engineering_case(engineering_case)
+        if report_requested:
+            return generate_report_v1(engineering_case), None, None
+        formatted += f"\n\nEngineering Case ID: {engineering_case.case_id}"
     return formatted, None, None
 
 

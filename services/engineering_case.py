@@ -300,7 +300,10 @@ def build_case(
             "hash": "sha256",
             "canonical_json": "sorted_keys_stable_separators_normalized_numerics",
             "replayable": str(calculation_type).strip().lower()
-            in {"system", "calc_system", "integrated_system", "integrated_system_v1"},
+            in {
+                "system", "calc_system", "integrated_system", "integrated_system_v1",
+                "choke", "choke_v1",
+            },
             **({} if reproducibility is None else dict(reproducibility)),
         },
     )
@@ -353,6 +356,29 @@ def _system_input_from_case(case: EngineeringCase) -> Any:
         raise CaseReplayError(f"INVALID_CASE_INPUT: {exc}") from exc
 
 
+def _choke_input_from_case(case: EngineeringCase) -> Any:
+    from services.choke_engine import ChokeInput
+
+    data = dict(case.inputs)
+    aliases = {
+        "upstream_pressure": "upstream_pressure_psia",
+        "downstream_pressure": "downstream_pressure_psia",
+        "choke_size": "choke_size_64th_in",
+        "gor": "gor_scf_stb",
+        "liquid_rate": "liquid_rate_bpd",
+        "model": "choke_model",
+    }
+    for old, new in aliases.items():
+        if new not in data and old in data:
+            data[new] = data[old]
+    allowed = set(ChokeInput.__dataclass_fields__)
+    clean = {key: value for key, value in data.items() if key in allowed}
+    try:
+        return ChokeInput(**clean)
+    except (TypeError, ValueError) as exc:
+        raise CaseReplayError(f"INVALID_CASE_INPUT: {exc}") from exc
+
+
 def replay_case(
     case: EngineeringCase,
     runner: Optional[Callable[[EngineeringCase], EngineeringCase]] = None,
@@ -371,6 +397,73 @@ def replay_case(
         return replayed
 
     kind = case.calculation_type.strip().lower()
+    if kind in {"choke", "choke_v1"}:
+        from services.black_oil_pvt import BlackOilPvtProvider
+        from services.choke_engine import ChokeEngine, ChokeError
+
+        inputs = _choke_input_from_case(case)
+        pvt_data = case.pvt if isinstance(case.pvt, Mapping) else {}
+        mode = str(pvt_data.get("mode", "")).strip().lower()
+        model = str(pvt_data.get("model", "")).strip().lower()
+        provider = None
+        context = None
+        if mode == "pressure_dependent" or model == "black_oil_v1":
+            if mode != "pressure_dependent" or model != "black_oil_v1":
+                raise CaseReplayError(
+                    "UNSUPPORTED_PVT_SELECTOR: explicit Black-Oil replay requires "
+                    "pressure_dependent/black_oil_v1"
+                )
+            provider = BlackOilPvtProvider()
+            context = pvt_data.get("context")
+            if not isinstance(context, Mapping):
+                raise CaseReplayError(
+                    "PHYSICALLY_INVALID_STATE: replay case lacks Black-Oil PVT context"
+                )
+            context = dict(context)
+        try:
+            result = ChokeEngine().calculate(
+                inputs, pvt_provider=provider, pvt_context=context
+            )
+        except ChokeError as exc:
+            return build_case(
+                calculation_type=case.calculation_type,
+                request=case.request,
+                inputs=case.inputs,
+                units=case.units,
+                selectors=case.selectors,
+                model=case.model,
+                pvt=case.pvt,
+                assumptions=case.assumptions,
+                result={"error": {"code": exc.code, "message": exc.message}},
+                status=exc.code,
+                limitations=case.limitations,
+                warnings=case.warnings,
+                release=case.release,
+                reproducibility=case.reproducibility,
+            )
+        if provider is not None:
+            # The handler records explicit selector provenance under these keys.
+            # Replay must reconstruct the same result envelope so comparison is
+            # deterministic; the released ChokeEngine itself remains untouched.
+            result.pvt_metadata["mode_selector"] = mode
+            result.pvt_metadata["model_selector"] = model
+        return build_case(
+            calculation_type=case.calculation_type,
+            request=case.request,
+            inputs=case.inputs,
+            units=case.units,
+            selectors=case.selectors,
+            model=case.model,
+            pvt=case.pvt,
+            assumptions=case.assumptions,
+            result=result,
+            status=getattr(result, "status", case.status),
+            limitations=getattr(result, "limitations", case.limitations),
+            warnings=getattr(result, "warnings", case.warnings),
+            release=case.release,
+            reproducibility=case.reproducibility,
+        )
+
     if kind not in {"system", "calc_system", "integrated_system", "integrated_system_v1"}:
         raise CaseReplayError(f"UNSUPPORTED_REPLAY_TYPE: {case.calculation_type}")
 
@@ -437,6 +530,76 @@ def replay_case(
         warnings=getattr(result, "warnings", case.warnings),
         release=case.release,
         reproducibility=case.reproducibility,
+    )
+
+
+def choke_input_to_dict(inputs: Any) -> Dict[str, Any]:
+    """Serialize a released ``ChokeInput`` without Telegram metadata."""
+    return _plain(asdict(inputs) if is_dataclass(inputs) else inputs)
+
+
+def build_choke_case(
+    inputs: Any,
+    result: Any,
+    *,
+    request: Any = None,
+    pvt_context: Optional[Mapping[str, Any]] = None,
+    pvt_mode: Optional[str] = None,
+    pvt_model: Optional[str] = None,
+    status: Optional[str] = None,
+    limitations: Any = None,
+    warnings: Any = None,
+) -> EngineeringCase:
+    """Build a reproducible case around an already-computed Choke V1 result."""
+    pvt: Dict[str, Any] = {}
+    if pvt_mode is not None or pvt_model is not None or pvt_context is not None:
+        pvt = {
+            "mode": pvt_mode or "pressure_dependent",
+            "model": pvt_model or "black_oil_v1",
+            "context": {} if pvt_context is None else dict(pvt_context),
+            "provenance": _plain(getattr(result, "pvt_metadata", {})),
+        }
+    return build_case(
+        calculation_type="choke_v1",
+        request={} if request is None else request,
+        inputs=choke_input_to_dict(inputs),
+        units={
+            "pressure": "psia",
+            "rate": "bbl/day",
+            "gor": "scf/STB",
+            "choke_size": "64ths of inch",
+        },
+        selectors={"choke_model": getattr(inputs, "choke_model", None)},
+        model={"choke": getattr(inputs, "choke_model", None), "engine": "Gilbert (1954)"},
+        pvt=pvt,
+        assumptions={"choke_engine": "ChokeEngine V1"},
+        result=result,
+        status=status or getattr(result, "status", "OK"),
+        limitations=limitations if limitations is not None else getattr(result, "limitations", []),
+        warnings=warnings if warnings is not None else getattr(result, "warnings", []),
+        reproducibility={"engine": "ChokeEngine", "engine_version": "V1"},
+    )
+
+
+def build_choke_failure_case(
+    inputs: Any,
+    *,
+    code: str,
+    message: str,
+    request: Any = None,
+    pvt_context: Optional[Mapping[str, Any]] = None,
+    pvt_mode: Optional[str] = None,
+    pvt_model: Optional[str] = None,
+) -> EngineeringCase:
+    """Represent a typed Choke failure without fabricating a result."""
+    return build_choke_case(
+        inputs,
+        {"error": {"code": str(code), "message": str(message)}},
+        request=request,
+        pvt_context=pvt_context,
+        pvt_mode=pvt_mode,
+        pvt_model=pvt_model,
+        status=code,
     )
 
 
@@ -552,6 +715,9 @@ __all__ = [
     "replay_case",
     "replay_matches",
     "system_input_to_dict",
+    "choke_input_to_dict",
+    "build_choke_case",
+    "build_choke_failure_case",
     "build_system_case",
     "build_system_failure_case",
 ]

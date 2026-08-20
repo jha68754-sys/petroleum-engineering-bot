@@ -7,12 +7,14 @@ from services.black_oil_pvt import BlackOilPvtProvider
 from services.engineering_case import (
     EngineeringCase,
     build_case,
+    build_choke_case,
     build_system_case,
     build_case_id,
     replay_case,
     replay_matches,
 )
 from services.engineering_report import generate_report_v1
+from services.choke_engine import ChokeEngine, ChokeInput
 from services.system_engine import IntegratedSystemEngine, SystemInput
 
 
@@ -219,3 +221,100 @@ def test_m_black_oil_handler_case_report_and_replay_surface():
     assert replay_error is None
     assert replay.startswith("Replay comparison: MATCH")
     assert "BlackOilPvtProvider" in replay
+
+
+CHOKE_BASE = ChokeInput(
+    upstream_pressure_psia=1000.0,
+    downstream_pressure_psia=200.0,
+    choke_size_64th_in=16.0,
+    gor_scf_stb=1000.0,
+    liquid_rate_bpd=1000.0,
+    oil_api=35.0,
+    gas_specific_gravity=0.65,
+    choke_model="gilbert_1954",
+)
+
+CHOKE_COMMAND = "/calc choke case=1 p_up=1000 p_down=200 choke=16 gor=1000 q_liquid=1000"
+CHOKE_PVT_ARGS = (
+    "pvt_mode=pressure_dependent pvt_model=black_oil_v1 "
+    "pvt_pressure_psia=2000 pvt_temperature_f=180 pvt_oil_api=35 "
+    "pvt_gas_specific_gravity=0.65 pvt_separator_pressure_psia=100 "
+    "pvt_separator_temperature_f=60 pvt_bubble_point_psia=1800"
+)
+
+
+def test_n_choke_legacy_case_report_and_replay_surface():
+    text, png, error = th.handle_calc({"text": CHOKE_COMMAND}, None)
+    assert png is None
+    assert error is None
+    assert "Status: OK" in text
+    assert "Calculated Rate: 427.43 bbl/day" in text
+    case_id = text.rsplit("Engineering Case ID: ", 1)[1].strip()
+
+    report, _, report_error = th.handle_case_command(
+        {"text": f"/case report {case_id}"}, None
+    )
+    assert report_error is None
+    assert "# Engineering Case Report V1" in report
+    assert "choke_v1" in report
+    assert "gilbert_1954" in report
+    assert '"pressure": "psia"' in report
+    assert "**Case ID:**" in report
+
+    replay, _, replay_error = th.handle_case_command(
+        {"text": f"/case replay {case_id}"}, None
+    )
+    assert replay_error is None
+    assert replay.startswith("Replay comparison: MATCH")
+
+
+def test_o_choke_black_oil_case_preserves_provenance_and_replays():
+    command = CHOKE_COMMAND + " " + CHOKE_PVT_ARGS
+    text, png, error = th.handle_calc({"text": command}, None)
+    assert png is None
+    assert error is None
+    assert "Status: OK" in text
+    assert "PVT Mode: pressure_dependent" in text
+    assert "PVT Model: black_oil_v1" in text
+    assert "PVT Provider: BlackOilPvtProvider" in text
+    case_id = text.rsplit("Engineering Case ID: ", 1)[1].strip()
+
+    report, _, report_error = th.handle_case_command(
+        {"text": f"/case report {case_id}"}, None
+    )
+    assert report_error is None
+    assert "pressure_dependent" in report
+    assert "black_oil_v1" in report
+    assert "BlackOilPvtProvider" in report
+
+    replay, _, replay_error = th.handle_case_command(
+        {"text": f"/case replay {case_id}"}, None
+    )
+    assert replay_error is None
+    assert replay.startswith("Replay comparison: MATCH")
+    assert "BlackOilPvtProvider" in replay
+
+
+def test_p_choke_typed_failure_is_preserved_by_case_report():
+    failed = build_choke_case(
+        CHOKE_BASE,
+        {"error": {"code": "PHYSICALLY_INVALID_STATE", "message": "invalid choke state."}},
+        status="PHYSICALLY_INVALID_STATE",
+    )
+    report = generate_report_v1(failed)
+    assert failed.status == "PHYSICALLY_INVALID_STATE"
+    assert "PHYSICALLY_INVALID_STATE" in report
+    assert "invalid choke state." in report
+    assert "did not produce a valid engineering operating result" in report
+    assert "Traceback" not in report
+
+
+def test_q_choke_case_identity_is_stable_for_same_inputs():
+    result = ChokeEngine().calculate(CHOKE_BASE)
+    first = build_choke_case(CHOKE_BASE, result, request={"calculation": "choke"})
+    second = build_choke_case(CHOKE_BASE, result, request={"calculation": "choke"})
+    assert first.case_id == second.case_id
+    assert first.inputs["upstream_pressure_psia"] == 1000.0
+    assert first.units["rate"] == "bbl/day"
+    assert first.reproducibility["engine_version"] == "V1"
+    assert replay_matches(first, replay_case(first))
