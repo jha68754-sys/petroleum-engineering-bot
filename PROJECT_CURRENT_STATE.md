@@ -42,7 +42,7 @@ This document records the verified architecture as it stands after Phase 4 close
 | `/calc sensitivity` | THP / tubing ID / water cut / GOR sweeps with deltas | PNG (`plot=1`) |
 | `/calc optimize` | Candidate comparison with min_pwf / max_liquid_rate / max_drawdown constraints | PNG (`plot=1`) |
 | `/plot` | Direct-data plotting: Bo, Rs, Bg, Z, viscosity, GOR, WOR, water cut, pressure, production, Kr, IPR, VLP, Nodal, sensitivity, optimization | PNG |
-| `/estimate`, `/convert`, `/check`, `/classify`, `/pvto`, `/pvdo`, `/pvtg`, `/pvdg`, `/report`, `/glossary`, `/analyze`, `/surface_separator`, `/eclipse`, `/cmg`, `/export_sim` | PVT laboratory, correlations, validation, exports | PNG where applicable |
+| `/estimate`, `/convert`, `/check`, `/classify`, `/pvto`, `/pvdo`, `/pvtg`, `/pvdg`, `/report`, `/analyze`, `/case report`, `/case replay`, `/surface_separator`, `/eclipse`, `/cmg`, `/export_sim` | PVT laboratory, correlations, validation, reproducible cases, exports | PNG where applicable |
 
 AI routing (`services/ai_service.py`) enforces the **ENGINE-FIRST policy**: every calculable production-engineering command (`/calc ipr`, `/calc vlp`, `/calc nodal`, `/calc sensitivity`, `/calc optimize`) is never answered in prose — the AI layer lists required inputs and routes to the deterministic engine.
 

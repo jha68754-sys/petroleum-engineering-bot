@@ -105,6 +105,7 @@ def test_telegram_service():
     """Test TelegramService with mocked HTTP."""
     print("\n=== TEST 3: TelegramService (Mocked) ===")
     
+    from config import TELEGRAM_BOT_TOKEN
     from services.telegram_service import TelegramService, _redact_token
     
     # Test token redaction helper
@@ -115,7 +116,10 @@ def test_telegram_service():
     
     # Test TelegramService initialization
     tg = TelegramService()
-    assert tg.token_fingerprint == "cdef", f"Wrong fingerprint: {tg.token_fingerprint}"
+    expected_fingerprint = TELEGRAM_BOT_TOKEN[-4:] if len(TELEGRAM_BOT_TOKEN) > 4 else "****"
+    assert tg.token_fingerprint == expected_fingerprint, (
+        f"Wrong fingerprint: {tg.token_fingerprint}; expected {expected_fingerprint}"
+    )
     print(f"  Token fingerprint: ...{tg.token_fingerprint}")
     print("  TelegramService init: PASS")
     
@@ -253,14 +257,14 @@ def test_engineering_formula_fixes():
 
     # E2: Vasquez-Beggs must actually use p_sep (result must change with p_sep).
     rs_func = CORRELATIONS["rs_vasquez_beggs"]["func"]
-    rs_low_psep = rs_func(p=2000, gas_sg=0.75, tres=180, api=35, p_sep=100)
-    rs_high_psep = rs_func(p=2000, gas_sg=0.75, tres=180, api=35, p_sep=500)
+    rs_low_psep = rs_func(p=2000, gas_sg=0.75, tres=180, api=35, p_sep=100, t_sep=60)
+    rs_high_psep = rs_func(p=2000, gas_sg=0.75, tres=180, api=35, p_sep=500, t_sep=60)
     assert rs_low_psep != rs_high_psep, "rs_vasquez_beggs ignores p_sep -- regression!"
     print(f"  rs_vasquez_beggs varies with p_sep ({rs_low_psep:.2f} vs {rs_high_psep:.2f}): PASS")
 
     # Pb/Rs should round-trip through the same coefficient branch.
     pb_func = CORRELATIONS["pb_vasquez_beggs"]["func"]
-    pb = pb_func(rs=rs_low_psep, gas_sg=0.75, tres=180, api=35, p_sep=100)
+    pb = pb_func(rs=rs_low_psep, gas_sg=0.75, tres=180, api=35, p_sep=100, t_sep=60)
     assert abs(pb - 2000) < 1e-3, f"pb_vasquez_beggs did not round-trip Rs->Pb correctly (got {pb})"
     print(f"  pb_vasquez_beggs round-trips Rs->Pb ({pb:.4f} ~= 2000): PASS")
 
@@ -270,36 +274,38 @@ def test_engineering_formula_fixes():
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  TEST 7: /analyze and /graph now delegate to the AI (audit finding A1)
+#  TEST 7: /analyze behavior and removed legacy /graph surface
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_analyze_graph_dispatch():
-    """Regression test: /analyze and /graph must not silently no-op anymore."""
-    print("\n=== TEST 7: /analyze and /graph Dispatch ===")
+def test_analyze_and_removed_graph_dispatch():
+    """Regression test: /analyze is explicit and legacy /graph is not exposed."""
+    print("\n=== TEST 7: /analyze and removed /graph surface ===")
 
     from handlers.text_handlers import handle_analyze
-    from text_handlers import handle_graph_cmd as handle_graph
+    from handlers.command_registry import registry
 
-    # With no file/image context uploaded, handlers should still return a
-    # helpful message (not the AI-delegation sentinel).
+    # With no file/image context uploaded, /analyze must return a helpful
+    # typed next step rather than silently delegating or fabricating analysis.
     msg = {"chat": {"id": 999999}, "text": "/analyze", "message_id": 1}
     result_text, png_bytes, doc_filename = handle_analyze(msg, None)
     assert result_text is not None, "handle_analyze should prompt for upload when no context exists"
-    print("  handle_analyze() without context still responds: PASS")
+    assert "No document uploaded" in result_text
+    print("  handle_analyze() without context responds: PASS")
 
-    msg2 = {"chat": {"id": 999999}, "text": "/graph", "message_id": 1}
-    result_text2, png_bytes2, doc_filename2 = handle_graph(msg2, None)
-    assert result_text2 is not None, "handle_graph should prompt for upload when no context exists"
-    print("  handle_graph() without context still responds: PASS")
+    # /graph was a legacy ambiguous surface and is intentionally removed;
+    # direct-data plotting remains available through /plot.
+    assert registry.dispatch("/graph") is None
+    print("  removed /graph is not dispatchable: PASS")
 
-    # Verify main.py's dispatch block contains the sentinel-forwarding fix.
+    # Verify main.py's dispatch block contains the sentinel-forwarding fix for
+    # /analyze when an upload exists.
     import inspect
     import main as main_mod
     src = inspect.getsource(main_mod.process_message)
     assert "_handle_free_text(message, ai_prompt, tg, ai)" in src, (
         "main.py dispatch no longer forwards the (None, None, None) sentinel to the AI -- regression!"
     )
-    print("  main.py forwards /analyze /graph sentinel to AI: PASS")
+    print("  main.py forwards /analyze sentinel to AI: PASS")
 
 
 # ═══════════════════════════════════════════════════════════════════════

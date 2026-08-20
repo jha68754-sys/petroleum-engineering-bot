@@ -3,7 +3,7 @@ Text command handlers for the Petroleum Engineering Bot.
 
 Handles all text-based commands: /classify, /calc, /estimate, /convert,
 /plot, /check, /pvto, /pvdo, /pvtg, /pvdg, /export_sim, /eclipse,
-/cmg, /report, /glossary, /reset, /start, /analyze.
+ /cmg, /report, /reset, /start, /analyze.
 
 Each handler receives the Telegram message dict and the TelegramService
 instance, and returns a response string (and optionally file bytes).
@@ -2434,18 +2434,15 @@ def handle_report(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Op
     chat_id = message.get("chat", {}).get("id", "")
     from main import FILE_CONTEXT
     context = FILE_CONTEXT.get(chat_id)
+    if not context:
+        return (
+            "Engineering Data Requirement — cannot generate a PVT report yet.\n\n"
+            "No uploaded document or extracted PVT context is available for this chat.\n"
+            "Upload a PDF, DOCX, Excel, or CSV file first, then run /analyze and /report.\n\n"
+            "The bot will not fabricate laboratory measurements, PVT tables, or separator conditions."
+        ), None, None
     result = generate_professional_pvt_report(context)
     return result, None, None
-
-
-@registry.register("glossary")
-def handle_glossary(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
-    """Handle /glossary command."""
-    # Note: don't pass the HTML bytes in the png_bytes slot -- main.py's
-    # dispatch checks `if png_bytes:` before `if doc_filename:`, so any
-    # truthy value there gets wrongly sent as a photo instead of a document.
-    # main.py's document-send path regenerates the HTML bytes itself.
-    return "Glossary generated. Sending as HTML document...", None, "glossary.html"
 
 
 @registry.register("analyze", aliases=["document", "doc"])

@@ -86,7 +86,7 @@ Every currently registered command, verified against `handlers/command_registry.
 | `/pvto`, `/pvdo`, `/pvtg`, `/pvdg` | PVT table export | Deterministic | text_handlers.py | Live |
 | `/export_sim` (`/sim_export`) | Simulator export | Deterministic | text_handlers.py | Live |
 | `/eclipse`, `/cmg` | Simulator input generation | AI-assisted generator | text_handlers.py | Live |
-| `/glossary` | HTML glossary document | Deterministic generator | text_handlers.py | Live |
+| `/case report`, `/case replay` | Reproducible engineering case report and deterministic replay | Deterministic | handlers/text_handlers.py + services/engineering_case.py | Live |
 | `/surface_separator` (`/separator`) | Surface separator calculations | Deterministic | text_handlers.py | Live |
 
 ---
@@ -244,7 +244,7 @@ The last completed development phase is **Phase 1 — IPR Engine** (commit `6e6f
 
 ## 18. RISKS OR ISSUES REQUIRING MY APPROVAL
 
-Four items require your decision. First, the Railway runtime state is **NOT DIRECTLY VERIFIED** because dashboard authentication is unavailable; the last indirect confirmation (active polling instance) stands, but a post-deployment log check is recommended before heavy next-phase traffic. Second, `PROJECT_HANDOVER_CURRENT.md` exists only in a local working tree as an untracked file and is not in GitHub; I have not committed it, per your earlier instruction — tell me if it should be pushed. Third, the `/glossary` command is registered and functional; earlier you directed that it must not be removed or modified — no risk, just confirming it remains registered as designed. Fourth, live manual verification of Phase 2 (when approved) will require the same Telegram test cycle, and I ask you to confirm the Railway logs can be accepted as indirectly verified, as in previous phases.
+This section is a historical snapshot from Aug 13, 2026 and is superseded by the current repository state. The former `/glossary` and `/graph` surfaces are intentionally removed; the current reproducibility surfaces are `/case report` and `/case replay`. Current deployment and live-acceptance evidence must be taken from the post-Increment-13 closure report and the current Git history, not from this older snapshot.
 
 ---
 
