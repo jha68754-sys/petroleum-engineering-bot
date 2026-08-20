@@ -44,6 +44,15 @@ from services.production_optimizer import (
 from services.gas_lift_engine import GasLiftEngine, GasLiftError, GasLiftInput
 from services.choke_engine import ChokeEngine, ChokeError, ChokeInput
 from services.system_engine import IntegratedSystemEngine, SystemError, SystemInput
+from services.engineering_case import (
+    CaseReplayError,
+    EngineeringCase,
+    build_system_case,
+    build_system_failure_case,
+    replay_case,
+    replay_matches,
+)
+from services.engineering_report import generate_report_v1
 from logging_config import get_logger
 
 
@@ -189,6 +198,23 @@ def _provider_failure_message(prefix: str, error: Exception) -> str:
 
 logger = get_logger(__name__)
 
+# Increment 13 deliberately uses an in-process bounded registry rather than a
+# database. Cases remain engineering-only and contain no Telegram metadata.
+_ENGINEERING_CASES: Dict[str, EngineeringCase] = {}
+_MAX_ENGINEERING_CASES = 256
+
+
+def _remember_engineering_case(case: EngineeringCase) -> None:
+    _ENGINEERING_CASES[case.case_id] = case
+    while len(_ENGINEERING_CASES) > _MAX_ENGINEERING_CASES:
+        _ENGINEERING_CASES.pop(next(iter(_ENGINEERING_CASES)))
+
+
+def _case_flags(raw_tokens: Dict[str, str]) -> Tuple[bool, bool]:
+    def enabled(name: str) -> bool:
+        value = str(raw_tokens.get(name, "")).strip().lower()
+        return value in {"1", "true", "yes", "on"}
+    return enabled("case"), enabled("report")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -280,7 +306,8 @@ def handle_calc(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Opti
             "Usage: /calc <type> key=value ...\n\n"
             "Types: api, ooip, ogip, darcy, recovery_factor,\n"
             "  productivity_index, hydrostatic, mud_weight_required,\n"
-            "  ecd, water_cut, wor, gor_produced, npv, gas_lift, choke\n\n"
+            "  ecd, water_cut, wor, gor_produced, npv, gas_lift, choke, system\n"
+            "  case (use /case report|replay <case_id>)\n\n"
             "Example: /calc ooip area=500 h=50 phi=0.2 sw=0.3 bo=1.3"
         ), None, None
 
@@ -302,6 +329,8 @@ def handle_calc(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Opti
             {"text": "/system " + args_str}, tg
         )
         return text, png, caption
+    if formula_key.lower() == "case":
+        return handle_case_command({"text": "/case " + args_str}, tg)
     if formula_key.lower() == "vlp":
         # Deterministic Production VLP engine (Phase 2: VLP only); handled
         # separately from EXACT_FORMULAS so that Beggs-Brill guardrails and
@@ -685,6 +714,51 @@ def handle_calc_choke(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes]
     return formatted, None, None
 
 
+_CASE_USAGE = (
+    "Usage: /case report <case_id>\n"
+    "       /case replay <case_id>\n"
+    "       /case json <case_id>"
+)
+
+
+def _case_id_from_args(args_str: str) -> str:
+    tokens = args_str.split()
+    return tokens[1].strip() if len(tokens) >= 2 else ""
+
+
+@registry.register("case")
+def handle_case_command(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
+    """Display, serialize, or replay an in-process Engineering Case."""
+    text = message.get("text", "")
+    parts = text.split(None, 2)
+    if len(parts) < 3 or parts[1].lower() not in {"report", "replay", "json"}:
+        return _CASE_USAGE, None, None
+    action = parts[1].lower()
+    case_id = parts[2].strip().split()[0]
+    case = _ENGINEERING_CASES.get(case_id)
+    if case is None:
+        return f"Error: CASE_NOT_FOUND: no in-process engineering case for {case_id}.", None, None
+    if action == "report":
+        return generate_report_v1(case), None, None
+    if action == "json":
+        return case.to_json(), None, None
+    try:
+        replayed = replay_case(case)
+    except CaseReplayError as exc:
+        return f"Error: CASE_REPLAY_FAILED: {exc}", None, None
+    match = replay_matches(case, replayed)
+    _remember_engineering_case(replayed)
+    report = generate_report_v1(replayed)
+    prefix = "Replay comparison: MATCH" if match else "Replay comparison: DIFFERENT"
+    return prefix + "\n\n" + report, None, None
+
+
+@registry.register("case_report")
+def handle_case_report(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
+    """Convenience alias: /case_report <case_id>."""
+    return handle_case_command({"text": "/case report " + message.get("text", "").split(None, 1)[-1]}, tg)
+
+
 _SYSTEM_USAGE = (
     "Usage: /calc system model=auto|linear|vogel|composite "
     "pr=<psia> [thp_guess=<psia>] tvd=<ft> id=<in> gor=<scf/STB> "
@@ -757,6 +831,8 @@ def handle_calc_system(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes
     for key in ("model", "vlp_model", "choke_model", "pvt_mode", "pvt_model"):
         if key in raw_tokens:
             kwargs[key] = raw_tokens[key]
+    case_requested, report_requested = _case_flags(raw_tokens)
+    case_requested = case_requested or report_requested
     pvt_kwargs: Dict[str, Any] = {}
     for key, value in raw_tokens.items():
         if not key.startswith("pvt_"):
@@ -833,13 +909,44 @@ def handle_calc_system(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes
         )
         result = IntegratedSystemEngine().calculate(inp, pvt_provider=pvt_provider, pvt_context=pvt_context)
     except SystemError as exc:
+        if case_requested and "inp" in locals():
+            failure_case = build_system_failure_case(
+                inp,
+                code=exc.code,
+                message=exc.message,
+                request={"calculation": "system", "arguments": raw_tokens},
+                pvt_context=pvt_context,
+                pvt_mode=pvt_kwargs.get("pvt_mode"),
+                pvt_model=pvt_kwargs.get("pvt_model"),
+            )
+            _remember_engineering_case(failure_case)
+            if report_requested:
+                return generate_report_v1(failure_case), None, None
+            return (
+                f"Error: {exc.code}: {exc.message}\n"
+                f"Engineering Case ID: {failure_case.case_id}"
+            ), None, None
         return f"Error: {exc.code}: {exc.message}", None, None
     except (TypeError, ValueError) as exc:
         return f"Error: INVALID_INPUT: {exc}", None, None
     if pvt_provider is not None:
         result.pvt_metadata["mode"] = str(pvt_kwargs.get("pvt_mode"))
         result.pvt_metadata["model"] = str(pvt_kwargs.get("pvt_model"))
-    return _format_system_result(result), None, None
+    formatted = _format_system_result(result)
+    if case_requested:
+        engineering_case = build_system_case(
+            inp,
+            result,
+            request={"calculation": "system", "arguments": raw_tokens},
+            pvt_context=pvt_context,
+            pvt_mode=pvt_kwargs.get("pvt_mode"),
+            pvt_model=pvt_kwargs.get("pvt_model"),
+        )
+        _remember_engineering_case(engineering_case)
+        if report_requested:
+            return generate_report_v1(engineering_case), None, None
+        formatted += f"\n\nEngineering Case ID: {engineering_case.case_id}"
+    return formatted, None, None
 
 
 # ═══════════════════════════════════════════════════════════════════════
