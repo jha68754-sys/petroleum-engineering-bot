@@ -1017,7 +1017,10 @@ def handle_case_command(message: Dict[str, Any], tg) -> Tuple[str, Optional[byte
     if action == "report":
         return generate_report_v1(case), None, None
     if action == "json":
-        return case.to_json(), None, None
+        return (
+            "Raw JSON export is not available to users. "
+            "Use /case report <case_id> to view the readable engineering report."
+        ), None, None
     try:
         replayed = replay_case(case)
     except CaseReplayError as exc:
@@ -1026,7 +1029,12 @@ def handle_case_command(message: Dict[str, Any], tg) -> Tuple[str, Optional[byte
     _remember_engineering_case(replayed)
     report = generate_report_v1(replayed)
     prefix = "Replay comparison: MATCH" if match else "Replay comparison: DIFFERENT"
-    return prefix + "\n\n" + report, None, None
+    replay_note = (
+        "The same engineering case was reproduced by the deterministic engine."
+        if match
+        else "The replay produced a different result and requires engineering review."
+    )
+    return prefix + "\n\n" + replay_note + "\n\n" + report, None, None
 
 
 @registry.register("case_report")

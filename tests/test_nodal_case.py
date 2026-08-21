@@ -105,9 +105,9 @@ def test_nodal_case_report_preserves_solver_contract_and_honesty():
     report = generate_report_v1(case)
 
     assert "# Engineering Case Report V1" in report
-    assert "nodal_v1" in report
-    assert "beggs_brill" in report
-    assert "UNIQUE_OPERATING_POINT" in report
+    assert "Nodal Analysis" in report
+    assert "Outflow model" in report
+    assert "Engineering status: calculation completed successfully." in report
     assert "not measured field data" in report
     assert "Traceback" not in report
 
@@ -126,7 +126,9 @@ def test_nodal_black_oil_case_preserves_explicit_provider_and_replays():
     assert case.pvt["mode"] == "pressure_dependent"
     assert case.pvt["model"] == "black_oil_v1"
     assert case.pvt["provenance"]["provider"] == "BlackOilPvtProvider"
-    assert "BlackOilPvtProvider" in generate_report_v1(case)
+    report = generate_report_v1(case)
+    assert "Pressure-dependent Black-Oil PVT" in report
+    assert "BlackOilPvtProvider" not in report
     replayed = replay_case(case)
     assert replay_matches(case, replayed)
     assert replayed.pvt["mode"] == "pressure_dependent"
@@ -172,5 +174,5 @@ def test_nodal_case_telegram_surface_is_opt_in_and_reports_case_id():
 
     assert report_error is None
     assert replay_error is None
-    assert "nodal_v1" in report
+    assert "Nodal Analysis" in report
     assert replay.startswith("Replay comparison: MATCH")

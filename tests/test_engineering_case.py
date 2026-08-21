@@ -138,7 +138,9 @@ def test_h_black_oil_selector_and_provenance_are_serialized():
     assert case.pvt["model"] == "black_oil_v1"
     assert case.pvt["context"]["pressure_psia"] == 2000.0
     assert case.pvt["provenance"]["provider"] == "BlackOilPvtProvider"
-    assert "BlackOilPvtProvider" in generate_report_v1(case)
+    report = generate_report_v1(case)
+    assert "Pressure-dependent Black-Oil PVT" in report
+    assert "BlackOilPvtProvider" not in report
 
 
 def test_i_system_handler_case_surface_preserves_existing_result():
@@ -190,8 +192,9 @@ def test_k_units_are_explicit_and_not_silently_dropped(legacy_case):
     for key, value in expected.items():
         assert legacy_case.units[key] == value
     report = generate_report_v1(legacy_case)
-    assert '"pressure": "psia"' in report
-    assert '"rate": "STB/day"' in report
+    assert "Reservoir pressure: 3,000 psia" in report
+    assert "Operating liquid rate" in report
+    assert "STB/day" in report
 
 
 def test_l_report_is_deterministic(legacy_case):
@@ -215,12 +218,13 @@ def test_m_black_oil_handler_case_report_and_replay_surface():
     case_id = text.rsplit("Engineering Case ID: ", 1)[1].strip()
     report, _, report_error = th.handle_case_command({"text": f"/case report {case_id}"}, None)
     assert report_error is None
-    assert "pressure_dependent" in report
-    assert "black_oil_v1" in report
+    assert "Pressure-dependent Black-Oil PVT" in report
+    assert "evaluated pressure range" in report
     replay, _, replay_error = th.handle_case_command({"text": f"/case replay {case_id}"}, None)
     assert replay_error is None
     assert replay.startswith("Replay comparison: MATCH")
-    assert "BlackOilPvtProvider" in replay
+    assert "The same engineering case was reproduced" in replay
+    assert "BlackOilPvtProvider" not in replay
 
 
 CHOKE_BASE = ChokeInput(
@@ -256,9 +260,9 @@ def test_n_choke_legacy_case_report_and_replay_surface():
     )
     assert report_error is None
     assert "# Engineering Case Report V1" in report
-    assert "choke_v1" in report
-    assert "gilbert_1954" in report
-    assert '"pressure": "psia"' in report
+    assert "Choke Performance" in report
+    assert "Gilbert" in report
+    assert "Upstream pressure" in report
     assert "**Case ID:**" in report
 
     replay, _, replay_error = th.handle_case_command(
@@ -283,16 +287,17 @@ def test_o_choke_black_oil_case_preserves_provenance_and_replays():
         {"text": f"/case report {case_id}"}, None
     )
     assert report_error is None
-    assert "pressure_dependent" in report
-    assert "black_oil_v1" in report
-    assert "BlackOilPvtProvider" in report
+    assert "Pressure-dependent Black-Oil PVT" in report
+    assert "evaluated pressure range" in report
+    assert "BlackOilPvtProvider" not in report
 
     replay, _, replay_error = th.handle_case_command(
         {"text": f"/case replay {case_id}"}, None
     )
     assert replay_error is None
     assert replay.startswith("Replay comparison: MATCH")
-    assert "BlackOilPvtProvider" in replay
+    assert "The same engineering case was reproduced" in replay
+    assert "BlackOilPvtProvider" not in replay
 
 
 def test_p_choke_typed_failure_is_preserved_by_case_report():

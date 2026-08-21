@@ -106,11 +106,12 @@ def test_vlp_case_report_preserves_model_units_and_honesty():
     report = generate_report_v1(case)
 
     assert "# Engineering Case Report V1" in report
-    assert "vlp_v1" in report
-    assert "beggs_brill" in report
-    assert "CONVERGED" in report
+    assert "Vertical Lift Performance" in report
+    assert "Outflow model" in report
+    assert "Engineering status: calculation completed successfully." in report
     assert "The calculation did not produce a valid engineering operating result." not in report
-    assert f'"pwf": {case.result["pwf"]}' in report
+    assert "Flowing bottomhole pressure" in report
+    assert "psia" in report
     assert "psia" in report
     assert "not measured field data" in report
     assert "Traceback" not in report
@@ -129,7 +130,9 @@ def test_vlp_black_oil_case_preserves_provider_and_replays():
     assert case.pvt["mode"] == "pressure_dependent"
     assert case.pvt["model"] == "black_oil_v1"
     assert case.pvt["provenance"]["provider"] == "BlackOilPvtProvider"
-    assert "BlackOilPvtProvider" in generate_report_v1(case)
+    report = generate_report_v1(case)
+    assert "Pressure-dependent Black-Oil PVT" in report
+    assert "BlackOilPvtProvider" not in report
     replayed = replay_case(case)
     assert replay_matches(case, replayed)
     assert replayed.pvt["mode"] == "pressure_dependent"
@@ -175,7 +178,7 @@ def test_vlp_telegram_surface_is_opt_in_and_supports_case_report_replay():
 
     assert report_error is None
     assert replay_error is None
-    assert "vlp_v1" in report
+    assert "Vertical Lift Performance" in report
     assert replay.startswith("Replay comparison: MATCH")
 
 

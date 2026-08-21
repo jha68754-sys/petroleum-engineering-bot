@@ -51,7 +51,7 @@ def test_sensitivity_case_report_and_replay_are_deterministic():
     second_text, second_id = _run_case(SENS_LEGACY)
 
     assert first_id == second_id
-    assert "sensitivity_v1" in first_text
+    assert "Sensitivity Analysis" in first_text
     assert "Engineering Case ID: " in first_text
 
     report, _, report_error = th.handle_case_command(
@@ -63,15 +63,15 @@ def test_sensitivity_case_report_and_replay_are_deterministic():
 
     assert report_error is None
     assert replay_error is None
-    assert "sensitivity_v1" in report
-    assert '"variable"' in report
+    assert "Sensitivity Analysis" in report
+    assert "Evaluated variable" in report
     assert "not measured field data" in report
     assert replay.startswith("Replay comparison: MATCH")
 
 
 def test_sensitivity_black_oil_case_preserves_provider_and_replay():
     text, case_id = _run_case(SENS_BLACK_OIL)
-    assert "sensitivity_v1" in text
+    assert "Sensitivity Analysis" in text
 
     report, _, report_error = th.handle_case_command(
         {"text": f"/case report {case_id}"}, None
@@ -82,9 +82,9 @@ def test_sensitivity_black_oil_case_preserves_provider_and_replay():
 
     assert report_error is None
     assert replay_error is None
-    assert "pressure_dependent" in report
-    assert "black_oil_v1" in report
-    assert "BlackOilPvtProvider" in report
+    assert "Pressure-dependent Black-Oil PVT" in report
+    assert "evaluated pressure range" in report
+    assert "BlackOilPvtProvider" not in report
     assert replay.startswith("Replay comparison: MATCH")
 
 
@@ -93,8 +93,8 @@ def test_optimize_case_report_and_replay_are_deterministic():
     second_text, second_id = _run_case(OPT_LEGACY)
 
     assert first_id == second_id
-    assert "optimize_v1" in first_text
-    assert '"objective"' in first_text
+    assert "Production Optimization" in first_text
+    assert "Optimization target" in first_text
 
     report, _, report_error = th.handle_case_command(
         {"text": f"/case report {first_id}"}, None
@@ -105,14 +105,14 @@ def test_optimize_case_report_and_replay_are_deterministic():
 
     assert report_error is None
     assert replay_error is None
-    assert "optimize_v1" in report
-    assert '"objective"' in report
+    assert "Production Optimization" in report
+    assert "Optimization target" in report
     assert replay.startswith("Replay comparison: MATCH")
 
 
 def test_optimize_black_oil_case_preserves_provider_and_replay():
     text, case_id = _run_case(OPT_BLACK_OIL)
-    assert "optimize_v1" in text
+    assert "Production Optimization" in text
 
     report, _, report_error = th.handle_case_command(
         {"text": f"/case report {case_id}"}, None
@@ -123,9 +123,9 @@ def test_optimize_black_oil_case_preserves_provider_and_replay():
 
     assert report_error is None
     assert replay_error is None
-    assert "pressure_dependent" in report
-    assert "black_oil_v1" in report
-    assert "BlackOilPvtProvider" in report
+    assert "Pressure-dependent Black-Oil PVT" in report
+    assert "evaluated pressure range" in report
+    assert "BlackOilPvtProvider" not in report
     assert replay.startswith("Replay comparison: MATCH")
 
 
