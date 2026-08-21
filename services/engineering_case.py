@@ -303,6 +303,7 @@ def build_case(
             in {
                 "system", "calc_system", "integrated_system", "integrated_system_v1",
                 "choke", "choke_v1",
+                "nodal", "nodal_v1",
             },
             **({} if reproducibility is None else dict(reproducibility)),
         },
@@ -352,6 +353,45 @@ def _system_input_from_case(case: EngineeringCase) -> Any:
     # translated to a typed replay error at this boundary.
     try:
         return SystemInput(**clean)
+    except (TypeError, ValueError) as exc:
+        raise CaseReplayError(f"INVALID_CASE_INPUT: {exc}") from exc
+
+
+def _nodal_input_from_case(case: EngineeringCase) -> Dict[str, Any]:
+    """Return only released NodalEngine keyword arguments from a case."""
+    from services.nodal_engine import NodalEngine
+
+    data = dict(case.inputs)
+    aliases = {
+        "id": "tubing_id_in",
+        "z": "z_factor",
+        "segments": "n_segments",
+        "model": "ipr_model",
+    }
+    for old, new in aliases.items():
+        if new not in data and old in data:
+            data[new] = data[old]
+    allowed = set(__import__("inspect").signature(NodalEngine.solve).parameters)
+    clean = {key: value for key, value in data.items() if key in allowed}
+    pvt_data = case.pvt if isinstance(case.pvt, Mapping) else {}
+    mode = str(pvt_data.get("mode", "")).strip().lower()
+    model = str(pvt_data.get("model", "")).strip().lower()
+    if mode == "pressure_dependent" or model == "black_oil_v1":
+        if mode != "pressure_dependent" or model != "black_oil_v1":
+            raise CaseReplayError(
+                "UNSUPPORTED_PVT_SELECTOR: explicit Black-Oil replay requires "
+                "pressure_dependent/black_oil_v1"
+            )
+        context = pvt_data.get("context")
+        if not isinstance(context, Mapping):
+            raise CaseReplayError(
+                "PHYSICALLY_INVALID_STATE: replay case lacks Black-Oil PVT context"
+            )
+        from services.black_oil_pvt import BlackOilPvtProvider
+        clean["pvt_provider"] = BlackOilPvtProvider()
+        clean["pvt_context"] = dict(context)
+    try:
+        return clean
     except (TypeError, ValueError) as exc:
         raise CaseReplayError(f"INVALID_CASE_INPUT: {exc}") from exc
 
@@ -447,6 +487,47 @@ def replay_case(
             # deterministic; the released ChokeEngine itself remains untouched.
             result.pvt_metadata["mode_selector"] = mode
             result.pvt_metadata["model_selector"] = model
+        return build_case(
+            calculation_type=case.calculation_type,
+            request=case.request,
+            inputs=case.inputs,
+            units=case.units,
+            selectors=case.selectors,
+            model=case.model,
+            pvt=case.pvt,
+            assumptions=case.assumptions,
+            result=result,
+            status=getattr(result, "status", case.status),
+            limitations=getattr(result, "limitations", case.limitations),
+            warnings=getattr(result, "warnings", case.warnings),
+            release=case.release,
+            reproducibility=case.reproducibility,
+        )
+
+    if kind in {"nodal", "nodal_v1"}:
+        from services.black_oil_pvt import BlackOilPvtProvider
+        from services.nodal_engine import NodalEngine, NodalError
+
+        kwargs = _nodal_input_from_case(case)
+        try:
+            result = NodalEngine().solve(**kwargs)
+        except NodalError as exc:
+            return build_case(
+                calculation_type=case.calculation_type,
+                request=case.request,
+                inputs=case.inputs,
+                units=case.units,
+                selectors=case.selectors,
+                model=case.model,
+                pvt=case.pvt,
+                assumptions=case.assumptions,
+                result={"error": {"code": exc.kind, "message": str(exc)}},
+                status=exc.kind,
+                limitations=case.limitations,
+                warnings=case.warnings,
+                release=case.release,
+                reproducibility=case.reproducibility,
+            )
         return build_case(
             calculation_type=case.calculation_type,
             request=case.request,
@@ -608,6 +689,97 @@ def system_input_to_dict(inputs: Any) -> Dict[str, Any]:
     return _plain(asdict(inputs) if is_dataclass(inputs) else inputs)
 
 
+def nodal_input_to_dict(inputs: Any) -> Dict[str, Any]:
+    """Serialize released NodalEngine keyword inputs without chat metadata."""
+    if isinstance(inputs, Mapping):
+        return _plain(dict(inputs))
+    return _plain(inputs)
+
+
+def build_nodal_case(
+    inputs: Any,
+    result: Any,
+    *,
+    request: Any = None,
+    pvt_context: Optional[Mapping[str, Any]] = None,
+    pvt_mode: Optional[str] = None,
+    pvt_model: Optional[str] = None,
+    status: Optional[str] = None,
+    limitations: Any = None,
+    warnings: Any = None,
+) -> EngineeringCase:
+    """Build a reproducible case around an already-computed Nodal V1 result."""
+    data = nodal_input_to_dict(inputs)
+    pvt: Dict[str, Any] = {}
+    if pvt_mode is not None or pvt_model is not None or pvt_context is not None:
+        pvt = {
+            "mode": pvt_mode or "pressure_dependent",
+            "model": pvt_model or "black_oil_v1",
+            "context": {} if pvt_context is None else dict(pvt_context),
+            "provenance": _plain(getattr(result, "pvt_metadata", {})),
+        }
+    model = {
+        "ipr": getattr(result, "ipr_model", data.get("ipr_model")),
+        "vlp": getattr(result, "vlp_model", data.get("vlp_model")),
+        "solver": getattr(result, "root_method", None),
+    }
+    selectors = {
+        "ipr_model": data.get("ipr_model", data.get("model")),
+        "vlp_model": data.get("vlp_model", "beggs_brill"),
+    }
+    return build_case(
+        calculation_type="nodal_v1",
+        request={} if request is None else request,
+        inputs=data,
+        units={
+            "pressure": "psia",
+            "rate": "STB/day",
+            "tubing_id": "in",
+            "depth": "ft",
+            "gor": "scf/STB",
+            "viscosity": "cP",
+            "temperature": "degF",
+            "geothermal_gradient": "degF/100ft",
+        },
+        selectors=selectors,
+        model=model,
+        pvt=pvt,
+        assumptions={
+            "nodal_engine": "NodalEngine V1",
+            "residual_tolerance_psi": data.get("pressure_tol"),
+            "n_points": data.get("n_points"),
+            "segments": data.get("n_segments", data.get("segments")),
+        },
+        result=result,
+        status=status or getattr(result, "status", "OK"),
+        limitations=limitations if limitations is not None else getattr(result, "limitations", []),
+        warnings=warnings if warnings is not None else getattr(result, "warnings", []),
+        reproducibility={"engine": "NodalEngine", "engine_version": "V1"},
+    )
+
+
+def build_nodal_failure_case(
+    inputs: Any,
+    *,
+    code: str,
+    message: str,
+    request: Any = None,
+    pvt_context: Optional[Mapping[str, Any]] = None,
+    pvt_mode: Optional[str] = None,
+    pvt_model: Optional[str] = None,
+) -> EngineeringCase:
+    """Represent a typed Nodal failure without fabricating an operating result."""
+    return build_nodal_case(
+        inputs,
+        {"error": {"code": str(code), "message": str(message)}},
+        request=request,
+        pvt_context=pvt_context,
+        pvt_mode=pvt_mode,
+        pvt_model=pvt_model,
+        status=code,
+    )
+
+
 def build_system_case(
     inputs: Any,
     result: Any,
@@ -718,6 +890,9 @@ __all__ = [
     "choke_input_to_dict",
     "build_choke_case",
     "build_choke_failure_case",
+    "nodal_input_to_dict",
+    "build_nodal_case",
+    "build_nodal_failure_case",
     "build_system_case",
     "build_system_failure_case",
 ]

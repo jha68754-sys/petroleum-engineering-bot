@@ -51,6 +51,8 @@ from services.engineering_case import (
     build_system_failure_case,
     build_choke_case,
     build_choke_failure_case,
+    build_nodal_case,
+    build_nodal_failure_case,
     replay_case,
     replay_matches,
 )
@@ -1730,7 +1732,7 @@ def handle_calc_nodal(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes]
                 continue
             _key, _, _val = _part.partition("=")
             _key, _val = _key.strip().lower(), _val.strip()
-            if _key in ("model", "plot", "vlp_model", "pvt_mode", "pvt_model"):
+            if _key in ("model", "plot", "case", "report", "vlp_model", "pvt_mode", "pvt_model"):
                 kwargs[_key] = _val
                 continue
     _numeric = parse_kv_args(args_str)
@@ -1742,6 +1744,7 @@ def handle_calc_nodal(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes]
         return pvt_error, None, None
     pvt_mode = str(kwargs.get("pvt_mode", "")).strip().lower()
     pvt_model = str(kwargs.get("pvt_model", "")).strip().lower()
+    case_requested, report_requested = _case_flags(kwargs)
 
     # --- Hard validation (guardrails) ---
     vlp_model_raw = str(kwargs.get("vlp_model", "beggs_brill")).strip().lower()
@@ -1829,6 +1832,28 @@ def handle_calc_nodal(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes]
                     floats["n_points"] < 2:
                 return "Error: n_points must be an integer >= 2.", None, None
 
+        nodal_case_inputs = {
+            "ipr_model": ipr_model,
+            "pr": floats["pr"], "pb": floats.get("pb"),
+            "j": floats.get("j"), "j_star": floats.get("j_star"),
+            "qmax": floats.get("qmax"), "q_test": floats.get("q_test"),
+            "pwf_test": floats.get("pwf_test"),
+            "thp": floats["thp"], "tvd": floats["tvd"],
+            "tubing_id_in": floats["id"], "gor": floats["gor"],
+            "rs": floats["rs"], "api": floats["api"],
+            "gamma_g": floats["gamma_g"], "mu_l": floats["mu_l"],
+            "bo": floats["bo"], "t_wh": floats["t_wh"],
+            "geothermal": floats["geothermal"], "wc": wc,
+            "gamma_w": floats.get("gamma_w", 1.07),
+            "bw": floats.get("bw", 1.01),
+            "z_factor": floats.get("z", 0.9),
+            "sigma": floats.get("sigma", 30.0),
+            "n_segments": int(floats.get("segments", 80)),
+            "vlp_model": vlp_model,
+            "q_min": floats.get("q_min"), "q_max": floats.get("q_max"),
+            "n_points": int(floats.get("n_points", 201)),
+        }
+
         engine = nodal_engine.NodalEngine()
         result = engine.solve(
             ipr_model=ipr_model,
@@ -1856,6 +1881,23 @@ def handle_calc_nodal(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes]
         )
     except nodal_engine.NodalError as _e:
         _msg = str(_e)
+        if case_requested:
+            failure_case = build_nodal_failure_case(
+                nodal_case_inputs,
+                code=_e.kind,
+                message=_msg,
+                request={"calculation": "nodal", "arguments": kwargs},
+                pvt_context=pvt_context,
+                pvt_mode=pvt_mode or None,
+                pvt_model=pvt_model or None,
+            )
+            _remember_engineering_case(failure_case)
+            if report_requested:
+                return generate_report_v1(failure_case), None, None
+            return (
+                f"Error: {_e.kind}: {_msg}\n"
+                f"Engineering Case ID: {failure_case.case_id}"
+            ), None, None
         if pvt_provider:
             return _provider_failure_message(
                 "Pressure-dependent Black-Oil Nodal analysis failed", _e), None, None
@@ -1931,6 +1973,20 @@ def handle_calc_nodal(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes]
                 out.append("Operating point: q = "
                            f"{result.roots[0].q:.2f} STB/day, Pwf = "
                            f"{result.roots[0].pwf:.2f} psia.")
+    if case_requested:
+        engineering_case = build_nodal_case(
+            nodal_case_inputs,
+            result,
+            request={"calculation": "nodal", "arguments": kwargs},
+            pvt_context=pvt_context,
+            pvt_mode=pvt_mode or None,
+            pvt_model=pvt_model or None,
+        )
+        _remember_engineering_case(engineering_case)
+        if report_requested:
+            return generate_report_v1(engineering_case), png, None
+        out.append("")
+        out.append(f"Engineering Case ID: {engineering_case.case_id}")
     return "\n".join(out), png, None
 
 
