@@ -55,6 +55,8 @@ from services.engineering_case import (
     build_nodal_failure_case,
     build_vlp_case,
     build_vlp_failure_case,
+    build_gas_lift_case,
+    build_gas_lift_failure_case,
     replay_case,
     replay_matches,
 )
@@ -482,6 +484,9 @@ def _gas_lift_float_kwargs(args_str: str) -> Tuple[Dict[str, Any], Optional[str]
         key, value = part.split("=", 1)
         key = key.strip().lower()
         value = value.strip()
+        if key in {"case", "report"}:
+            raw[key] = value
+            continue
         if key.startswith("pvt_"):
             if key in {"pvt_mode", "pvt_model"}:
                 raw[key] = value
@@ -566,8 +571,13 @@ def handle_calc_gas_lift(message: Dict[str, Any], tg) -> Tuple[str, Optional[byt
     kwargs, parse_error = _gas_lift_float_kwargs(args_str)
     if parse_error:
         return parse_error, None, None
+    case_requested, report_requested = _case_flags(kwargs)
+    case_requested = case_requested or report_requested
     pvt_kwargs = {key: value for key, value in kwargs.items() if key.startswith("pvt_")}
-    gas_kwargs = {key: value for key, value in kwargs.items() if not key.startswith("pvt_")}
+    gas_kwargs = {
+        key: value for key, value in kwargs.items()
+        if not key.startswith("pvt_") and key not in {"case", "report"}
+    }
     pvt_provider, pvt_context, pvt_error = _bind_black_oil_pvt(pvt_kwargs)
     if pvt_error:
         if pvt_kwargs.get("pvt_mode") is not None and pvt_kwargs.get("pvt_model") is None:
@@ -577,18 +587,71 @@ def handle_calc_gas_lift(message: Dict[str, Any], tg) -> Tuple[str, Optional[byt
                 "are required."
             ), None, None
         return pvt_error, None, None
+
     try:
+        gas_input = GasLiftInput(**gas_kwargs)
         result = GasLiftEngine().calculate(
-            GasLiftInput(**gas_kwargs),
+            gas_input,
             pvt_provider=pvt_provider,
             pvt_context=pvt_context,
         )
     except GasLiftError as exc:
+        if case_requested:
+            failure_case = build_gas_lift_failure_case(
+                gas_input if "gas_input" in locals() else GasLiftInput(**gas_kwargs),
+                code=exc.code,
+                message=exc.message,
+                request={"calculation": "gas_lift", "arguments": kwargs},
+                pvt_context=pvt_context,
+                pvt_mode=pvt_kwargs.get("pvt_mode"),
+                pvt_model=pvt_kwargs.get("pvt_model"),
+            )
+            _remember_engineering_case(failure_case)
+            if report_requested:
+                return generate_report_v1(failure_case), None, None
+            return (
+                f"Error: {exc.code}: {exc.message}\n"
+                f"Engineering Case ID: {failure_case.case_id}"
+            ), None, None
         return f"Error: {exc.code}: {exc.message}", None, None
+    except (TypeError, ValueError) as exc:
+        if case_requested:
+            failure_case = build_gas_lift_failure_case(
+                GasLiftInput(**gas_kwargs),
+                code="INVALID_INPUT",
+                message=str(exc),
+                request={"calculation": "gas_lift", "arguments": kwargs},
+                pvt_context=pvt_context,
+                pvt_mode=pvt_kwargs.get("pvt_mode"),
+                pvt_model=pvt_kwargs.get("pvt_model"),
+            )
+            _remember_engineering_case(failure_case)
+            if report_requested:
+                return generate_report_v1(failure_case), None, None
+            return (
+                f"Error: INVALID_INPUT: {exc}\n"
+                f"Engineering Case ID: {failure_case.case_id}"
+            ), None, None
+        return f"Error: INVALID_INPUT: {exc}", None, None
+
     if pvt_provider is not None:
         result.pvt_metadata["mode_selector"] = str(pvt_kwargs.get("pvt_mode"))
         result.pvt_metadata["model_selector"] = str(pvt_kwargs.get("pvt_model"))
-    return _format_gas_lift_result(result), None, None
+    formatted = _format_gas_lift_result(result)
+    if case_requested:
+        engineering_case = build_gas_lift_case(
+            gas_input,
+            result,
+            request={"calculation": "gas_lift", "arguments": kwargs},
+            pvt_context=pvt_context,
+            pvt_mode=pvt_kwargs.get("pvt_mode"),
+            pvt_model=pvt_kwargs.get("pvt_model"),
+        )
+        _remember_engineering_case(engineering_case)
+        if report_requested:
+            return generate_report_v1(engineering_case), None, None
+        formatted += f"\n\nEngineering Case ID: {engineering_case.case_id}"
+    return formatted, None, None
 
 
 def _choke_numeric_value(kwargs: Dict[str, Any], aliases: Tuple[str, ...]) -> Any:

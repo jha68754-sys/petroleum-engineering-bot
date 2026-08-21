@@ -305,6 +305,7 @@ def build_case(
                 "choke", "choke_v1",
                 "nodal", "nodal_v1",
                 "vlp", "vlp_v1",
+                "gas_lift", "gas_lift_v1",
             },
             **({} if reproducibility is None else dict(reproducibility)),
         },
@@ -440,7 +441,21 @@ def _vlp_input_from_case(case: EngineeringCase) -> Dict[str, Any]:
     return clean
 
 
+def _gas_lift_input_from_case(case: EngineeringCase) -> Any:
+    """Reconstruct only released GasLiftEngine input fields from a case."""
+    from services.gas_lift_engine import GasLiftInput
+
+    data = dict(case.inputs)
+    allowed = set(GasLiftInput.__dataclass_fields__)
+    clean = {key: value for key, value in data.items() if key in allowed}
+    try:
+        return GasLiftInput(**clean)
+    except (TypeError, ValueError) as exc:
+        raise CaseReplayError(f"INVALID_CASE_INPUT: {exc}") from exc
+
+
 def _choke_input_from_case(case: EngineeringCase) -> Any:
+
     from services.choke_engine import ChokeInput
 
     data = dict(case.inputs)
@@ -592,6 +607,96 @@ def replay_case(
                 release=case.release,
                 reproducibility=case.reproducibility,
             )
+        return build_case(
+            calculation_type=case.calculation_type,
+            request=case.request,
+            inputs=case.inputs,
+            units=case.units,
+            selectors=case.selectors,
+            model=case.model,
+            pvt=case.pvt,
+            assumptions=case.assumptions,
+            result=result,
+            status=getattr(result, "status", case.status),
+            limitations=getattr(result, "limitations", case.limitations),
+            warnings=getattr(result, "warnings", case.warnings),
+            release=case.release,
+            reproducibility=case.reproducibility,
+        )
+
+    if kind in {"gas_lift", "gas_lift_v1"}:
+        from services.black_oil_pvt import BlackOilPvtProvider
+        from services.gas_lift_engine import GasLiftEngine, GasLiftError
+
+        if (
+            case.status != "OK"
+            and isinstance(case.result, Mapping)
+            and "error" in case.result
+        ):
+            return build_case(
+                calculation_type=case.calculation_type,
+                request=case.request,
+                inputs=case.inputs,
+                units=case.units,
+                selectors=case.selectors,
+                model=case.model,
+                pvt=case.pvt,
+                assumptions=case.assumptions,
+                result=case.result,
+                status=case.status,
+                limitations=case.limitations,
+                warnings=case.warnings,
+                release=case.release,
+                reproducibility=case.reproducibility,
+            )
+
+        inputs = _gas_lift_input_from_case(case)
+        pvt_data = case.pvt if isinstance(case.pvt, Mapping) else {}
+        mode = str(pvt_data.get("mode", "")).strip().lower()
+        model = str(pvt_data.get("model", "")).strip().lower()
+        provider = None
+        context = None
+        if mode == "pressure_dependent" or model == "black_oil_v1":
+            if mode != "pressure_dependent" or model != "black_oil_v1":
+                raise CaseReplayError(
+                    "UNSUPPORTED_PVT_SELECTOR: explicit Black-Oil replay requires "
+                    "pressure_dependent/black_oil_v1"
+                )
+            context = pvt_data.get("context")
+            if not isinstance(context, Mapping):
+                raise CaseReplayError(
+                    "PHYSICALLY_INVALID_STATE: replay case lacks Black-Oil PVT context"
+                )
+            provider = BlackOilPvtProvider()
+            context = dict(context)
+        try:
+            result = GasLiftEngine().calculate(
+                inputs, pvt_provider=provider, pvt_context=context
+            )
+        except GasLiftError as exc:
+            return build_case(
+                calculation_type=case.calculation_type,
+                request=case.request,
+                inputs=case.inputs,
+                units=case.units,
+                selectors=case.selectors,
+                model=case.model,
+                pvt=case.pvt,
+                assumptions=case.assumptions,
+                result={"error": {"code": exc.code, "message": exc.message}},
+                status=exc.code,
+                limitations=case.limitations,
+                warnings=case.warnings,
+                release=case.release,
+                reproducibility=case.reproducibility,
+            )
+        original_result = case.result if isinstance(case.result, Mapping) else {}
+        original_metadata = original_result.get("pvt_metadata", {})
+        if provider is not None and isinstance(original_metadata, Mapping):
+            if "mode_selector" in original_metadata:
+                result.pvt_metadata["mode_selector"] = mode
+            if "model_selector" in original_metadata:
+                result.pvt_metadata["model_selector"] = model
         return build_case(
             calculation_type=case.calculation_type,
             request=case.request,
@@ -971,6 +1076,93 @@ def build_nodal_failure_case(
     )
 
 
+def gas_lift_input_to_dict(inputs: Any) -> Dict[str, Any]:
+    """Serialize a released ``GasLiftInput`` without Telegram metadata."""
+    return _plain(asdict(inputs) if is_dataclass(inputs) else inputs)
+
+
+def build_gas_lift_case(
+    inputs: Any,
+    result: Any,
+    *,
+    request: Any = None,
+    pvt_context: Optional[Mapping[str, Any]] = None,
+    pvt_mode: Optional[str] = None,
+    pvt_model: Optional[str] = None,
+    status: Optional[str] = None,
+    limitations: Any = None,
+    warnings: Any = None,
+) -> EngineeringCase:
+    """Build a reproducible case around an already-computed Gas-Lift V1 result."""
+    data = gas_lift_input_to_dict(inputs)
+    pvt: Dict[str, Any] = {}
+    if pvt_mode is not None or pvt_model is not None or pvt_context is not None:
+        pvt = {
+            "mode": pvt_mode or "pressure_dependent",
+            "model": pvt_model or "black_oil_v1",
+            "context": {} if pvt_context is None else dict(pvt_context),
+            "provenance": _plain(getattr(result, "pvt_metadata", {})),
+        }
+    return build_case(
+        calculation_type="gas_lift_v1",
+        request={} if request is None else request,
+        inputs=data,
+        units={
+            "pressure": "psia",
+            "depth": "ft",
+            "gas_rate": "Mscf/day",
+            "liquid_rate": "STB/day",
+            "temperature": "degF",
+            "gradient": "psi/ft",
+            "rate_response": "STB/day",
+            "in_situ_volume": "bbl/day equivalent",
+            "water_cut": "fraction",
+            "oil_api": "deg API",
+        },
+        selectors={"gas_lift_model": "continuous_gas_lift_v1"},
+        model={
+            "gas_lift": "continuous_gas_lift_v1",
+            "engine": "GasLiftEngine V1",
+        },
+        pvt=pvt,
+        assumptions={
+            "gas_lift_engine": "GasLiftEngine V1",
+            "pressure_balance": "steady_state",
+            "mixture_response": "homogeneous",
+            "rate_response_supported": bool(
+                getattr(result, "predicted_liquid_rate_stbd", None) is not None
+            ),
+        },
+        result=result,
+        status=status or getattr(result, "status", "OK"),
+        limitations=limitations if limitations is not None else getattr(result, "limitations", []),
+        warnings=warnings if warnings is not None else getattr(result, "warnings", []),
+        reproducibility={"engine": "GasLiftEngine", "engine_version": "V1"},
+    )
+
+
+def build_gas_lift_failure_case(
+    inputs: Any,
+    *,
+    code: str,
+    message: str,
+    request: Any = None,
+    pvt_context: Optional[Mapping[str, Any]] = None,
+    pvt_mode: Optional[str] = None,
+    pvt_model: Optional[str] = None,
+) -> EngineeringCase:
+    """Represent a typed Gas-Lift failure without fabricating a result."""
+    return build_gas_lift_case(
+        inputs,
+        {"error": {"code": str(code), "message": str(message)}},
+        request=request,
+        pvt_context=pvt_context,
+        pvt_mode=pvt_mode,
+        pvt_model=pvt_model,
+        status=code,
+    )
+
+
 def build_system_case(
     inputs: Any,
     result: Any,
@@ -1085,6 +1277,9 @@ __all__ = [
     "vlp_input_to_dict",
     "build_vlp_case",
     "build_vlp_failure_case",
+    "gas_lift_input_to_dict",
+    "build_gas_lift_case",
+    "build_gas_lift_failure_case",
     "build_nodal_case",
     "build_nodal_failure_case",
     "build_system_case",
