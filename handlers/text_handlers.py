@@ -57,6 +57,10 @@ from services.engineering_case import (
     build_vlp_failure_case,
     build_gas_lift_case,
     build_gas_lift_failure_case,
+    build_sensitivity_case,
+    build_sensitivity_failure_case,
+    build_optimize_case,
+    build_optimize_failure_case,
     replay_case,
     replay_matches,
 )
@@ -2964,7 +2968,7 @@ def _common_string_keys(args_str: str, extra: Tuple[str, ...]
         if _key in ("model", "plot", "vlp_model", "type", "objective",
                     "base_thp",
                     "base_id", "base_wc", "base_gor",
-                    "n_points") + extra + _LIST_KEYS:
+                    "n_points", "case", "report") + extra + _LIST_KEYS:
             # Duplicate-key conflict: when the same key appears twice
             # (e.g. type=id and a later id=1.995 VLP token, or the sweep
             # key given as both a comma list and a base value), prefer
@@ -3102,6 +3106,8 @@ def handle_calc_sensitivity(message: Dict[str, Any], tg
     _numeric = parse_kv_args(args_str)
     _numeric.update(kwargs)
     kwargs = _numeric
+    case_requested, report_requested = _case_flags(kwargs)
+    case_requested = case_requested or report_requested
 
     # --- Variable selection ---
     var_key = (kwargs.get("type") or "").lower()
@@ -3211,8 +3217,33 @@ def handle_calc_sensitivity(message: Dict[str, Any], tg
             return "Error: base value must be numeric.\n\n" \
                    + _SENSITIVITY_USAGE, None, None
 
+    case_config = {
+        "variable": variable,
+        "explicit_values": explicit_values or None,
+        "lo": float(lo) if lo is not None else None,
+        "hi": float(hi) if hi is not None else None,
+        "n_points": int(n_points) if n_points is not None else None,
+        "base_value": base_value,
+        "base_kwargs": dict(vlp_kwargs),
+        "ipr_kwargs": dict(ipr_kwargs),
+    }
+    case_request = {"calculation": "sensitivity", "arguments": kwargs}
     pvt_provider, pvt_context, pvt_error = _bind_black_oil_pvt(kwargs)
     if pvt_error:
+        if case_requested:
+            failure_case = build_sensitivity_failure_case(
+                case_config, code="PHYSICALLY_INVALID_STATE", message=pvt_error,
+                request=case_request, pvt_context=pvt_context,
+                pvt_mode=kwargs.get("pvt_mode") or None,
+                pvt_model=kwargs.get("pvt_model") or None,
+            )
+            _remember_engineering_case(failure_case)
+            if report_requested:
+                return generate_report_v1(failure_case), None, None
+            return (
+                f"Error: PHYSICALLY_INVALID_STATE: {pvt_error}\n"
+                f"Engineering Case ID: {failure_case.case_id}"
+            ), None, None
         return pvt_error, None, None
 
     opt = production_optimizer.ProductionOptimizer()
@@ -3226,6 +3257,20 @@ def handle_calc_sensitivity(message: Dict[str, Any], tg
             ipr_kwargs=ipr_kwargs,
             pvt_provider=pvt_provider, pvt_context=pvt_context)
     except production_optimizer.OptimizationError as _e:
+        if case_requested:
+            failure_case = build_sensitivity_failure_case(
+                case_config, code=_e.kind, message=_e.message,
+                request=case_request, pvt_context=pvt_context,
+                pvt_mode=kwargs.get("pvt_mode") or None,
+                pvt_model=kwargs.get("pvt_model") or None,
+            )
+            _remember_engineering_case(failure_case)
+            if report_requested:
+                return generate_report_v1(failure_case), None, None
+            return (
+                f"Error: {_e.kind}: {_e.message}\n"
+                f"Engineering Case ID: {failure_case.case_id}"
+            ), None, None
         if _e.kind == "PHYSICALLY_INVALID":
             return ("Engineering Guardrail — inputs rejected as physically "
                     "invalid.\n" + _e.message), None, None
@@ -3235,6 +3280,21 @@ def handle_calc_sensitivity(message: Dict[str, Any], tg
         return ("Engineering Guardrail — " + _e.message + "\n\n"
                 + _SENSITIVITY_USAGE), None, None
     except Exception as _e:
+        if case_requested:
+            failure_case = build_sensitivity_failure_case(
+                case_config, code="SENSITIVITY_CALCULATION_ERROR",
+                message=str(_e), request=case_request,
+                pvt_context=pvt_context,
+                pvt_mode=kwargs.get("pvt_mode") or None,
+                pvt_model=kwargs.get("pvt_model") or None,
+            )
+            _remember_engineering_case(failure_case)
+            if report_requested:
+                return generate_report_v1(failure_case), None, None
+            return (
+                f"Error: SENSITIVITY_CALCULATION_ERROR: {_e}\n"
+                f"Engineering Case ID: {failure_case.case_id}"
+            ), None, None
         return f"Sensitivity analysis error: {_e}.", None, None
 
     # --- Response lines ---
@@ -3315,6 +3375,18 @@ def handle_calc_sensitivity(message: Dict[str, Any], tg
                          "operating rate vs " + var_display
                          + ". CALCULATED MODEL RESULTS — NOT measured "
                          "field data.")
+    if case_requested:
+        engineering_case = build_sensitivity_case(
+            case_config, result, request=case_request,
+            pvt_context=pvt_context,
+            pvt_mode=kwargs.get("pvt_mode") or None,
+            pvt_model=kwargs.get("pvt_model") or None,
+        )
+        _remember_engineering_case(engineering_case)
+        if report_requested:
+            return (generate_report_v1(engineering_case)
+                    + f"\n\nEngineering Case ID: {engineering_case.case_id}"), png, None
+        text_out += f"\n\nEngineering Case ID: {engineering_case.case_id}"
     return text_out, png, None
 
 
@@ -3344,6 +3416,8 @@ def handle_calc_optimize(message: Dict[str, Any], tg
     _numeric = parse_kv_args(args_str)
     _numeric.update(kwargs)
     kwargs = _numeric
+    case_requested, report_requested = _case_flags(kwargs)
+    case_requested = case_requested or report_requested
 
     # --- Variable ---
     var_key = (kwargs.get("type") or "").lower()
@@ -3426,8 +3500,31 @@ def handle_calc_optimize(message: Dict[str, Any], tg
             except (TypeError, ValueError):
                 return f"Error: {_cname} must be numeric.", None, None
 
+    case_config = {
+        "variable": variable,
+        "values": list(values),
+        "objective": objective,
+        "constraints": dict(constraints) or None,
+        "base_kwargs": dict(vlp_kwargs),
+        "ipr_kwargs": dict(ipr_kwargs),
+    }
+    case_request = {"calculation": "optimize", "arguments": kwargs}
     pvt_provider, pvt_context, pvt_error = _bind_black_oil_pvt(kwargs)
     if pvt_error:
+        if case_requested:
+            failure_case = build_optimize_failure_case(
+                case_config, code="PHYSICALLY_INVALID_STATE", message=pvt_error,
+                request=case_request, pvt_context=pvt_context,
+                pvt_mode=kwargs.get("pvt_mode") or None,
+                pvt_model=kwargs.get("pvt_model") or None,
+            )
+            _remember_engineering_case(failure_case)
+            if report_requested:
+                return generate_report_v1(failure_case), None, None
+            return (
+                f"Error: PHYSICALLY_INVALID_STATE: {pvt_error}\n"
+                f"Engineering Case ID: {failure_case.case_id}"
+            ), None, None
         return pvt_error, None, None
 
     opt = production_optimizer.ProductionOptimizer()
@@ -3438,6 +3535,20 @@ def handle_calc_optimize(message: Dict[str, Any], tg
             base_kwargs=vlp_kwargs, ipr_kwargs=ipr_kwargs,
             pvt_provider=pvt_provider, pvt_context=pvt_context)
     except production_optimizer.OptimizationError as _e:
+        if case_requested:
+            failure_case = build_optimize_failure_case(
+                case_config, code=_e.kind, message=_e.message,
+                request=case_request, pvt_context=pvt_context,
+                pvt_mode=kwargs.get("pvt_mode") or None,
+                pvt_model=kwargs.get("pvt_model") or None,
+            )
+            _remember_engineering_case(failure_case)
+            if report_requested:
+                return generate_report_v1(failure_case), None, None
+            return (
+                f"Error: {_e.kind}: {_e.message}\n"
+                f"Engineering Case ID: {failure_case.case_id}"
+            ), None, None
         if _e.kind == "PHYSICALLY_INVALID":
             return ("Engineering Guardrail — inputs rejected as physically "
                     "invalid.\n" + _e.message), None, None
@@ -3448,6 +3559,21 @@ def handle_calc_optimize(message: Dict[str, Any], tg
         return ("Engineering Guardrail — " + _e.message + "\n\n"
                 + _OPTIMIZE_USAGE), None, None
     except Exception as _e:
+        if case_requested:
+            failure_case = build_optimize_failure_case(
+                case_config, code="OPTIMIZATION_CALCULATION_ERROR",
+                message=str(_e), request=case_request,
+                pvt_context=pvt_context,
+                pvt_mode=kwargs.get("pvt_mode") or None,
+                pvt_model=kwargs.get("pvt_model") or None,
+            )
+            _remember_engineering_case(failure_case)
+            if report_requested:
+                return generate_report_v1(failure_case), None, None
+            return (
+                f"Error: OPTIMIZATION_CALCULATION_ERROR: {_e}\n"
+                f"Engineering Case ID: {failure_case.case_id}"
+            ), None, None
         return f"Optimization error: {_e}.", None, None
 
     # --- Response lines ---
@@ -3562,4 +3688,16 @@ def handle_calc_optimize(message: Dict[str, Any], tg
             text_out += ("\n\nCalculated comparison plot attached: "
                          "operating rate per candidate. CALCULATED MODEL "
                          "RESULTS — NOT measured field data.")
+    if case_requested:
+        engineering_case = build_optimize_case(
+            case_config, result, request=case_request,
+            pvt_context=pvt_context,
+            pvt_mode=kwargs.get("pvt_mode") or None,
+            pvt_model=kwargs.get("pvt_model") or None,
+        )
+        _remember_engineering_case(engineering_case)
+        if report_requested:
+            return (generate_report_v1(engineering_case)
+                    + f"\n\nEngineering Case ID: {engineering_case.case_id}"), png, None
+        text_out += f"\n\nEngineering Case ID: {engineering_case.case_id}"
     return text_out, png, None

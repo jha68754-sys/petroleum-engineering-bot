@@ -6,7 +6,7 @@ no petroleum equations and does not replace any released engineering engine.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
@@ -306,6 +306,8 @@ def build_case(
                 "nodal", "nodal_v1",
                 "vlp", "vlp_v1",
                 "gas_lift", "gas_lift_v1",
+                "sensitivity", "sensitivity_v1",
+                "optimize", "optimize_v1",
             },
             **({} if reproducibility is None else dict(reproducibility)),
         },
@@ -476,6 +478,153 @@ def _choke_input_from_case(case: EngineeringCase) -> Any:
         return ChokeInput(**clean)
     except (TypeError, ValueError) as exc:
         raise CaseReplayError(f"INVALID_CASE_INPUT: {exc}") from exc
+
+
+def _optimizer_pvt_metadata(result: Any) -> Dict[str, Any]:
+    """Extract released PVT metadata from optimizer-owned Nodal results."""
+    points = []
+    if hasattr(result, "base_point"):
+        points.append(getattr(result, "base_point", None))
+        points.extend(getattr(result, "points", []) or [])
+    for candidate in getattr(result, "candidates", []) or []:
+        points.append(getattr(candidate, "point", None))
+    for point in points:
+        nodal = getattr(point, "nodal", None)
+        metadata = getattr(nodal, "pvt_metadata", None)
+        if metadata:
+            return _plain(metadata)
+    return {}
+
+
+def _optimizer_pvt_payload(result: Any, *, pvt_context: Optional[Mapping[str, Any]],
+                           pvt_mode: Optional[str], pvt_model: Optional[str]) -> Dict[str, Any]:
+    if pvt_mode is None and pvt_model is None and pvt_context is None:
+        return {}
+    return {
+        "mode": pvt_mode or "pressure_dependent",
+        "model": pvt_model or "black_oil_v1",
+        "context": {} if pvt_context is None else dict(pvt_context),
+        "provenance": _optimizer_pvt_metadata(result),
+    }
+
+
+def build_sensitivity_case(
+    config: Mapping[str, Any],
+    result: Any,
+    *,
+    request: Any = None,
+    pvt_context: Optional[Mapping[str, Any]] = None,
+    pvt_mode: Optional[str] = None,
+    pvt_model: Optional[str] = None,
+    status: Optional[str] = None,
+    limitations: Any = None,
+    warnings: Any = None,
+) -> EngineeringCase:
+    """Build a deterministic Case around ProductionOptimizer.sensitivity()."""
+    data = _plain(dict(config))
+    variable = data.get("variable")
+    return build_case(
+        calculation_type="sensitivity_v1",
+        request={} if request is None else request,
+        inputs=data,
+        units={"pressure": "psia", "rate": "STB/day", "tubing_id": "in",
+               "gor": "scf/STB", "water_cut": "fraction"},
+        selectors={"variable": variable,
+                   "vlp_model": (data.get("base_kwargs") or {}).get("vlp_model")},
+        model={"engine": "ProductionOptimizer V1", "sensitivity": "one_variable_nodal_sweep"},
+        pvt=_optimizer_pvt_payload(result, pvt_context=pvt_context,
+                                   pvt_mode=pvt_mode, pvt_model=pvt_model),
+        assumptions={"optimizer_engine": "ProductionOptimizer V1",
+                     "deterministic_sweep": True,
+                     "variable": variable},
+        result=result,
+        status=status or "OK",
+        limitations=limitations if limitations is not None else getattr(result, "limitations", []),
+        warnings=warnings if warnings is not None else getattr(result, "warnings", []),
+        reproducibility={"engine": "ProductionOptimizer", "engine_version": "V1"},
+    )
+
+
+def build_sensitivity_failure_case(
+    config: Mapping[str, Any], *, code: str, message: str,
+    request: Any = None, pvt_context: Optional[Mapping[str, Any]] = None,
+    pvt_mode: Optional[str] = None, pvt_model: Optional[str] = None,
+) -> EngineeringCase:
+    return build_sensitivity_case(
+        config, {"error": {"code": str(code), "message": str(message)}},
+        request=request, pvt_context=pvt_context, pvt_mode=pvt_mode,
+        pvt_model=pvt_model, status=code,
+    )
+
+
+def build_optimize_case(
+    config: Mapping[str, Any],
+    result: Any,
+    *,
+    request: Any = None,
+    pvt_context: Optional[Mapping[str, Any]] = None,
+    pvt_mode: Optional[str] = None,
+    pvt_model: Optional[str] = None,
+    status: Optional[str] = None,
+    limitations: Any = None,
+    warnings: Any = None,
+) -> EngineeringCase:
+    """Build a deterministic Case around ProductionOptimizer.optimize()."""
+    data = _plain(dict(config))
+    variable = data.get("variable")
+    return build_case(
+        calculation_type="optimize_v1",
+        request={} if request is None else request,
+        inputs=data,
+        units={"pressure": "psia", "rate": "STB/day", "tubing_id": "in",
+               "gor": "scf/STB", "water_cut": "fraction"},
+        selectors={"variable": variable, "objective": data.get("objective"),
+                   "vlp_model": (data.get("base_kwargs") or {}).get("vlp_model")},
+        model={"engine": "ProductionOptimizer V1", "optimization": "constrained_candidate_comparison"},
+        pvt=_optimizer_pvt_payload(result, pvt_context=pvt_context,
+                                   pvt_mode=pvt_mode, pvt_model=pvt_model),
+        assumptions={"optimizer_engine": "ProductionOptimizer V1",
+                     "deterministic_candidates": True,
+                     "variable": variable,
+                     "objective": data.get("objective")},
+        result=result,
+        status=status or "OK",
+        limitations=limitations if limitations is not None else getattr(result, "limitations", []),
+        warnings=warnings if warnings is not None else getattr(result, "warnings", []),
+        reproducibility={"engine": "ProductionOptimizer", "engine_version": "V1"},
+    )
+
+
+def build_optimize_failure_case(
+    config: Mapping[str, Any], *, code: str, message: str,
+    request: Any = None, pvt_context: Optional[Mapping[str, Any]] = None,
+    pvt_mode: Optional[str] = None, pvt_model: Optional[str] = None,
+) -> EngineeringCase:
+    return build_optimize_case(
+        config, {"error": {"code": str(code), "message": str(message)}},
+        request=request, pvt_context=pvt_context, pvt_mode=pvt_mode,
+        pvt_model=pvt_model, status=code,
+    )
+
+
+def _optimizer_pvt_from_case(case: EngineeringCase) -> tuple[Any, Optional[Dict[str, Any]]]:
+    pvt_data = case.pvt if isinstance(case.pvt, Mapping) else {}
+    mode = str(pvt_data.get("mode", "")).strip().lower()
+    model = str(pvt_data.get("model", "")).strip().lower()
+    if mode == "pressure_dependent" or model == "black_oil_v1":
+        if mode != "pressure_dependent" or model != "black_oil_v1":
+            raise CaseReplayError(
+                "UNSUPPORTED_PVT_SELECTOR: explicit Black-Oil replay requires "
+                "pressure_dependent/black_oil_v1"
+            )
+        context = pvt_data.get("context")
+        if not isinstance(context, Mapping) or not context:
+            raise CaseReplayError(
+                "PHYSICALLY_INVALID_STATE: replay case lacks Black-Oil PVT context"
+            )
+        from services.black_oil_pvt import BlackOilPvtProvider
+        return BlackOilPvtProvider(), dict(context)
+    return None, None
 
 
 def replay_case(
@@ -713,6 +862,80 @@ def replay_case(
             release=case.release,
             reproducibility=case.reproducibility,
         )
+
+    if kind in {"sensitivity", "sensitivity_v1", "optimize", "optimize_v1"}:
+        from services.production_optimizer import ProductionOptimizer, OptimizationError
+
+        if (
+            case.status != "OK"
+            and isinstance(case.result, Mapping)
+            and "error" in case.result
+        ):
+            return build_case(
+                calculation_type=case.calculation_type,
+                request=case.request,
+                inputs=case.inputs,
+                units=case.units,
+                selectors=case.selectors,
+                model=case.model,
+                pvt=case.pvt,
+                assumptions=case.assumptions,
+                result=case.result,
+                status=case.status,
+                limitations=case.limitations,
+                warnings=case.warnings,
+                release=case.release,
+                reproducibility=case.reproducibility,
+            )
+
+        config = dict(case.inputs) if isinstance(case.inputs, Mapping) else {}
+        provider, context = _optimizer_pvt_from_case(case)
+        pvt_data = case.pvt if isinstance(case.pvt, Mapping) else {}
+        pvt_mode = pvt_data.get("mode") if provider is not None else None
+        pvt_model = pvt_data.get("model") if provider is not None else None
+        try:
+            if kind in {"sensitivity", "sensitivity_v1"}:
+                result = ProductionOptimizer().sensitivity(
+                    **config, pvt_provider=provider, pvt_context=context
+                )
+                rebuilt = build_sensitivity_case(
+                    config, result, request=case.request,
+                    pvt_context=context, pvt_mode=pvt_mode, pvt_model=pvt_model,
+                    status="OK", limitations=case.limitations,
+                    warnings=getattr(result, "warnings", case.warnings),
+                )
+            else:
+                result = ProductionOptimizer().optimize(
+                    **config, pvt_provider=provider, pvt_context=context
+                )
+                rebuilt = build_optimize_case(
+                    config, result, request=case.request,
+                    pvt_context=context, pvt_mode=pvt_mode, pvt_model=pvt_model,
+                    status="OK", limitations=case.limitations,
+                    warnings=getattr(result, "warnings", case.warnings),
+                )
+            return replace(
+                rebuilt,
+                release=case.release,
+                reproducibility=case.reproducibility,
+            )
+        except OptimizationError as exc:
+            return build_case(
+                calculation_type=case.calculation_type,
+                request=case.request,
+                inputs=case.inputs,
+                units=case.units,
+                selectors=case.selectors,
+                model=case.model,
+                pvt=case.pvt,
+                assumptions=case.assumptions,
+                result={"error": {"code": exc.kind, "message": exc.message}},
+                status=exc.kind,
+                limitations=case.limitations,
+                warnings=case.warnings,
+                release=case.release,
+                reproducibility=case.reproducibility,
+            )
 
     if kind in {"nodal", "nodal_v1"}:
         from services.black_oil_pvt import BlackOilPvtProvider
