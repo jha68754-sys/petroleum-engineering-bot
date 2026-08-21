@@ -53,6 +53,8 @@ from services.engineering_case import (
     build_choke_failure_case,
     build_nodal_case,
     build_nodal_failure_case,
+    build_vlp_case,
+    build_vlp_failure_case,
     replay_case,
     replay_matches,
 )
@@ -2009,7 +2011,7 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
                 continue
             _key, _, _val = _part.partition("=")
             _key, _val = _key.strip().lower(), _val.strip()
-            if _key in ("plot", "vlp_model", "pvt_mode", "pvt_model"):
+            if _key in ("plot", "case", "report", "vlp_model", "pvt_mode", "pvt_model"):
                 kwargs[_key] = _val
                 continue
     _numeric = parse_kv_args(args_str)
@@ -2021,6 +2023,7 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
     pvt_mode = str(kwargs.get("pvt_mode", "")).strip().lower()
     pvt_model = str(kwargs.get("pvt_model", "")).strip().lower()
     # Normalize the VLP correlation selector (string key, not numeric).
+    case_requested, report_requested = _case_flags(kwargs)
     vlp_model = str(kwargs.get("vlp_model", "beggs_brill")).strip().lower()
     try:
         vlp_model = vlp_engine._resolve_model(vlp_model)
@@ -2042,6 +2045,9 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
 
     # --- Engineering Data Requirement ---
     curve_mode = q_min is not None or q_max is not None
+    if curve_mode and case_requested:
+        return ("Error: VLP Engineering Case currently supports single-rate "
+                "mode only; omit q_min and q_max."), None, None
     if curve_mode:
         # Curve mode replaces the single-rate "q" requirement with a sweep.
         required = [k for k in vlp_engine.missing_inputs(kwargs, vlp_model)
@@ -2202,6 +2208,19 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
                      ("segments", "segments = 80 (default)")):
         if _dk not in floats:
             input_defaults_single.append(_dv)
+    vlp_case_inputs = {
+        "thp": floats["thp"], "tvd": floats["tvd"], "q": floats["q"],
+        "q_o": q_o, "q_w": q_w, "gor": floats["gor"], "bo": floats["bo"],
+        "bw": floats.get("bw", 1.01), "z_factor": floats.get("z", 1.0),
+        "gamma_g": floats["gamma_g"], "gamma_w": floats.get("gamma_w", 1.07),
+        "mu_l": floats["mu_l"], "api": floats["api"], "wc": wc,
+        "tubing_id_in": floats["id"], "rs": floats["rs"], "t_wh": floats["t_wh"],
+        "geothermal": floats.get("geothermal", 1.5),
+        "sigma": floats.get("sigma", 30.0),
+        "n_segments": int(floats.get("segments", 80)),
+        "vlp_model": vlp_model, "z_provenance": z_prov_single,
+        "input_defaults": input_defaults_single,
+    }
     try:
         result = vlp_engine.traverse(
             floats["thp"], floats["tvd"], q_o, q_w, floats["gor"],
@@ -2219,6 +2238,24 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
         )
     except ValueError as _e:
         _msg = str(_e)
+        if case_requested:
+            _code = "PHYSICALLY_INVALID_STATE" if "PHYSICALLY_INVALID" in _msg else "VLP_CALCULATION_ERROR"
+            failure_case = build_vlp_failure_case(
+                vlp_case_inputs,
+                code=_code,
+                message=_msg,
+                request={"calculation": "vlp", "arguments": kwargs},
+                pvt_context=pvt_context,
+                pvt_mode=pvt_mode or None,
+                pvt_model=pvt_model or None,
+            )
+            _remember_engineering_case(failure_case)
+            if report_requested:
+                return generate_report_v1(failure_case), None, None
+            return (
+                f"Error: {_code}: {_msg}\n"
+                f"Engineering Case ID: {failure_case.case_id}"
+            ), None, None
         if pvt_provider:
             return _provider_failure_message(
                 "Pressure-dependent Black-Oil VLP failed", _e), None, None
@@ -2227,6 +2264,23 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
                     "invalid.\n" + _msg), None, None
         return ("Engineering Guardrail — inputs rejected.\n" + _msg), None, None
     except Exception as _e:
+        if case_requested:
+            failure_case = build_vlp_failure_case(
+                vlp_case_inputs,
+                code="VLP_CALCULATION_ERROR",
+                message=str(_e),
+                request={"calculation": "vlp", "arguments": kwargs},
+                pvt_context=pvt_context,
+                pvt_mode=pvt_mode or None,
+                pvt_model=pvt_model or None,
+            )
+            _remember_engineering_case(failure_case)
+            if report_requested:
+                return generate_report_v1(failure_case), None, None
+            return (
+                f"Error: VLP_CALCULATION_ERROR: {_e}\n"
+                f"Engineering Case ID: {failure_case.case_id}"
+            ), None, None
         if pvt_provider:
             return _provider_failure_message(
                 "Pressure-dependent Black-Oil VLP failed", _e), None, None
@@ -2250,6 +2304,20 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
             out.append("")
             out.append("Calculated VLP Plot attached (rate on X, required BHP on Y).")
             out.append("This is a model-generated curve, not measured data.")
+    if case_requested:
+        engineering_case = build_vlp_case(
+            vlp_case_inputs,
+            result,
+            request={"calculation": "vlp", "arguments": kwargs},
+            pvt_context=pvt_context,
+            pvt_mode=pvt_mode or None,
+            pvt_model=pvt_model or None,
+        )
+        _remember_engineering_case(engineering_case)
+        if report_requested:
+            return generate_report_v1(engineering_case), png, None
+        out.append("")
+        out.append(f"Engineering Case ID: {engineering_case.case_id}")
     return "\n".join(out), png, None
 
 

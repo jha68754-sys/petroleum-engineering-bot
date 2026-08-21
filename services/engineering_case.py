@@ -304,6 +304,7 @@ def build_case(
                 "system", "calc_system", "integrated_system", "integrated_system_v1",
                 "choke", "choke_v1",
                 "nodal", "nodal_v1",
+                "vlp", "vlp_v1",
             },
             **({} if reproducibility is None else dict(reproducibility)),
         },
@@ -394,6 +395,49 @@ def _nodal_input_from_case(case: EngineeringCase) -> Dict[str, Any]:
         return clean
     except (TypeError, ValueError) as exc:
         raise CaseReplayError(f"INVALID_CASE_INPUT: {exc}") from exc
+
+
+def _vlp_input_from_case(case: EngineeringCase) -> Dict[str, Any]:
+    """Return only released VLPEngine keyword arguments from a case."""
+    from services import vlp_engine
+
+    data = dict(case.inputs)
+    aliases = {
+        "id": "tubing_id_in",
+        "z": "z_factor",
+        "segments": "n_segments",
+        "model": "vlp_model",
+        "water_cut": "wc",
+    }
+    for old, new in aliases.items():
+        if new not in data and old in data:
+            data[new] = data[old]
+    if "q_o" not in data and "q" in data:
+        wc = float(data.get("wc", 0.0) or 0.0)
+        data["q_o"] = data["q"] if data.get("q_w") is not None else data["q"] * (1.0 - wc)
+    if "q_w" not in data:
+        wc = float(data.get("wc", 0.0) or 0.0)
+        data["q_w"] = data.get("q", 0.0) * wc
+    allowed = set(__import__("inspect").signature(vlp_engine.traverse).parameters)
+    clean = {key: value for key, value in data.items() if key in allowed}
+    pvt_data = case.pvt if isinstance(case.pvt, Mapping) else {}
+    mode = str(pvt_data.get("mode", "")).strip().lower()
+    model = str(pvt_data.get("model", "")).strip().lower()
+    if mode == "pressure_dependent" or model == "black_oil_v1":
+        if mode != "pressure_dependent" or model != "black_oil_v1":
+            raise CaseReplayError(
+                "UNSUPPORTED_PVT_SELECTOR: explicit Black-Oil replay requires "
+                "pressure_dependent/black_oil_v1"
+            )
+        context = pvt_data.get("context")
+        if not isinstance(context, Mapping):
+            raise CaseReplayError(
+                "PHYSICALLY_INVALID_STATE: replay case lacks Black-Oil PVT context"
+            )
+        from services.black_oil_pvt import BlackOilPvtProvider
+        clean["pvt_provider"] = BlackOilPvtProvider()
+        clean["pvt_context"] = dict(context)
+    return clean
 
 
 def _choke_input_from_case(case: EngineeringCase) -> Any:
@@ -487,6 +531,67 @@ def replay_case(
             # deterministic; the released ChokeEngine itself remains untouched.
             result.pvt_metadata["mode_selector"] = mode
             result.pvt_metadata["model_selector"] = model
+        return build_case(
+            calculation_type=case.calculation_type,
+            request=case.request,
+            inputs=case.inputs,
+            units=case.units,
+            selectors=case.selectors,
+            model=case.model,
+            pvt=case.pvt,
+            assumptions=case.assumptions,
+            result=result,
+            status=getattr(result, "status", case.status),
+            limitations=getattr(result, "limitations", case.limitations),
+            warnings=getattr(result, "warnings", case.warnings),
+            release=case.release,
+            reproducibility=case.reproducibility,
+        )
+
+    if kind in {"vlp", "vlp_v1"}:
+        from services import vlp_engine
+
+        if (
+            case.status != "CONVERGED"
+            and isinstance(case.result, Mapping)
+            and "error" in case.result
+        ):
+            return build_case(
+                calculation_type=case.calculation_type,
+                request=case.request,
+                inputs=case.inputs,
+                units=case.units,
+                selectors=case.selectors,
+                model=case.model,
+                pvt=case.pvt,
+                assumptions=case.assumptions,
+                result=case.result,
+                status=case.status,
+                limitations=case.limitations,
+                warnings=case.warnings,
+                release=case.release,
+                reproducibility=case.reproducibility,
+            )
+        kwargs = _vlp_input_from_case(case)
+        try:
+            result = vlp_engine.traverse(**kwargs)
+        except (ValueError, TypeError) as exc:
+            return build_case(
+                calculation_type=case.calculation_type,
+                request=case.request,
+                inputs=case.inputs,
+                units=case.units,
+                selectors=case.selectors,
+                model=case.model,
+                pvt=case.pvt,
+                assumptions=case.assumptions,
+                result={"error": {"code": "PHYSICALLY_INVALID_STATE", "message": str(exc)}},
+                status="PHYSICALLY_INVALID_STATE",
+                limitations=case.limitations,
+                warnings=case.warnings,
+                release=case.release,
+                reproducibility=case.reproducibility,
+            )
         return build_case(
             calculation_type=case.calculation_type,
             request=case.request,
@@ -696,6 +801,92 @@ def nodal_input_to_dict(inputs: Any) -> Dict[str, Any]:
     return _plain(inputs)
 
 
+def vlp_input_to_dict(inputs: Any) -> Dict[str, Any]:
+    """Serialize released VLP inputs without Telegram metadata."""
+    if isinstance(inputs, Mapping):
+        return _plain(dict(inputs))
+    return _plain(inputs)
+
+
+def build_vlp_case(
+    inputs: Any,
+    result: Any,
+    *,
+    request: Any = None,
+    pvt_context: Optional[Mapping[str, Any]] = None,
+    pvt_mode: Optional[str] = None,
+    pvt_model: Optional[str] = None,
+    status: Optional[str] = None,
+    limitations: Any = None,
+    warnings: Any = None,
+) -> EngineeringCase:
+    """Build a reproducible case around an already-computed VLP V1 result."""
+    data = vlp_input_to_dict(inputs)
+    pvt: Dict[str, Any] = {}
+    if pvt_mode is not None or pvt_model is not None or pvt_context is not None:
+        pvt = {
+            "mode": pvt_mode or "pressure_dependent",
+            "model": pvt_model or "black_oil_v1",
+            "context": {} if pvt_context is None else dict(pvt_context),
+            "provenance": _plain(getattr(result, "pvt_metadata", {})),
+        }
+    selector = data.get("vlp_model", "beggs_brill")
+    from services import vlp_engine
+    display = vlp_engine.MODEL_DISPLAY.get(selector, selector)
+    display = display.replace(" multiphase", "")
+    return build_case(
+        calculation_type="vlp_v1",
+        request={} if request is None else request,
+        inputs=data,
+        units={
+            "pressure": "psia",
+            "rate": "STB/day",
+            "tubing_id": "in",
+            "depth": "ft",
+            "gor": "scf/STB",
+            "viscosity": "cP",
+            "temperature": "degF",
+            "geothermal_gradient": "degF/100ft",
+            "surface_tension": "dyn/cm",
+        },
+        selectors={"vlp_model": selector},
+        model={"vlp": selector, "engine": display},
+        pvt=pvt,
+        assumptions={
+            "vlp_engine": "VLPEngine V1",
+            "segments": data.get("n_segments", data.get("segments")),
+            "single_rate": True,
+        },
+        result=result,
+        status=status or getattr(result, "status", "CONVERGED"),
+        limitations=limitations if limitations is not None else getattr(result, "limitations", []),
+        warnings=warnings if warnings is not None else getattr(result, "warnings", []),
+        reproducibility={"engine": "VLPEngine", "engine_version": "V1"},
+    )
+
+
+def build_vlp_failure_case(
+    inputs: Any,
+    *,
+    code: str,
+    message: str,
+    request: Any = None,
+    pvt_context: Optional[Mapping[str, Any]] = None,
+    pvt_mode: Optional[str] = None,
+    pvt_model: Optional[str] = None,
+) -> EngineeringCase:
+    """Represent a typed VLP failure without fabricating a result."""
+    return build_vlp_case(
+        inputs,
+        {"error": {"code": str(code), "message": str(message)}},
+        request=request,
+        pvt_context=pvt_context,
+        pvt_mode=pvt_mode,
+        pvt_model=pvt_model,
+        status=code,
+    )
+
+
 def build_nodal_case(
     inputs: Any,
     result: Any,
@@ -891,6 +1082,9 @@ __all__ = [
     "build_choke_case",
     "build_choke_failure_case",
     "nodal_input_to_dict",
+    "vlp_input_to_dict",
+    "build_vlp_case",
+    "build_vlp_failure_case",
     "build_nodal_case",
     "build_nodal_failure_case",
     "build_system_case",
