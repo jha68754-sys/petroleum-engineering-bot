@@ -110,6 +110,22 @@ def test_optimize_case_report_and_replay_are_deterministic():
     assert replay.startswith("Replay comparison: MATCH")
 
 
+def test_optimize_report_does_not_contradict_candidate_feasibility():
+    text, case_id = _run_case(OPT_LEGACY)
+    report, _, report_error = th.handle_case_command(
+        {"text": f"/case report {case_id}"}, None
+    )
+
+    assert report_error is None
+    candidate_block = report.split("Candidate evaluation", 1)[1].split(
+        "Best feasible candidate", 1
+    )[0]
+    first_candidate = candidate_block.split("THP: 200", 1)[0]
+    assert "Engineering classification: INFEASIBLE" in first_candidate
+    assert "Engineering classification: FEASIBLE" not in first_candidate
+    assert "Constraint note: Min pwf" in first_candidate
+
+
 def test_optimize_black_oil_case_preserves_provider_and_replay():
     text, case_id = _run_case(OPT_BLACK_OIL)
     assert "Production Optimization" in text

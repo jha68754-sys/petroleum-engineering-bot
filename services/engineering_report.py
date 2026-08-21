@@ -349,7 +349,13 @@ def _result_error(case: EngineeringCase) -> tuple[str, str] | None:
     return _safe_text(code), _safe_text(message)
 
 
-def _nodal_point_lines(lines: list[str], point: Mapping[str, Any], prefix: str = "") -> None:
+def _nodal_point_lines(
+    lines: list[str],
+    point: Mapping[str, Any],
+    prefix: str = "",
+    *,
+    include_classification: bool = True,
+) -> None:
     if not isinstance(point, Mapping):
         return
     parameter = point.get("parameter_value")
@@ -363,7 +369,7 @@ def _nodal_point_lines(lines: list[str], point: Mapping[str, Any], prefix: str =
         lines.append(f"{prefix}Flowing bottomhole pressure: {_value_text('pwf_op', pwf)}")
     if point.get("residual") is not None:
         lines.append(f"{prefix}Pressure residual: {_value_text('residual', point['residual'])}")
-    if point.get("classification"):
+    if include_classification and point.get("classification"):
         lines.append(f"{prefix}Engineering classification: {_safe_text(point['classification'])}")
     if point.get("solve_error"):
         lines.append(f"{prefix}Calculation note: {_safe_text(point['solve_error'])}")
@@ -428,7 +434,12 @@ def _optimize_result(result: Mapping[str, Any], units: Mapping[str, Any]) -> lis
             lines.append(f"  {variable}: {_value_text('parameter_value', value, units)}")
             if classification:
                 lines.append(f"    Engineering classification: {_safe_text(classification)}")
-            _nodal_point_lines(lines, candidate.get("point", {}), prefix="    ")
+            _nodal_point_lines(
+                lines,
+                candidate.get("point", {}),
+                prefix="    ",
+                include_classification=False,
+            )
             violations = candidate.get("constraint_violations") or []
             for violation in violations:
                 if isinstance(violation, Mapping):
