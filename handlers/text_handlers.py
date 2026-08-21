@@ -55,6 +55,17 @@ from services.engineering_case import (
     replay_matches,
 )
 from services.engineering_report import generate_report_v1
+from services.scenario_comparison import (
+    ComparisonError,
+    ScenarioSpec,
+    build_choke_input,
+    build_system_input,
+    comparison_replay_matches,
+    evaluate_comparison,
+    format_comparison,
+    generate_comparison_report_v1,
+    replay_comparison,
+)
 from logging_config import get_logger
 
 
@@ -204,12 +215,20 @@ logger = get_logger(__name__)
 # database. Cases remain engineering-only and contain no Telegram metadata.
 _ENGINEERING_CASES: Dict[str, EngineeringCase] = {}
 _MAX_ENGINEERING_CASES = 256
+_COMPARISONS: Dict[str, Any] = {}
+_MAX_COMPARISONS = 128
 
 
 def _remember_engineering_case(case: EngineeringCase) -> None:
     _ENGINEERING_CASES[case.case_id] = case
     while len(_ENGINEERING_CASES) > _MAX_ENGINEERING_CASES:
         _ENGINEERING_CASES.pop(next(iter(_ENGINEERING_CASES)))
+
+
+def _remember_comparison(comparison: Any) -> None:
+    _COMPARISONS[comparison.comparison_id] = comparison
+    while len(_COMPARISONS) > _MAX_COMPARISONS:
+        _COMPARISONS.pop(next(iter(_COMPARISONS)))
 
 
 def _case_flags(raw_tokens: Dict[str, str]) -> Tuple[bool, bool]:
@@ -373,6 +392,11 @@ def handle_calc(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Opti
         # the verified Nodal engine; string keys kept first like IPR/VLP.
         text, png, caption = handle_calc_optimize(
             {"text": "/optimize " + args_str}, tg
+        )
+        return text, png, caption
+    if formula_key.lower() in ("compare", "comparison"):
+        text, png, caption = handle_calc_compare(
+            {"text": "/compare " + args_str}, tg
         )
         return text, png, caption
     if formula_key.lower() in ("vlp_compare", "vlp_compare_models"):
@@ -747,6 +771,152 @@ def handle_calc_choke(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes]
             return generate_report_v1(engineering_case), None, None
         formatted += f"\n\nEngineering Case ID: {engineering_case.case_id}"
     return formatted, None, None
+
+
+_COMPARISON_USAGE = (
+    "Usage: /calc compare type=choke|system "
+    "scenario=<label>:<override>=<value> scenario=<label>:<override>=<value> "
+    "<common key=value ...>\n"
+    "       /comparison report <comparison_id>\n"
+    "       /comparison replay <comparison_id>\n"
+    "       /comparison json <comparison_id>"
+)
+
+
+def _comparison_error_code(message: str) -> str:
+    lowered = str(message).lower()
+    if "missing" in lowered or "required" in lowered:
+        return "MISSING_DATA"
+    if "unsupported pvt_model" in lowered or "unsupported pvt_mode" in lowered:
+        return "UNSUPPORTED_PVT_SELECTOR"
+    if "physically" in lowered:
+        return "PHYSICALLY_INVALID_STATE"
+    return "INVALID_INPUT"
+
+
+def _parse_scenario_descriptor(raw: str) -> Tuple[str, Dict[str, str]]:
+    pieces = str(raw).split(":")
+    label = pieces[0].strip()
+    overrides: Dict[str, str] = {}
+    for piece in pieces[1:]:
+        if "=" not in piece:
+            raise ComparisonError("INVALID_INPUT", "scenario overrides must use key=value.")
+        key, value = piece.split("=", 1)
+        key = key.strip().lower()
+        value = value.strip()
+        if not key or not value:
+            raise ComparisonError("INVALID_INPUT", "scenario overrides must use key=value.")
+        if key in overrides:
+            raise ComparisonError("INVALID_INPUT", f"duplicate scenario override: {key}.")
+        overrides[key] = value
+    return label, overrides
+
+
+def _build_comparison_from_text(args_str: str):
+    tokens = args_str.split()
+    common: Dict[str, str] = {}
+    raw_scenarios: List[str] = []
+    for token in tokens:
+        if "=" not in token:
+            raise ComparisonError("INVALID_INPUT", f"expected key=value, got {token}.")
+        key, value = token.split("=", 1)
+        key = key.strip().lower()
+        value = value.strip()
+        if key == "scenario":
+            raw_scenarios.append(value)
+        elif key in common:
+            raise ComparisonError("INVALID_INPUT", f"duplicate common key: {key}.")
+        else:
+            common[key] = value
+    calculation_type = str(common.pop("type", "")).strip().lower()
+    if calculation_type not in {"choke", "system"}:
+        raise ComparisonError("UNSUPPORTED_CALCULATION", "type must be exactly choke or system.")
+    if len(raw_scenarios) < 2:
+        raise ComparisonError("MISSING_DATA", "comparison requires at least two scenario=... values.")
+
+    specs: List[ScenarioSpec] = []
+    request_scenarios: List[Dict[str, Any]] = []
+    for raw in raw_scenarios:
+        label, overrides = _parse_scenario_descriptor(raw)
+        merged = dict(common)
+        merged.update(overrides)
+        pvt_kwargs = {key: value for key, value in merged.items() if key.startswith("pvt_")}
+        engine_kwargs = {key: value for key, value in merged.items() if not key.startswith("pvt_")}
+        pvt_provider, pvt_context, pvt_error = _bind_black_oil_pvt(pvt_kwargs)
+        validation_error = None
+        if pvt_error:
+            validation_error = (_comparison_error_code(pvt_error), pvt_error.removeprefix("Error: ").strip())
+        try:
+            if calculation_type == "choke":
+                inputs = build_choke_input(engine_kwargs)
+            else:
+                inputs = build_system_input(engine_kwargs)
+        except ComparisonError as exc:
+            inputs = dict(engine_kwargs)
+            validation_error = (exc.code, exc.message)
+        request = {
+            "calculation": calculation_type,
+            "scenario": label,
+            "arguments": dict(merged),
+        }
+        request_scenarios.append({"label": label, "arguments": dict(merged)})
+        specs.append(ScenarioSpec(
+            label=label,
+            calculation_type=calculation_type,
+            inputs=inputs,
+            request=request,
+            pvt_provider=pvt_provider,
+            pvt_context=pvt_context,
+            pvt_mode=pvt_kwargs.get("pvt_mode"),
+            pvt_model=pvt_kwargs.get("pvt_model"),
+            validation_error=validation_error,
+        ))
+    comparison = evaluate_comparison(
+        specs,
+        request={"calculation": calculation_type, "scenarios": request_scenarios},
+    )
+    return comparison
+
+
+
+def handle_calc_compare(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
+    """Evaluate labeled scenarios through the released System or Choke engines."""
+    text = message.get("text", "")
+    parts = text.split(None, 1)
+    if len(parts) < 2:
+        return _COMPARISON_USAGE, None, None
+    try:
+        comparison = _build_comparison_from_text(parts[1])
+    except ComparisonError as exc:
+        return f"Error: {exc.code}: {exc.message}\n\n{_COMPARISON_USAGE}", None, None
+    _remember_comparison(comparison)
+    return format_comparison(comparison), None, None
+
+
+@registry.register("comparison")
+def handle_comparison_command(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
+    """Display, serialize, or replay an in-process Scenario Comparison."""
+    text = message.get("text", "")
+    parts = text.split(None, 2)
+    if len(parts) < 3 or parts[1].lower() not in {"report", "replay", "json"}:
+        return _COMPARISON_USAGE, None, None
+    action = parts[1].lower()
+    comparison_id = parts[2].strip().split()[0]
+    comparison = _COMPARISONS.get(comparison_id)
+    if comparison is None:
+        return f"Error: COMPARISON_NOT_FOUND: no in-process comparison for {comparison_id}.", None, None
+    if action == "report":
+        return generate_comparison_report_v1(comparison), None, None
+    if action == "json":
+        return comparison.to_json(), None, None
+    try:
+        replayed = replay_comparison(comparison)
+    except (CaseReplayError, ComparisonError, TypeError, ValueError) as exc:
+        return f"Error: COMPARISON_REPLAY_FAILED: {exc}", None, None
+    match = comparison_replay_matches(comparison, replayed)
+    _remember_comparison(replayed)
+    prefix = "Replay comparison: MATCH" if match else "Replay comparison: DIFFERENT"
+    return prefix + "\n\n" + generate_comparison_report_v1(replayed), None, None
 
 
 _CASE_USAGE = (
