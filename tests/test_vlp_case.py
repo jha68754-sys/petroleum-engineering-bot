@@ -109,6 +109,8 @@ def test_vlp_case_report_preserves_model_units_and_honesty():
     assert "vlp_v1" in report
     assert "beggs_brill" in report
     assert "CONVERGED" in report
+    assert "The calculation did not produce a valid engineering operating result." not in report
+    assert f'"pwf": {case.result["pwf"]}' in report
     assert "psia" in report
     assert "not measured field data" in report
     assert "Traceback" not in report

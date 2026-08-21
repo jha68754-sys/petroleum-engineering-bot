@@ -13,6 +13,15 @@ _REPORT_NOTE = (
     "a production forecast, an autonomous optimization, or an operating instruction."
 )
 
+# Released engines use typed success statuses rather than a single universal
+# ``OK`` value.  An explicit error payload always remains a failure, even when
+# a caller supplies a success-looking status.
+_REPORT_SUCCESS_STATUSES = frozenset({
+    "OK",
+    "CONVERGED",
+    "UNIQUE_OPERATING_POINT",
+})
+
 
 def _pretty(value: Any) -> str:
     return json.dumps(
@@ -55,7 +64,7 @@ def generate_report_v1(case: EngineeringCase) -> str:
     lines.extend(_section("Assumptions", case.assumptions))
 
     lines.extend(["## Result", ""])
-    if case.status != "OK" or (
+    if case.status not in _REPORT_SUCCESS_STATUSES or (
         isinstance(case.result, dict) and "error" in case.result
     ):
         lines.extend([
