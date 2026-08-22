@@ -121,6 +121,12 @@ TEMP_DIR: Path = Path(os.getenv("TEMP_DIR", tempfile.mkdtemp(prefix="pvt_bot_"))
 # Path for persistent offset storage (survives Railway restarts)
 OFFSET_STATE_FILE: Path = Path(os.getenv("OFFSET_STATE_FILE", "offset_state.json"))
 
+# SQLite path for the Engineering Case Registry. Set this to a mounted
+# persistent-volume path in Railway for survival across redeployments.
+ENGINEERING_CASE_DB_PATH: Path = Path(
+    os.getenv("ENGINEERING_CASE_DB_PATH", "engineering_cases.sqlite3")
+)
+
 # ─────────────────────────────────────────────────────────────────────
 #  VISUALIZATION
 # ─────────────────────────────────────────────────────────────────────

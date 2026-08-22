@@ -65,6 +65,11 @@ from services.engineering_case import (
     replay_matches,
 )
 from services.engineering_report import generate_report_v1
+from services.engineering_case_registry import (
+    CaseIntegrityError,
+    CaseNotFoundError,
+    EngineeringCaseRegistry,
+)
 from services.scenario_comparison import (
     ComparisonError,
     ScenarioSpec,
@@ -221,10 +226,11 @@ def _provider_failure_message(prefix: str, error: Exception) -> str:
 
 logger = get_logger(__name__)
 
-# Increment 13 deliberately uses an in-process bounded registry rather than a
-# database. Cases remain engineering-only and contain no Telegram metadata.
+# The in-process cache remains for backward compatibility and fast access.
+# The SQLite registry is the durable source of truth across bot restarts.
 _ENGINEERING_CASES: Dict[str, EngineeringCase] = {}
 _MAX_ENGINEERING_CASES = 256
+_CASE_REGISTRY = EngineeringCaseRegistry.from_environment()
 _COMPARISONS: Dict[str, Any] = {}
 _MAX_COMPARISONS = 128
 
@@ -233,6 +239,17 @@ def _remember_engineering_case(case: EngineeringCase) -> None:
     _ENGINEERING_CASES[case.case_id] = case
     while len(_ENGINEERING_CASES) > _MAX_ENGINEERING_CASES:
         _ENGINEERING_CASES.pop(next(iter(_ENGINEERING_CASES)))
+    # Persist the immutable case envelope and its readable engineering report.
+    # Keeping this in the common remember path covers every released engine
+    # without placing equations or storage logic inside individual handlers.
+    try:
+        _CASE_REGISTRY.save_case(case, report_text=generate_report_v1(case))
+    except ValueError:
+        # A deterministic replay may produce the same case identity while its
+        # newly rendered artifact differs in presentation.  The original
+        # durable report remains authoritative; the in-process cache is still
+        # refreshed for backward compatibility.
+        pass
 
 
 def _remember_comparison(comparison: Any) -> None:
@@ -993,6 +1010,7 @@ def handle_comparison_command(message: Dict[str, Any], tg) -> Tuple[str, Optiona
 _CASE_USAGE = (
     "Usage: /case report <case_id>\n"
     "       /case replay <case_id>\n"
+    "       /case audit <case_id>\n"
     "       /case json <case_id>"
 )
 
@@ -1004,28 +1022,78 @@ def _case_id_from_args(args_str: str) -> str:
 
 @registry.register("case")
 def handle_case_command(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
-    """Display, serialize, or replay an in-process Engineering Case."""
+    """Display, serialize, audit, or replay a persistent Engineering Case."""
     text = message.get("text", "")
     parts = text.split(None, 2)
-    if len(parts) < 3 or parts[1].lower() not in {"report", "replay", "json"}:
+    if len(parts) < 3 or parts[1].lower() not in {"report", "replay", "audit", "json"}:
         return _CASE_USAGE, None, None
     action = parts[1].lower()
     case_id = parts[2].strip().split()[0]
-    case = _ENGINEERING_CASES.get(case_id)
-    if case is None:
-        return f"Error: CASE_NOT_FOUND: no in-process engineering case for {case_id}.", None, None
+
+    if action == "audit":
+        try:
+            return _CASE_REGISTRY.format_audit(case_id), None, None
+        except CaseNotFoundError as exc:
+            return f"Error: {exc}", None, None
+        except CaseIntegrityError as exc:
+            return f"Error: {exc}", None, None
+
+    case = None
+    try:
+        case = _CASE_REGISTRY.get_case(
+            case_id,
+            record_event=(action in {"report", "replay"}),
+            action=action,
+        )
+    except CaseNotFoundError:
+        case = _ENGINEERING_CASES.get(case_id.lower()) or _ENGINEERING_CASES.get(case_id)
+        if case is None:
+            # The registry records the failure for persistent auditability.
+            try:
+                _CASE_REGISTRY.record_event(case_id, "CASE_NOT_FOUND", {"action": action})
+            except (CaseNotFoundError, ValueError):
+                try:
+                    _CASE_REGISTRY._missing_event(case_id.lower(), action)  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+            return f"Error: CASE_NOT_FOUND: no engineering case for {case_id}.", None, None
+    except CaseIntegrityError as exc:
+        return f"Error: {exc}", None, None
+
     if action == "report":
-        return generate_report_v1(case), None, None
+        try:
+            report = _CASE_REGISTRY.get_report(case.case_id)
+        except (CaseNotFoundError, CaseIntegrityError):
+            report = ""
+        if not report:
+            report = generate_report_v1(case)
+        try:
+            _CASE_REGISTRY.record_event(case.case_id, "REPORT_REQUESTED", {"action": "report"})
+        except (CaseNotFoundError, ValueError):
+            pass
+        return report, None, None
     if action == "json":
         return (
             "Raw JSON export is not available to users. "
             "Use /case report <case_id> to view the readable engineering report."
         ), None, None
     try:
+        _CASE_REGISTRY.record_event(case.case_id, "REPLAY_REQUESTED", {"action": "replay"})
+    except (CaseNotFoundError, ValueError):
+        pass
+    try:
         replayed = replay_case(case)
     except CaseReplayError as exc:
+        try:
+            _CASE_REGISTRY.record_replay_result(case.case_id, matched=False, result=None)
+        except (CaseNotFoundError, ValueError):
+            pass
         return f"Error: CASE_REPLAY_FAILED: {exc}", None, None
     match = replay_matches(case, replayed)
+    try:
+        _CASE_REGISTRY.record_replay_result(case.case_id, matched=match, result=replayed.result)
+    except (CaseNotFoundError, ValueError):
+        pass
     _remember_engineering_case(replayed)
     report = generate_report_v1(replayed)
     prefix = "Replay comparison: MATCH" if match else "Replay comparison: DIFFERENT"
