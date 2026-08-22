@@ -229,7 +229,7 @@ class PetroleumKnowledgeLayer:
             "what is", "what does", "define", "definition", "meaning", "unit", "units",
             "formula", "equation", "variable", "variables", "related", "where is", "used",
             "difference", "compare", "versus", " vs ", "explain", "calculate", "compute",
-            "ما معنى", "شن معنى", "شنو معنى", "ماهو", "ما هو", "عرف", "عرّف", "اشرح",
+            "ما معنى", "شن معنى", "شنو معنى", "ماهو", "ما هو", "عرف", "عرفلي", "عرّف", "اشرح",
             "وحدة", "وحده", "معادلة", "قانون", "الفرق", "قارن", "مرتبط", "يستخدم", "احسب", "حساب",
         )
         return any(
@@ -270,7 +270,7 @@ class PetroleumKnowledgeLayer:
             r"^(?:what is|what does)\s+(?:the\s+)?(?:definition of|meaning of|unit of|formula for)\s+",
             r"^(?:the\s+)?(?:definition of|meaning of|unit of|formula for)\s+",
             r"^(?:what is|what does|define|explain)\s+",
-            r"^(?:ما معني|شن معني|شنو معني|ماهو|ما هو|عرف|اشرح|وحده|معادله|الفرق بين|قارن)\s+",
+            r"^(?:ما معني|شن معني|شنو معني|ماهو|ما هو|عرفلي|عرف|اشرح|وحده|معادله|الفرق بين|قارن)\s+",
             r"^(?:شن|شنو)\s+(?:وحده|معني|معادله)\s+",
         )
         topic = normalized
@@ -453,7 +453,7 @@ class PetroleumKnowledgeLayer:
             "the", "of", "is", "does", "what", "mean", "give", "me", "to", "and", "versus", "vs",
             "unit", "units", "formula", "equation", "variable", "variables",
             "related", "relationship", "relation", "where", "used", "difference", "between", "calculate", "compute",
-            "ما", "هو", "هي", "شن", "شنو", "معني", "وحده", "معادله", "الفرق", "بين",
+            "ما", "هو", "هي", "شن", "شنو", "معني", "عرفلي", "وحده", "معادله", "الفرق", "بين",
             "مرتبط", "يستخدم", "اشرح", "عرف", "احسب", "حساب", "و",
         }
         for word in stopwords:
