@@ -473,8 +473,8 @@ class PetroleumKnowledgeLayer:
             topic = topic.replace(alias, " ")
         return bool(_SPACE.sub(" ", topic).strip())
 
-    def answer(self, text: str) -> Optional[str]:
-        """Answer a knowledge question or return None so the normal AI path can continue."""
+    def _answer_single(self, text: str) -> Optional[str]:
+        """Answer one knowledge question or return None for the general AI path."""
         if not self._looks_like_knowledge_question(text):
             return None
         intent = self._intent(text)
@@ -510,6 +510,54 @@ class PetroleumKnowledgeLayer:
         if intent == "calculation":
             return self._calculation_bridge(records)
         return self._format_definition(record)
+
+    @staticmethod
+    def _split_questions(text: str) -> List[str]:
+        """Split an explicit batch of questions without fuzzy semantic guessing."""
+        raw = str(text or "").strip()
+        if not raw:
+            return []
+        # Newlines are the primary batch boundary. The prefix lookahead also
+        # handles clients that flatten pasted multi-line text into one line.
+        parts = re.split(r"(?:\r?\n+)|(?<=\?|؟|\.)\s+", raw)
+        expanded: List[str] = []
+        prefix = re.compile(
+            r"(?i)(?=what\s+(?:is|does)|define\b|"
+            r"explain\b|calculate\b|compute\b|"
+            r"ما\s+معنى|شن\s+معنى|شنو\s+معنى|الفرق\b|قارن\b|"
+            r"عرفلي?\b|اشرح\b|شن\s+وحدة|شنو\s+وحدة)"
+        )
+        for part in parts:
+            part = part.strip(" \\t\\r\\n")
+            if not part:
+                continue
+            # Do not split a single sentence. This second pass is only useful
+            # when two known question prefixes are present in the same line.
+            matches = list(prefix.finditer(part))
+            if len(matches) > 1:
+                starts = [match.start() for match in matches]
+                for start, end in zip(starts, starts[1:] + [len(part)]):
+                    fragment = part[start:end].strip()
+                    if fragment:
+                        expanded.append(fragment)
+            else:
+                expanded.append(part)
+        return expanded
+
+    def answer(self, text: str) -> Optional[str]:
+        """Answer one question or an explicit all-knowledge batch."""
+        questions = self._split_questions(text)
+        if len(questions) <= 1:
+            return self._answer_single(text)
+        answers = [self._answer_single(question) for question in questions]
+        # A mixed natural message still belongs to the general AI path. A
+        # fully recognized batch is answered deterministically as one reply.
+        if any(answer is None for answer in answers):
+            return None
+        sections = []
+        for index, (question, answer) in enumerate(zip(questions, answers), start=1):
+            sections.append(f"Question {index}: {question}\n\n{answer}")
+        return "\n\n====================\n\n".join(sections)
 
 
 _DEFAULT_LAYER = PetroleumKnowledgeLayer()

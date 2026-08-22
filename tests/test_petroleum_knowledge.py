@@ -309,3 +309,38 @@ def test_natural_queries_for_required_terms_are_supported():
         response = answer_knowledge_question(query)
         assert response is not None, query
         assert "I do not have a verified Petroleum Engineering record" not in response, query
+
+
+def test_batch_of_newline_separated_questions_is_answered_independently():
+    batch = "\n".join([
+        "What is Bo?",
+        "شن وحدة Rs؟",
+        "الفرق بين Bo و Bg؟",
+        "عرفلي Pwf و Pwh",
+        "What is the unit of permeability?",
+        "Calculate Bo",
+    ])
+    response = answer_knowledge_question(batch)
+    assert response is not None
+    assert response.count("Question ") == 6
+    assert "Oil Formation Volume Factor" in response
+    assert "Common unit: scf/STB" in response
+    assert "Bo vs Bg" in response
+    assert "Flowing Bottomhole Pressure" in response
+    assert "Wellhead Pressure" in response
+    assert "Calculation bridge for Bo" in response
+
+
+def test_flattened_question_batch_is_split_at_question_boundaries():
+    batch = "What is Bo? What is Bg? شن وحدة Rs؟ What is Pwf?"
+    response = answer_knowledge_question(batch)
+    assert response is not None
+    assert response.count("Question ") == 4
+    assert "Oil Formation Volume Factor" in response
+    assert "Gas Formation Volume Factor" in response
+    assert "Flowing Bottomhole Pressure" in response
+
+
+def test_mixed_general_text_is_not_forced_into_batch_knowledge_response():
+    batch = "What is Bo? Please summarize my uploaded report."
+    assert answer_knowledge_question(batch) is None
