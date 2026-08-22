@@ -450,6 +450,14 @@ class PetroleumKnowledgeLayer:
         }
         route = routes.get(record.canonical_id)
         if route:
+            if record.canonical_id in {"bo", "bg", "bw", "rs"}:
+                return (
+                    f"Calculation bridge for {record.symbol}:\n"
+                    f"There is no standalone /calc {record.symbol.lower()} command in the released bot. "
+                    f"{record.symbol} is evaluated as a PVT property inside an existing deterministic path: {route}.\n"
+                    "Provide the required pressure, temperature, fluid, and model inputs, then read the property provenance, units, limitations, and status returned by that engine.\n\n"
+                    "The Knowledge Layer does not create a second calculator or invent a number."
+                )
             return (
                 f"Calculation bridge for {record.symbol}:\n"
                 f"Use the released deterministic path: {route}.\n\n"
