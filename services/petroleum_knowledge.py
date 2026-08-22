@@ -394,14 +394,31 @@ class PetroleumKnowledgeLayer:
         if len(records) < 2:
             return self._format_definition(records[0]) if records else self._unknown_response("")
         left, right = records[0], records[1]
+        if {left.canonical_id, right.canonical_id} == {"bhp", "pwf"}:
+            distinction = (
+                "BHP is a broader bottomhole-pressure term whose condition must be stated; "
+                "Pwf normally denotes flowing bottomhole pressure. Local reporting conventions should be stated."
+            )
+            distinction_ar = (
+                "BHP مصطلح أوسع لضغط قاع البئر ويجب تحديد حالته، بينما يدل Pwf عادةً على ضغط قاع البئر أثناء الجريان. "
+                "يجب توضيح اصطلاح التقرير المحلي."
+            )
+        else:
+            distinction = (
+                f"{left.symbol} is defined as: {left.definition} "
+                f"{right.symbol} is defined as: {right.definition}"
+            )
+            distinction_ar = (
+                f"{left.symbol}: {left.definition_ar} {right.symbol}: {right.definition_ar}"
+            )
         return (
             f"{left.symbol} vs {right.symbol}\n"
             f"{left.canonical_english_name} — {left.canonical_arabic_name} مقابل "
             f"{right.canonical_english_name} — {right.canonical_arabic_name}\n\n"
             f"{left.symbol}: {left.definition_ar}\n"
-            f"""{right.symbol}: {right.definition_ar}\n\n"""
-            f"Main distinction: {left.symbol} describes {left.engineering_meaning.lower()} "
-            f"{right.symbol} describes {right.engineering_meaning.lower()}\n\n"
+            f"{right.symbol}: {right.definition_ar}\n\n"
+            f"Main distinction: {distinction}\n"
+            f"التوضيح الرئيسي: {distinction_ar}\n\n"
             f"Units: {left.symbol} = {left.unit}; {right.symbol} = {right.unit}\n"
             f"Engineering domains: {left.domain}; {right.domain}\n\n"
             "The two terms may be used together in petroleum calculations, but they are not interchangeable."

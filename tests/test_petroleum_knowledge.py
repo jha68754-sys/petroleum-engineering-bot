@@ -344,3 +344,29 @@ def test_flattened_question_batch_is_split_at_question_boundaries():
 def test_mixed_general_text_is_not_forced_into_batch_knowledge_response():
     batch = "What is Bo? Please summarize my uploaded report."
     assert answer_knowledge_question(batch) is None
+
+
+def test_si_units_survive_telegram_text_cleaning():
+    from main import clean_text
+
+    text = "SI unit: m³/m³; permeability: m²; viscosity: Pa·s; pressure: MPa(a)"
+    cleaned = clean_text(text)
+    assert "m³/m³" in cleaned
+    assert "m²" in cleaned
+    assert "Pa·s" in cleaned
+    assert "MPa(a)" in cleaned
+
+
+def test_comparison_wording_is_readable_for_bo_and_bg():
+    response = answer_knowledge_question("What is the difference between Bo and Bg?")
+    assert response is not None
+    assert "Bo is defined as:" in response
+    assert "Bg is defined as:" in response
+    assert "describes bo" not in response.lower()
+
+
+def test_bhp_and_pwf_comparison_states_condition_boundary():
+    response = answer_knowledge_question("شن الفرق بين BHP و Pwf؟")
+    assert response is not None
+    assert "BHP is a broader bottomhole-pressure term" in response
+    assert "يجب تحديد حالته" in response
