@@ -70,6 +70,7 @@ from services.engineering_case_registry import (
     CaseNotFoundError,
     EngineeringCaseRegistry,
 )
+from services.petroleum_knowledge import answer_knowledge_question, knowledge_usage
 from services.scenario_comparison import (
     ComparisonError,
     ScenarioSpec,
@@ -282,6 +283,17 @@ def handle_help(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Opti
     """عرض قائمة الأوامر الهندسية التفصيلية."""
     from constants import HELP_MESSAGE
     return HELP_MESSAGE, None, None
+
+
+@registry.register("define", aliases=["definition", "meaning"])
+def handle_define(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
+    """Explain a verified petroleum-engineering term deterministically."""
+    text = message.get("text", "")
+    parts = text.split(None, 1)
+    if len(parts) < 2 or not parts[1].strip():
+        return knowledge_usage(), None, None
+    answer = answer_knowledge_question(parts[1].strip())
+    return answer or knowledge_usage(), None, None
 
 
 @registry.register("reset", aliases=["clear", "clear_context"])

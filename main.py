@@ -54,6 +54,7 @@ from services.pvt_engine import (
 )
 from services.calculation_engine import parse_kv_args
 from services.visualization import format_plot_response
+from services.petroleum_knowledge import answer_knowledge_question
 # Glossary service removed
 from services.file_processing import (
     detect_file_type,
@@ -413,6 +414,19 @@ def process_message(
                 "7. Separator Test\n8. Viscosity Test\n9. EOS Tuning\n\n"
                 "Use /classify after getting GOR and API.\n"
                 "Use /pvto or /pvtg for simulation table requirements.",
+                reply_to_message_id=message_id,
+            )
+            return
+
+        # --- Free text: deterministic Petroleum Knowledge Layer first ---
+        # Recognized terminology questions are answered from the reviewed,
+        # version-controlled knowledge dataset. Other free text keeps the
+        # existing AI-assisted path unchanged.
+        knowledge_answer = answer_knowledge_question(text)
+        if knowledge_answer is not None:
+            tg.send_message(
+                chat_id,
+                clean_text(knowledge_answer),
                 reply_to_message_id=message_id,
             )
             return
