@@ -22,6 +22,16 @@ def test_engineering_meaning_intent_is_distinct_from_definition():
     assert "Source basis:" in response
 
 
+def test_definition_and_unit_are_composed_together():
+    response = answer_engineering_question("Give me the definition and unit of Bo.")
+    assert response is not None
+    assert "Definition:" in response
+    assert "Engineering meaning:" in response
+    assert "Common unit: rb/STB" in response
+    assert "SI unit where applicable: m³/m³" in response
+    assert "Source basis:" in response
+
+
 def test_unit_intent_understands_informal_arabic_request():
     response = answer_engineering_question("نبي وحدة Rs")
     assert response is not None

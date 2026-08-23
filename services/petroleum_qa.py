@@ -107,6 +107,8 @@ class EngineeringQALayer:
             return "related"
         if self._has_phrase(text, "relationship", "relation", "علاقة", "العلاقه"):
             return "relationship"
+        if self._has_phrase(text, "definition and unit", "definition unit", "meaning and unit", "تعريف ووحدة", "معنى ووحدة", "تعريف و وحدة", "معنى و وحدة"):
+            return "definition_unit"
         if self._has_phrase(text, "unit", "units", "وحدة", "وحده"):
             return "unit"
         if self._has_phrase(text, "formula", "equation", "variable", "variables", "معادلة", "قانون", "صيغة", "الصيغة"):
@@ -122,6 +124,20 @@ class EngineeringQALayer:
         if self._has_phrase(text, "explain", "in simple terms", "simply", "اشرح", "ببساطة", "بطريقة بسيطة"):
             return "explanation"
         return "definition"
+
+    def _format_definition_and_unit(self, record: KnowledgeRecord) -> str:
+        return (
+            f"{record.symbol} — {record.canonical_english_name}\n"
+            f"{record.canonical_arabic_name}\n\n"
+            "Definition:\n"
+            f"{record.definition}\n{record.definition_ar}\n\n"
+            "Engineering meaning:\n"
+            f"{record.engineering_meaning}\n{record.engineering_meaning_ar}\n\n"
+            f"Common unit: {record.unit}\n"
+            f"SI unit where applicable: {record.si_unit}\n"
+            f"Common field conventions: {', '.join(record.common_field_units) or record.unit}\n"
+            f"Verification status: {record.verification_status}"
+        ) + self._source_footer([record])
 
     def _format_engineering_meaning(self, records: Sequence[KnowledgeRecord]) -> str:
         sections = []
@@ -276,6 +292,9 @@ class EngineeringQALayer:
                     answer += self._source_footer(records[:4])
                 return answer, True
             return self._format_relationship(records), True
+        if intent == "definition_unit":
+            if records:
+                return self._format_definition_and_unit(records[0]), True
         if intent == "unit":
             if records:
                 return self.knowledge._format_unit(records[0]) + self._source_footer(records[:1]), True
