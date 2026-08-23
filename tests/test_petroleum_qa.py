@@ -72,6 +72,8 @@ def test_context_question_connects_rs_to_pb_without_calculating():
     assert "Pressure condition: below Pb" in response
     assert "Rs response:" in response
     assert "below Pb it declines as gas evolves" in response
+    assert "استجابة Rs: عند انخفاض الضغط تحت Pb، تنخفض Rs" in response
+    assert "استجابة Rs: Above Pb" not in response
     assert "ليست حسابًا عدديًا" in response
 
 

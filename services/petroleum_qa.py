@@ -169,7 +169,8 @@ class EngineeringQALayer:
             lines = [
                 "Pressure condition: below Pb",
                 f"Rs response: {rs.formula or rs.engineering_meaning}",
-                f"استجابة Rs: {rs.formula or rs.engineering_meaning_ar}",
+                "استجابة Rs: عند انخفاض الضغط تحت Pb، تنخفض Rs مع تحرر الغاز من المحلول. "
+                f"{rs.engineering_meaning_ar}",
                 "",
                 f"Pb meaning: {pb.engineering_meaning}",
                 f"معنى Pb: {pb.engineering_meaning_ar}",
@@ -202,7 +203,8 @@ class EngineeringQALayer:
                 f"Rs relationship: {rs.formula or rs.engineering_meaning}\n"
                 f"Pb role: {pb.engineering_meaning}\n\n"
                 "العلاقة بين Rs وPb مرتبطة بحد التشبع في PVT النفط.\n"
-                f"علاقة Rs: {rs.formula or rs.engineering_meaning_ar}\n"
+                "علاقة Rs: تحت Pb تنخفض Rs مع تحرر الغاز من المحلول. "
+                f"{rs.engineering_meaning_ar}\n"
                 f"دور Pb: {pb.engineering_meaning_ar}\n\n"
                 "No numerical value is inferred without a defined PVT state and method."
                 + self._source_footer(records)
