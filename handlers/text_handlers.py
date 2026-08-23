@@ -258,6 +258,15 @@ def _remember_comparison(comparison: Any) -> None:
     _COMPARISONS[comparison.comparison_id] = comparison
     while len(_COMPARISONS) > _MAX_COMPARISONS:
         _COMPARISONS.pop(next(iter(_COMPARISONS)))
+    try:
+        _CASE_REGISTRY.save_comparison(
+            comparison,
+            report_text=generate_comparison_report_v1(comparison),
+        )
+    except ValueError as exc:
+        # Keep the established in-process path alive for backward compatibility,
+        # but make persistence failures visible instead of silently claiming durability.
+        logger.warning("Scenario comparison persistence failed: %s", exc)
 
 
 def _case_flags(raw_tokens: Dict[str, str]) -> Tuple[bool, bool]:
@@ -996,25 +1005,65 @@ def handle_calc_compare(message: Dict[str, Any], tg) -> Tuple[str, Optional[byte
 
 @registry.register("comparison")
 def handle_comparison_command(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Optional[str]]:
-    """Display, serialize, or replay an in-process Scenario Comparison."""
+    """Display, serialize, or replay a persistent Scenario Comparison."""
     text = message.get("text", "")
     parts = text.split(None, 2)
     if len(parts) < 3 or parts[1].lower() not in {"report", "replay", "json"}:
         return _COMPARISON_USAGE, None, None
     action = parts[1].lower()
     comparison_id = parts[2].strip().split()[0]
-    comparison = _COMPARISONS.get(comparison_id)
+    comparison = None
+    try:
+        comparison = _CASE_REGISTRY.get_comparison(
+            comparison_id,
+            record_event=True,
+            action=action,
+        )
+    except CaseNotFoundError:
+        comparison = _COMPARISONS.get(comparison_id)
+    except CaseIntegrityError as exc:
+        return f"Error: {exc}", None, None
     if comparison is None:
-        return f"Error: COMPARISON_NOT_FOUND: no in-process comparison for {comparison_id}.", None, None
+        try:
+            _CASE_REGISTRY._comparison_missing_event(comparison_id, action)  # type: ignore[attr-defined]
+        except (CaseNotFoundError, ValueError):
+            pass
+        return f"Error: COMPARISON_NOT_FOUND: no scenario comparison for {comparison_id}.", None, None
     if action == "report":
-        return generate_comparison_report_v1(comparison), None, None
+        try:
+            report = _CASE_REGISTRY.get_comparison_report(comparison.comparison_id, record_event=True)
+        except (CaseNotFoundError, CaseIntegrityError):
+            report = ""
+        return (report or generate_comparison_report_v1(comparison)), None, None
     if action == "json":
+        # Explicit JSON remains available for technical callers; ordinary reports
+        # remain human-readable and do not expose this representation by default.
         return comparison.to_json(), None, None
     try:
+        _CASE_REGISTRY.record_comparison_event(
+            comparison.comparison_id,
+            "COMPARISON_REPLAY_REQUESTED",
+        )
         replayed = replay_comparison(comparison)
     except (CaseReplayError, ComparisonError, TypeError, ValueError) as exc:
+        try:
+            _CASE_REGISTRY.record_comparison_replay_result(
+                comparison.comparison_id,
+                matched=False,
+                result={"error": str(exc)},
+            )
+        except (CaseNotFoundError, ValueError):
+            pass
         return f"Error: COMPARISON_REPLAY_FAILED: {exc}", None, None
     match = comparison_replay_matches(comparison, replayed)
+    try:
+        _CASE_REGISTRY.record_comparison_replay_result(
+            comparison.comparison_id,
+            matched=match,
+            result=replayed.to_dict(),
+        )
+    except (CaseNotFoundError, ValueError):
+        pass
     _remember_comparison(replayed)
     prefix = "Replay comparison: MATCH" if match else "Replay comparison: DIFFERENT"
     return prefix + "\n\n" + generate_comparison_report_v1(replayed), None, None

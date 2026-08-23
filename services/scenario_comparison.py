@@ -116,6 +116,47 @@ class ScenarioComparison:
             separators=(",", ":"), allow_nan=False,
         )
 
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "ScenarioComparison":
+        """Rebuild a comparison from its canonical persisted envelope."""
+        if not isinstance(payload, Mapping):
+            raise TypeError("scenario comparison payload must be a mapping")
+        release = str(payload.get("release") or COMPARISON_RELEASE)
+        if release != COMPARISON_RELEASE:
+            raise ValueError(f"unsupported scenario comparison release: {release}")
+        raw_scenarios = payload.get("scenarios")
+        if not isinstance(raw_scenarios, list) or len(raw_scenarios) < 2:
+            raise ValueError("scenario comparison payload must contain at least two scenarios")
+        outcomes = []
+        from services.engineering_case import EngineeringCase
+        for item in raw_scenarios:
+            if not isinstance(item, Mapping):
+                raise ValueError("scenario comparison scenario entry is invalid")
+            label = str(item.get("label", "")).strip()
+            raw_case = item.get("case")
+            if not label or not isinstance(raw_case, Mapping):
+                raise ValueError("scenario comparison scenario entry is incomplete")
+            case = EngineeringCase.from_dict(raw_case)
+            stored_case_id = str(raw_case.get("case_id", "")).strip().lower()
+            if not stored_case_id or stored_case_id != case.case_id.lower():
+                raise ValueError("scenario comparison scenario case identity is invalid")
+            outcomes.append(ScenarioOutcome(label=label, case=case))
+        reconstructed = _assemble(
+            outcomes,
+            request=payload.get("request", {}),
+            release=release,
+        )
+        stored_id = str(payload.get("comparison_id", "")).strip().lower()
+        if not stored_id or stored_id != reconstructed.comparison_id:
+            raise ValueError("scenario comparison identity does not match its canonical state")
+        return reconstructed
+
+    @classmethod
+    def from_json(cls, payload: str) -> "ScenarioComparison":
+        if not isinstance(payload, str):
+            raise TypeError("scenario comparison JSON must be a string")
+        return cls.from_dict(json.loads(payload))
+
 
 # ---------------------------------------------------------------------------
 # Input adapters used by the Telegram orchestration surface
@@ -415,11 +456,12 @@ def _evaluate_one(spec: ScenarioSpec) -> EngineeringCase:
 
 
 def _assemble(outcomes: Sequence[ScenarioOutcome], request: Any = None,
-              comparison_id: Optional[str] = None) -> ScenarioComparison:
+              comparison_id: Optional[str] = None,
+              release: str = COMPARISON_RELEASE) -> ScenarioComparison:
     if comparison_id is None:
         seed = {
             "comparison_type": "scenario_comparison",
-            "release": COMPARISON_RELEASE,
+            "release": release,
             "scenarios": [
                 {"label": outcome.label, "case_identity": outcome.case.identity_payload}
                 for outcome in outcomes
@@ -430,6 +472,7 @@ def _assemble(outcomes: Sequence[ScenarioOutcome], request: Any = None,
         comparison_id=comparison_id,
         scenarios=tuple(outcomes),
         request={} if request is None else request,
+        release=release,
     )
 
 

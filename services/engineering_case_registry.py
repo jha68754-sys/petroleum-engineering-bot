@@ -35,6 +35,17 @@ _VALID_EVENT_TYPES = frozenset(
         "CASE_NOT_FOUND",
     }
 )
+_VALID_COMPARISON_EVENT_TYPES = frozenset(
+    {
+        "COMPARISON_CREATED",
+        "COMPARISON_RETRIEVED",
+        "COMPARISON_REPORT_REQUESTED",
+        "COMPARISON_REPLAY_REQUESTED",
+        "COMPARISON_REPLAY_MATCH",
+        "COMPARISON_REPLAY_MISMATCH",
+        "COMPARISON_NOT_FOUND",
+    }
+)
 _CASE_ID_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 _SECRET_VALUE_PATTERNS = (
     re.compile(r"\bghp_[A-Za-z0-9_]+\b"),
@@ -196,6 +207,7 @@ class EngineeringCaseRegistry:
         self._lock = threading.RLock()
         self._closed = False
         self._cache: dict[str, EngineeringCase] = {}
+        self._comparison_cache: dict[str, Any] = {}
 
         if self.db_path != ":memory:":
             path = Path(self.db_path).expanduser()
@@ -214,7 +226,19 @@ class EngineeringCaseRegistry:
 
     @classmethod
     def from_environment(cls, **kwargs: Any) -> "EngineeringCaseRegistry":
-        db_path = os.getenv("ENGINEERING_CASE_DB_PATH") or _DEFAULT_DB_PATH
+        configured_path = os.getenv("ENGINEERING_CASE_DB_PATH")
+        if configured_path:
+            db_path = configured_path
+        else:
+            # Railway exposes the mount point automatically when a Volume is
+            # attached.  Use it by default so persistence does not depend on a
+            # second manually synchronized environment variable.
+            mount_path = os.getenv("RAILWAY_VOLUME_MOUNT_PATH")
+            db_path = (
+                str(Path(mount_path) / "engineering_cases.sqlite3")
+                if mount_path
+                else _DEFAULT_DB_PATH
+            )
         return cls(db_path, **kwargs)
 
     def _ensure_open(self) -> None:
@@ -256,6 +280,39 @@ class EngineeringCaseRegistry:
                 )
                 """
             )
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS engineering_comparisons (
+                    comparison_id TEXT PRIMARY KEY,
+                    comparison_json TEXT NOT NULL,
+                    comparison_sha256 TEXT NOT NULL,
+                    report_text TEXT,
+                    status TEXT NOT NULL,
+                    scenario_count INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    replay_match INTEGER,
+                    replay_count INTEGER NOT NULL DEFAULT 0,
+                    replay_at TEXT,
+                    replay_result TEXT,
+                    updated_at TEXT,
+                    schema_version TEXT NOT NULL DEFAULT 'scenario_comparison_v1',
+                    comparison_content_sha256 TEXT
+                )
+                """
+            )
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS engineering_comparison_audit (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    comparison_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    details_json TEXT NOT NULL,
+                    UNIQUE(comparison_id, sequence)
+                )
+                """
+            )
             self._ensure_column("engineering_cases", "updated_at", "TEXT")
             self._ensure_column(
                 "engineering_cases", "schema_version", "TEXT NOT NULL DEFAULT 'engineering_case_v1'"
@@ -275,6 +332,15 @@ class EngineeringCaseRegistry:
             )
             self._connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_engineering_case_audit_sequence ON engineering_case_audit(case_id, sequence)"
+            )
+            self._connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_engineering_comparisons_id ON engineering_comparisons(comparison_id)"
+            )
+            self._connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_engineering_comparison_audit_id ON engineering_comparison_audit(comparison_id)"
+            )
+            self._connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_engineering_comparison_audit_sequence ON engineering_comparison_audit(comparison_id, sequence)"
             )
 
     def _ensure_column(self, table: str, column: str, definition: str) -> None:
@@ -491,6 +557,329 @@ class EngineeringCaseRegistry:
             if self.cache_enabled:
                 self._cache[case_id] = case
             return event
+
+    @staticmethod
+    def _comparison_status(comparison: Any) -> str:
+        statuses = [str(item.case.status) for item in comparison.scenarios]
+        return "OK" if statuses and all(status == "OK" for status in statuses) else "PARTIAL"
+
+    def _row_for_comparison(self, comparison_id: str) -> Optional[sqlite3.Row]:
+        return self._connection.execute(
+            "SELECT * FROM engineering_comparisons WHERE comparison_id = ? COLLATE NOCASE",
+            (comparison_id,),
+        ).fetchone()
+
+    def _comparison_from_row(self, row: sqlite3.Row) -> Any:
+        from services.scenario_comparison import ScenarioComparison
+
+        stored_id = str(row["comparison_id"]).lower()
+        comparison_json = row["comparison_json"]
+        stored_hash = row["comparison_sha256"]
+        if not isinstance(comparison_json, str) or not isinstance(stored_hash, str):
+            raise CaseIntegrityError("COMPARISON_INTEGRITY_FAILURE: stored comparison record is incomplete")
+        if stored_hash.lower() != stored_id:
+            raise CaseIntegrityError("COMPARISON_INTEGRITY_FAILURE: stored comparison hash does not match ID")
+        content_hash = row["comparison_content_sha256"]
+        if content_hash:
+            actual_content_hash = hashlib.sha256(comparison_json.encode("utf-8")).hexdigest()
+            if str(content_hash).lower() != actual_content_hash:
+                raise CaseIntegrityError("COMPARISON_INTEGRITY_FAILURE: stored comparison payload was modified")
+        try:
+            comparison = ScenarioComparison.from_json(comparison_json)
+        except Exception as exc:
+            raise CaseIntegrityError("COMPARISON_INTEGRITY_FAILURE: stored comparison payload is invalid") from exc
+        if comparison.comparison_id.lower() != stored_id:
+            raise CaseIntegrityError("COMPARISON_INTEGRITY_FAILURE: stored comparison identity does not match ID")
+        if comparison.to_json() != comparison_json:
+            raise CaseIntegrityError("COMPARISON_INTEGRITY_FAILURE: stored comparison payload is not canonical")
+        return comparison
+
+    def _next_comparison_sequence(self, comparison_id: str) -> int:
+        row = self._connection.execute(
+            "SELECT COALESCE(MAX(sequence), 0) + 1 FROM engineering_comparison_audit WHERE comparison_id = ? COLLATE NOCASE",
+            (comparison_id,),
+        ).fetchone()
+        return int(row[0])
+
+    def _insert_comparison_event(
+        self,
+        comparison_id: str,
+        event_type: str,
+        details: Optional[Mapping[str, Any]] = None,
+    ) -> AuditEvent:
+        if event_type not in _VALID_COMPARISON_EVENT_TYPES:
+            raise ValueError("unknown scenario comparison audit event")
+        raw_details: Mapping[str, Any] = {} if details is None else details
+        if not isinstance(raw_details, Mapping):
+            raise ValueError("comparison audit details must be a mapping")
+        details_json = _safe_json(raw_details, details=True)
+        if len(details_json.encode("utf-8")) > _MAX_AUDIT_DETAILS_BYTES:
+            raise ValueError("comparison audit details exceed the permitted size")
+        sequence = self._next_comparison_sequence(comparison_id)
+        created_at = _utc_now()
+        self._connection.execute(
+            """
+            INSERT INTO engineering_comparison_audit
+                (comparison_id, event_type, sequence, created_at, details_json)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (comparison_id, event_type, sequence, created_at, details_json),
+        )
+        return AuditEvent(
+            comparison_id,
+            "scenario_comparison",
+            event_type,
+            sequence,
+            created_at,
+            json.loads(details_json),
+        )
+
+    def _comparison_missing_event(self, comparison_id: str, action: Optional[str]) -> AuditEvent:
+        with self._lock, self._connection:
+            return self._insert_comparison_event(
+                comparison_id,
+                "COMPARISON_NOT_FOUND",
+                {"action": str(action)} if action else {},
+            )
+
+    def save_comparison(
+        self,
+        comparison: Any,
+        report_text: Optional[str] = None,
+        schema_version: Optional[str] = None,
+    ) -> AuditEvent:
+        from services.scenario_comparison import ScenarioComparison
+
+        if not isinstance(comparison, ScenarioComparison):
+            raise ValueError("comparison must be a ScenarioComparison")
+        comparison_id = _normalise_case_id(comparison.comparison_id)
+        safe_report = _safe_report(report_text)
+        try:
+            comparison_payload = json.loads(comparison.to_json())
+            comparison_json = _safe_json(comparison_payload)
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError("comparison payload is not JSON serializable") from exc
+        if "\x00" in comparison_json:
+            raise ValueError("comparison payload contains an unsupported null byte")
+        content_hash = hashlib.sha256(comparison_json.encode("utf-8")).hexdigest()
+        now = _utc_now()
+        schema = str(schema_version or "scenario_comparison_v1")
+        status = self._comparison_status(comparison)
+        scenario_count = len(comparison.scenarios)
+
+        with self._lock, self._connection:
+            self._ensure_open()
+            existing = self._row_for_comparison(comparison_id)
+            if existing is not None:
+                if existing["comparison_json"] != comparison_json:
+                    raise ValueError("comparison ID already exists with a different payload")
+                existing_report = existing["report_text"]
+                if safe_report is not None and existing_report != safe_report:
+                    raise ValueError("comparison ID already exists with a different report")
+                if self.cache_enabled:
+                    self._comparison_cache[comparison_id] = comparison
+                event = self._connection.execute(
+                    """
+                    SELECT * FROM engineering_comparison_audit
+                    WHERE comparison_id = ? COLLATE NOCASE
+                    ORDER BY sequence DESC LIMIT 1
+                    """,
+                    (comparison_id,),
+                ).fetchone()
+                if event is not None:
+                    return AuditEvent(
+                        comparison_id,
+                        "scenario_comparison",
+                        str(event["event_type"]),
+                        int(event["sequence"]),
+                        str(event["created_at"]),
+                        _safe_plain(json.loads(event["details_json"]), details=True),
+                    )
+                return self._insert_comparison_event(comparison_id, "COMPARISON_CREATED", {})
+
+            self._connection.execute(
+                """
+                INSERT INTO engineering_comparisons
+                    (comparison_id, comparison_json, comparison_sha256, report_text,
+                     status, scenario_count, created_at, replay_match, replay_count,
+                     replay_at, replay_result, updated_at, schema_version,
+                     comparison_content_sha256)
+                VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 0, NULL, NULL, ?, ?, ?)
+                """,
+                (
+                    comparison_id,
+                    comparison_json,
+                    comparison_id,
+                    safe_report,
+                    status,
+                    scenario_count,
+                    now,
+                    now,
+                    schema,
+                    content_hash,
+                ),
+            )
+            event = self._insert_comparison_event(comparison_id, "COMPARISON_CREATED", {})
+            if self.cache_enabled:
+                self._comparison_cache[comparison_id] = comparison
+            return event
+
+    def get_comparison(
+        self,
+        comparison_id: str,
+        record_event: bool = False,
+        action: Optional[str] = None,
+    ) -> Any:
+        normalized = _normalise_case_id(comparison_id)
+        with self._lock:
+            self._ensure_open()
+            row = self._row_for_comparison(normalized)
+            if row is None:
+                raise CaseNotFoundError(f"COMPARISON_NOT_FOUND: no scenario comparison for {normalized}")
+            comparison = self._comparison_from_row(row)
+            if self.cache_enabled:
+                self._comparison_cache[normalized] = comparison
+            if record_event:
+                with self._connection:
+                    self._insert_comparison_event(normalized, "COMPARISON_RETRIEVED", {"action": action} if action else {})
+            return comparison
+
+    def get_comparison_report(self, comparison_id: str, record_event: bool = False) -> str:
+        normalized = _normalise_case_id(comparison_id)
+        with self._lock:
+            self._ensure_open()
+            row = self._row_for_comparison(normalized)
+            if row is None:
+                raise CaseNotFoundError(f"COMPARISON_NOT_FOUND: no scenario comparison for {normalized}")
+            report = row["report_text"]
+            if report is None:
+                report = ""
+            if not isinstance(report, str):
+                raise CaseIntegrityError("COMPARISON_INTEGRITY_FAILURE: stored comparison report is invalid")
+            if record_event:
+                with self._connection:
+                    self._insert_comparison_event(normalized, "COMPARISON_REPORT_REQUESTED", {})
+            return str(report)
+
+    def get_comparison_metadata(self, comparison_id: str) -> dict[str, Any]:
+        normalized = _normalise_case_id(comparison_id)
+        with self._lock:
+            self._ensure_open()
+            row = self._row_for_comparison(normalized)
+            if row is None:
+                raise CaseNotFoundError(f"COMPARISON_NOT_FOUND: no scenario comparison for {normalized}")
+            comparison = self._comparison_from_row(row)
+            replay_result = _json_object_or_none(row["replay_result"])
+            return {
+                "comparison_id": normalized,
+                "comparison_type": "scenario_comparison",
+                "status": str(row["status"]),
+                "scenario_count": int(row["scenario_count"]),
+                "report_text": str(row["report_text"] or ""),
+                "replay_match": None if row["replay_match"] is None else bool(row["replay_match"]),
+                "replay_count": int(row["replay_count"] or 0),
+                "replay_at": row["replay_at"],
+                "replay_result": replay_result,
+                "created_at": str(row["created_at"]),
+                "updated_at": str(row["updated_at"] or row["created_at"]),
+                "comparison_sha256": str(row["comparison_sha256"]),
+                "schema_version": str(row["schema_version"] or "scenario_comparison_v1"),
+                "persistent": True,
+            }
+
+    def audit_comparison(self, comparison_id: str) -> list[AuditEvent]:
+        normalized = _normalise_case_id(comparison_id)
+        with self._lock:
+            self._ensure_open()
+            rows = self._connection.execute(
+                """
+                SELECT * FROM engineering_comparison_audit
+                WHERE comparison_id = ? COLLATE NOCASE
+                ORDER BY sequence ASC, id ASC
+                """,
+                (normalized,),
+            ).fetchall()
+            if not rows:
+                raise CaseNotFoundError(f"COMPARISON_NOT_FOUND: no audit events for {normalized}")
+            return [
+                AuditEvent(
+                    normalized,
+                    "scenario_comparison",
+                    str(row["event_type"]),
+                    int(row["sequence"]),
+                    str(row["created_at"]),
+                    _safe_plain(json.loads(row["details_json"]), details=True),
+                )
+                for row in rows
+            ]
+
+    def record_comparison_event(
+        self,
+        comparison_id: str,
+        event_type: str,
+        details: Optional[Mapping[str, Any]] = None,
+    ) -> AuditEvent:
+        normalized = _normalise_case_id(comparison_id)
+        if event_type not in _VALID_COMPARISON_EVENT_TYPES:
+            raise ValueError("unknown scenario comparison audit event")
+        with self._lock, self._connection:
+            self._ensure_open()
+            if self._row_for_comparison(normalized) is None:
+                raise CaseNotFoundError(f"COMPARISON_NOT_FOUND: no scenario comparison for {normalized}")
+            return self._insert_comparison_event(normalized, event_type, details)
+
+    def record_comparison_replay_result(
+        self,
+        comparison_id: str,
+        matched: bool,
+        result: Optional[Mapping[str, Any]],
+    ) -> AuditEvent:
+        normalized = _normalise_case_id(comparison_id)
+        if not isinstance(matched, bool):
+            raise ValueError("matched must be a boolean")
+        if result is not None and not isinstance(result, Mapping):
+            raise ValueError("comparison replay result must be a mapping or None")
+        result_json = None if result is None else _safe_json(result, details=True)
+        with self._lock, self._connection:
+            self._ensure_open()
+            row = self._row_for_comparison(normalized)
+            if row is None:
+                raise CaseNotFoundError(f"COMPARISON_NOT_FOUND: no scenario comparison for {normalized}")
+            replay_count = int(row["replay_count"] or 0) + 1
+            replay_at = _utc_now()
+            self._connection.execute(
+                """
+                UPDATE engineering_comparisons
+                SET replay_match = ?, replay_count = ?, replay_at = ?, replay_result = ?, updated_at = ?
+                WHERE comparison_id = ? COLLATE NOCASE
+                """,
+                (1 if matched else 0, replay_count, replay_at, result_json, replay_at, normalized),
+            )
+            event_type = "COMPARISON_REPLAY_MATCH" if matched else "COMPARISON_REPLAY_MISMATCH"
+            return self._insert_comparison_event(normalized, event_type, {"matched": matched})
+
+    def format_comparison_audit(self, comparison_id: str) -> str:
+        events = self.audit_comparison(comparison_id)
+        normalized = _normalise_case_id(comparison_id)
+        lines = [
+            "Scenario Comparison Audit",
+            "=========================",
+            f"Comparison ID: {normalized}",
+            f"Event count: {len(events)}",
+            "",
+        ]
+        for event in events:
+            timestamp = event.created_at.replace("T", " ", 1)
+            prefix = "Created " if event.event_type == "COMPARISON_CREATED" else ""
+            line = f"{event.sequence}. {event.event_type} — {prefix}{timestamp}"
+            display_details: list[str] = []
+            for key, value in event.details.items():
+                if key in {"action", "surface", "code", "reason", "matched"}:
+                    display_details.append(f"{key}: {self._display_detail_value(value)}")
+            if display_details:
+                line += " — " + "; ".join(display_details)
+            lines.append(line)
+        return "\n".join(lines)
 
     def get_case(
         self,
@@ -726,6 +1115,7 @@ class EngineeringCaseRegistry:
             finally:
                 self._closed = True
                 self._cache.clear()
+            self._comparison_cache.clear()
 
 
 __all__ = [
