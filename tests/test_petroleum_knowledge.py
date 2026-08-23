@@ -331,6 +331,40 @@ def test_batch_of_newline_separated_questions_is_answered_independently():
     assert "Calculation bridge for Bo" in response
 
 
+def test_live_arabic_english_batch_is_fully_deterministic_and_safe():
+    batch = "\n".join([
+        "شن معنى Rs؟",
+        "ما وحدة Rs؟",
+        "شن معنى Bo؟",
+        "شن الفرق بين Rs وGOR؟",
+        "ما معنى Pb؟",
+        "ما هو PVT؟",
+        "ما هي اللزوجة؟",
+        "ما معنى FVF؟",
+        "ما معنى P؟",
+        "ما معنى T؟",
+        "super permeability magic",
+    ])
+    response = answer_knowledge_question(batch)
+    assert response is not None
+    assert response.count("Question ") == 11
+    assert "Solution Gas-Oil Ratio" in response
+    assert "Rs vs GOR" in response
+    assert "Pressure-Volume-Temperature" in response
+    assert "Viscosity" in response
+    assert "I will not invent a definition or numerical answer" in response
+    assert "AI service" not in response
+    assert "Traceback" not in response
+
+
+def test_unknown_phrase_with_known_alias_is_rejected_without_general_ai_path():
+    response = answer_knowledge_question("super permeability magic")
+    assert response is not None
+    assert "verified Petroleum Engineering record" in response
+    assert "super permeability magic" in response
+    assert "will not invent" in response
+
+
 def test_flattened_question_batch_is_split_at_question_boundaries():
     batch = "What is Bo? What is Bg? شن وحدة Rs؟ What is Pwf?"
     response = answer_knowledge_question(batch)

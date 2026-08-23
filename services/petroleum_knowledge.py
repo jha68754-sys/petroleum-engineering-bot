@@ -265,7 +265,7 @@ class PetroleumKnowledgeLayer:
         return any(
             _contains_phrase(normalized, normalize_term(marker))
             for marker in markers
-        ) or normalized in self._aliases
+        ) or normalized in self._aliases or bool(self.resolve_terms(text))
 
     @staticmethod
     def _intent(text: str) -> str:
