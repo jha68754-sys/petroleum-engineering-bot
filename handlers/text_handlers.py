@@ -70,7 +70,8 @@ from services.engineering_case_registry import (
     CaseNotFoundError,
     EngineeringCaseRegistry,
 )
-from services.petroleum_knowledge import answer_knowledge_question, knowledge_usage
+from services.petroleum_knowledge import knowledge_usage
+from services.petroleum_qa import answer_engineering_question
 from services.scenario_comparison import (
     ComparisonError,
     ScenarioSpec,
@@ -292,7 +293,7 @@ def handle_define(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Op
     parts = text.split(None, 1)
     if len(parts) < 2 or not parts[1].strip():
         return knowledge_usage(), None, None
-    answer = answer_knowledge_question(parts[1].strip())
+    answer = answer_engineering_question(parts[1].strip())
     return answer or knowledge_usage(), None, None
 
 

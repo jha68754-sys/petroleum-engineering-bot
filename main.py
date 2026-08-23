@@ -54,7 +54,7 @@ from services.pvt_engine import (
 )
 from services.calculation_engine import parse_kv_args
 from services.visualization import format_plot_response
-from services.petroleum_knowledge import answer_knowledge_question
+from services.petroleum_qa import answer_engineering_question
 # Glossary service removed
 from services.file_processing import (
     detect_file_type,
@@ -422,7 +422,7 @@ def process_message(
         # Recognized terminology questions are answered from the reviewed,
         # version-controlled knowledge dataset. Other free text keeps the
         # existing AI-assisted path unchanged.
-        knowledge_answer = answer_knowledge_question(text)
+        knowledge_answer = answer_engineering_question(text)
         if knowledge_answer is not None:
             tg.send_message(
                 chat_id,

@@ -260,7 +260,7 @@ class PetroleumKnowledgeLayer:
             "formula", "equation", "variable", "variables", "related", "where is", "used",
             "difference", "compare", "versus", " vs ", "explain", "calculate", "compute",
             "ما معنى", "شن معنى", "شنو معنى", "ماهو", "ما هو", "عرف", "عرفلي", "عرّف", "اشرح",
-            "وحدة", "وحده", "معادلة", "قانون", "صيغة", "الصيغة", "الفرق", "قارن", "مرتبط", "المرتبط", "يستخدم", "احسب", "حساب",
+            "وحدة", "وحده", "معادلة", "قانون", "صيغة", "الصيغة", "الفرق", "قارن", "مرتبط", "المرتبط", "المرتبطة", "يستخدم", "احسب", "حساب",
         )
         return any(
             _contains_phrase(normalized, normalize_term(marker))
@@ -283,7 +283,7 @@ class PetroleumKnowledgeLayer:
             return "unit"
         if has_any(("formula", "equation", "variable", "variables", "معادلة", "قانون", "صيغة", "الصيغة")):
             return "formula"
-        if has_any(("related", "مرتبط", "المرتبط")):
+        if has_any(("related", "مرتبط", "المرتبط", "المرتبطة")):
             return "related"
         if has_any(("relationship", "relation", "علاقة", "العلاقه")):
             return "relationship"
@@ -300,7 +300,7 @@ class PetroleumKnowledgeLayer:
             r"^(?:what is|what does)\s+(?:the\s+)?(?:definition of|meaning of|unit of|formula for)\s+",
             r"^(?:the\s+)?(?:definition of|meaning of|unit of|formula for)\s+",
             r"^(?:what is|what does|define|explain)\s+",
-            r"^(?:ما معني|شن معني|شنو معني|ماهو|ما هو|عرفلي|عرف|اشرح|وحده|معادله|صيغه|الصيغه|الفرق بين|المرتبط|قارن)\s+",
+            r"^(?:ما معني|شن معني|شنو معني|ماهو|ما هو|عرفلي|عرف|اشرح|وحده|معادله|صيغه|الصيغه|الفرق بين|المرتبط|المرتبطة|المرتبطه|قارن)\s+",
             r"^(?:شن|شنو)\s+(?:وحده|معني|معادله)\s+",
         )
         topic = normalized
@@ -508,8 +508,8 @@ class PetroleumKnowledgeLayer:
             "the", "of", "is", "does", "what", "mean", "give", "me", "to", "and", "versus", "vs",
             "unit", "units", "formula", "equation", "variable", "variables",
             "related", "relationship", "relation", "where", "used", "difference", "between", "calculate", "compute",
-            "ما", "هو", "هي", "شن", "شنو", "معني", "عرفلي", "وحده", "معادله", "صيغه", "الصيغه", "المرتبط", "الفرق", "بين",
-            "مرتبط", "يستخدم", "اشرح", "عرف", "احسب", "حساب", "و", "ب",
+            "ما", "هو", "هي", "شن", "شنو", "معني", "عرفلي", "وحده", "معادله", "صيغه", "الصيغه", "المرتبط", "المرتبطة", "المرتبطه", "الفرق", "بين",
+            "مرتبط", "المرتبطة", "المرتبطه", "يستخدم", "اشرح", "عرف", "احسب", "حساب", "و", "ب",
         }
         for word in stopwords:
             topic = re.sub(rf"(?:^|\s){re.escape(word)}(?=\s|$)", " ", topic)
