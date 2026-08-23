@@ -129,6 +129,9 @@ def normalize_term(value: str) -> str:
     # Common Arabic spelling variants used in technical transliteration.
     text = text.translate(str.maketrans({"أ": "ا", "إ": "ا", "آ": "ا", "ى": "ي", "ة": "ه"}))
     text = text.replace("μ", "mu").replace("Δ", "delta")
+    # Users commonly attach the Arabic conjunction to a following Latin symbol,
+    # e.g. "Rs وGOR". Separate it so both engineering terms resolve.
+    text = re.sub(r"و(?=[a-z])", "و ", text)
     text = text.replace("_", " ").replace("-", " ").replace("/", " ")
     text = _NON_WORD.sub(" ", text)
     return _SPACE.sub(" ", text).strip()
@@ -160,6 +163,11 @@ class PetroleumKnowledgeLayer:
         if payload.get("schema_version") != "petroleum_knowledge_v1":
             raise ValueError("Unsupported petroleum knowledge dataset schema")
         self.dataset_status = str(payload.get("dataset_status", "UNVERIFIED / REVIEW REQUIRED"))
+        self.coverage_gaps: Tuple[Dict[str, str], ...] = tuple(
+            {str(key): str(value) for key, value in item.items()}
+            for item in payload.get("coverage_gaps", [])
+            if isinstance(item, dict)
+        )
         self.records: Tuple[KnowledgeRecord, ...] = tuple(
             KnowledgeRecord.from_dict(item) for item in payload.get("records", [])
         )
@@ -206,7 +214,29 @@ class PetroleumKnowledgeLayer:
         for alias in sorted(self._aliases, key=len, reverse=True):
             if _contains_phrase(normalized, alias):
                 matches.extend(self._by_id[item] for item in self._aliases[alias])
-        return list(_unique(matches))
+        unique = list(_unique(matches))
+        padded = f" {normalized} "
+
+        def first_position(record: KnowledgeRecord) -> int:
+            values = [
+                record.canonical_id,
+                record.symbol,
+                record.canonical_english_name,
+                record.canonical_arabic_name,
+                record.abbreviation or "",
+                *record.aliases,
+                *record.arabic_aliases,
+                *record.english_aliases,
+            ]
+            positions = [
+                padded.find(f" {normalize_term(value)} ")
+                for value in values
+                if normalize_term(value)
+            ]
+            visible = [position for position in positions if position >= 0]
+            return min(visible) if visible else len(padded)
+
+        return sorted(unique, key=first_position)
 
     def resolve(self, query: str) -> KnowledgeResolution:
         matches = self.resolve_terms(query)
@@ -230,7 +260,7 @@ class PetroleumKnowledgeLayer:
             "formula", "equation", "variable", "variables", "related", "where is", "used",
             "difference", "compare", "versus", " vs ", "explain", "calculate", "compute",
             "ما معنى", "شن معنى", "شنو معنى", "ماهو", "ما هو", "عرف", "عرفلي", "عرّف", "اشرح",
-            "وحدة", "وحده", "معادلة", "قانون", "الفرق", "قارن", "مرتبط", "يستخدم", "احسب", "حساب",
+            "وحدة", "وحده", "معادلة", "قانون", "صيغة", "الصيغة", "الفرق", "قارن", "مرتبط", "المرتبط", "يستخدم", "احسب", "حساب",
         )
         return any(
             _contains_phrase(normalized, normalize_term(marker))
@@ -251,9 +281,9 @@ class PetroleumKnowledgeLayer:
             return "comparison"
         if has_any(("unit", "units", "وحدة", "وحده")):
             return "unit"
-        if has_any(("formula", "equation", "variable", "variables", "معادلة", "قانون")):
+        if has_any(("formula", "equation", "variable", "variables", "معادلة", "قانون", "صيغة", "الصيغة")):
             return "formula"
-        if has_any(("related", "مرتبط")):
+        if has_any(("related", "مرتبط", "المرتبط")):
             return "related"
         if has_any(("relationship", "relation", "علاقة", "العلاقه")):
             return "relationship"
@@ -270,7 +300,7 @@ class PetroleumKnowledgeLayer:
             r"^(?:what is|what does)\s+(?:the\s+)?(?:definition of|meaning of|unit of|formula for)\s+",
             r"^(?:the\s+)?(?:definition of|meaning of|unit of|formula for)\s+",
             r"^(?:what is|what does|define|explain)\s+",
-            r"^(?:ما معني|شن معني|شنو معني|ماهو|ما هو|عرفلي|عرف|اشرح|وحده|معادله|الفرق بين|قارن)\s+",
+            r"^(?:ما معني|شن معني|شنو معني|ماهو|ما هو|عرفلي|عرف|اشرح|وحده|معادله|صيغه|الصيغه|الفرق بين|المرتبط|قارن)\s+",
             r"^(?:شن|شنو)\s+(?:وحده|معني|معادله)\s+",
         )
         topic = normalized
@@ -478,8 +508,8 @@ class PetroleumKnowledgeLayer:
             "the", "of", "is", "does", "what", "mean", "give", "me", "to", "and", "versus", "vs",
             "unit", "units", "formula", "equation", "variable", "variables",
             "related", "relationship", "relation", "where", "used", "difference", "between", "calculate", "compute",
-            "ما", "هو", "هي", "شن", "شنو", "معني", "عرفلي", "وحده", "معادله", "الفرق", "بين",
-            "مرتبط", "يستخدم", "اشرح", "عرف", "احسب", "حساب", "و",
+            "ما", "هو", "هي", "شن", "شنو", "معني", "عرفلي", "وحده", "معادله", "صيغه", "الصيغه", "المرتبط", "الفرق", "بين",
+            "مرتبط", "يستخدم", "اشرح", "عرف", "احسب", "حساب", "و", "ب",
         }
         for word in stopwords:
             topic = re.sub(rf"(?:^|\s){re.escape(word)}(?=\s|$)", " ", topic)

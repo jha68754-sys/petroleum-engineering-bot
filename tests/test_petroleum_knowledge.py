@@ -370,3 +370,102 @@ def test_bhp_and_pwf_comparison_states_condition_boundary():
     assert response is not None
     assert "BHP is a broader bottomhole-pressure term" in response
     assert "يجب تحديد حالته" in response
+
+
+@pytest.mark.parametrize("query, expected", [
+    ("R_s", "rs"),
+    ("solution gas oil ratio", "rs"),
+    ("B_o", "bo"),
+    ("Oil FVF", "bo"),
+    ("FVF", "formation_volume_factor"),
+    ("PVT", "pvt"),
+    ("pressure-volume-temperature", "pvt"),
+    ("viscosity", "viscosity"),
+    ("اللزوجة", "viscosity"),
+])
+def test_prompt_aliases_resolve_to_single_canonical_entity(query, expected):
+    resolution = resolve_knowledge_term(query)
+    assert resolution.record is not None
+    assert resolution.record.canonical_id == expected
+
+
+def test_pvt_definition_is_source_backed_and_does_not_claim_a_numerical_solver():
+    response = answer_knowledge_question("What is PVT?")
+    assert response is not None
+    assert "Pressure-Volume-Temperature" in response
+    assert "الضغط والحجم ودرجة الحرارة" in response
+    assert "fluid-property evaluation" in response
+    assert "laboratory report" in response
+    assert "No numerical" not in response
+
+
+def test_generic_viscosity_definition_is_concise_and_state_aware():
+    response = answer_knowledge_question("ما معنى اللزوجة؟")
+    assert response is not None
+    assert "Viscosity" in response
+    assert "Pa·s" in response
+    assert "shear rate" in response
+    assert "temperature" in response.lower()
+
+
+def test_rs_and_gor_comparison_distinguishes_solution_and_produced_gas():
+    response = answer_knowledge_question("شن الفرق بين Rs وGOR؟")
+    assert response is not None
+    assert "Rs vs GOR" in response
+    assert "الغاز المذاب" in response
+    assert "produced gas" in response.lower()
+    assert "not interchangeable" in response
+
+
+def test_formula_request_without_formula_is_explicitly_limited():
+    response = answer_knowledge_question("What is the formula for Pb?")
+    assert response is not None
+    assert "No single formula" in response
+    assert "state, model, or process dependent" in response
+    assert "Traceback" not in response
+
+
+def test_generic_pressure_and_temperature_are_registered_as_gaps_not_fake_entities():
+    layer = PetroleumKnowledgeLayer()
+    gaps = {item["term"]: item for item in layer.coverage_gaps}
+    assert gaps["P"]["status"] == "GAP"
+    assert gaps["T"]["status"] == "GAP"
+    assert layer.resolve("P").record is None
+    assert layer.resolve("T").record is None
+
+
+def test_malformed_or_empty_questions_are_safe():
+    assert answer_knowledge_question("") is None
+    response = answer_knowledge_question("What is ???")
+    assert response is not None
+    assert "will not invent" in response
+    assert "Traceback" not in response
+    assert "File \"" not in response
+
+
+def test_arabic_and_english_intents_remain_explicit_and_distinct():
+    assert "Common unit:" in answer_knowledge_question("ما وحدة Bo؟")
+    assert "Definition:" in answer_knowledge_question("Rs definition")
+    assert "Common relationship:" in answer_knowledge_question("شن صيغة Rs؟")
+    assert "Related to Rs:" in answer_knowledge_question("ما المرتبط بـ Rs؟")
+
+
+def test_all_verified_records_have_nonempty_source_and_verification_basis():
+    layer = PetroleumKnowledgeLayer()
+    for record in layer.records:
+        assert record.verification_status == "VERIFIED"
+        assert record.source
+        assert all(str(source).strip() for source in record.source)
+
+
+def test_no_duplicate_alias_points_to_multiple_entities_after_v1_extension():
+    layer = PetroleumKnowledgeLayer()
+    seen = {}
+    for record in layer.records:
+        values = [record.canonical_id, record.symbol, record.canonical_english_name, record.canonical_arabic_name, *record.aliases, *record.arabic_aliases, *record.english_aliases]
+        for value in values:
+            key = normalize_term(value)
+            if not key:
+                continue
+            previous = seen.setdefault(key, record.canonical_id)
+            assert previous == record.canonical_id, (key, previous, record.canonical_id)

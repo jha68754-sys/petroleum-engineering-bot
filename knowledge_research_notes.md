@@ -33,3 +33,19 @@ The knowledge dataset will use established petroleum-engineering terminology, co
 The SLB glossary pages are publicly readable through extraction but display an account/premium notice after the glossary entry; the definitions above are taken from the visible entry text only. No hidden or premium material is used.
 
 The direct browser view of the SLB GOR page confirmed that GOR is the abbreviation for gas/oil ratio and means the ratio of produced gas to produced oil. The page also lists produced fluid as a related term. URL: https://glossary.slb.com/terms/g/gor
+
+## PVT coverage verification
+
+7. SLB Energy Glossary, “PVT”
+   URL: https://glossary.slb.com/terms/p/pvt
+   Use: PVT is an abbreviation for pressure, volume, and temperature; SLB states that the term is used in fluid-properties evaluations.
+
+8. Core Laboratories, “Phase Behavior and PVT”
+   URL: https://www.corelab.com/services/phase-behavior-and-pvt/
+   Use: PVT measurements support understanding phase behavior and fluid properties of gases and liquids at reservoir conditions, and are used in reservoir management, production optimization, and reservoir simulation.
+
+This supports adding a concise PVT concept record. No numerical PVT correlation or solver is introduced.
+
+9. SLB Energy Glossary, “viscosity”
+   URL: https://glossary.slb.com/terms/v/viscosity
+   Use: viscosity indicates resistance to flow; SLB notes that cP is commonly used, one cP equals one mPa·s, and meaningful viscosity requires a stated or understood shear rate and measurement temperature.
