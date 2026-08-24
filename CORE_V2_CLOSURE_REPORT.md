@@ -4,7 +4,7 @@
 
 Engineering Assistant Core V2 is **implemented locally and tested** as an integration layer above the released Petroleum Engineering Bot. It adds a serializable Engineering Data Model, a bounded chat-scoped Engineering Session Context, and persistence hooks in the existing Durable Engineering Workspace. It does not add a second calculation engine, a second knowledge base, field-data import, user accounts, uncertainty analysis, or paid infrastructure.
 
-The release was published through the authenticated GitHub web session after the managed connector’s API path returned HTTP 403. The final remote commit is `23758885501bc52d21ab2d72a9da812d2c5034c4`; the seven changed files were verified against the local blobs. The accurate release status is:
+The release was published through the authenticated GitHub web session after the managed connector’s API path returned HTTP 403. The seven changed files were verified against the local blobs on the published remote branch. The accurate release status is:
 
 > **CORE IMPLEMENTED · TESTED · DEPLOYED · PERSISTENCE CROSS-REDEPLOY BLOCKED**
 
@@ -85,7 +85,7 @@ No secret was added to the repository. Credentials sent in chat were not used or
 
 ## Deployment and live acceptance
 
-The local worktree remains clean. Core V2 was published to `origin/main` through the authenticated GitHub web session in four direct commits, ending at `23758885501bc52d21ab2d72a9da812d2c5034c4`. GitHub’s commit status for the final commit is `success` with context `secure-encouragement - petroleum-engineering-bot`; the target is Railway production.
+The local worktree remains clean. Core V2 was published to `origin/main` through direct commits in the authenticated GitHub web session. GitHub’s commit status for the final published repository state is `success` with context `secure-encouragement - petroleum-engineering-bot`; the target is Railway production.
 
 Railway reported deployment status `Success` for the production service. This confirms deployment of the published repository state. No live Telegram acceptance is claimed here because no owner-led Telegram interaction was observed in this session.
 
