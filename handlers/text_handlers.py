@@ -12,7 +12,8 @@ instance, and returns a response string (and optionally file bytes).
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+import re
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from constants import (
     START_MESSAGE,
@@ -69,7 +70,16 @@ from services.engineering_case_registry import (
     CaseIntegrityError,
     CaseNotFoundError,
     EngineeringCaseRegistry,
+    SessionIntegrityError,
+    SessionNotFoundError,
 )
+from services.engineering_context import (
+    ContextResolutionError,
+    EngineeringSessionContext,
+    SessionContextError,
+    session_key_for_chat,
+)
+from state import ENGINEERING_SESSION_CONTEXT
 from services.petroleum_knowledge import knowledge_usage
 from services.petroleum_qa import answer_engineering_question
 from services.scenario_comparison import (
@@ -237,7 +247,46 @@ _COMPARISONS: Dict[str, Any] = {}
 _MAX_COMPARISONS = 128
 
 
-def _remember_engineering_case(case: EngineeringCase) -> None:
+def _chat_id(message: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(message, Mapping):
+        return ""
+    chat = message.get("chat", {})
+    return str(chat.get("id", "")) if isinstance(chat, Mapping) else ""
+
+
+def load_engineering_session(chat_id: Any) -> EngineeringSessionContext:
+    """Load one chat context from the fast cache or the existing Workspace."""
+    key = str(chat_id)
+    cached = ENGINEERING_SESSION_CONTEXT.get(key)
+    try:
+        context = _CASE_REGISTRY.get_session(session_key_for_chat(key))
+    except SessionNotFoundError:
+        context = cached if isinstance(cached, EngineeringSessionContext) else EngineeringSessionContext()
+    except SessionIntegrityError as exc:
+        logger.warning("Engineering session integrity failure for chat %s: %s", key, exc)
+        context = cached if isinstance(cached, EngineeringSessionContext) else EngineeringSessionContext()
+    except (RuntimeError, OSError, ValueError) as exc:
+        logger.warning("Engineering session load failed for chat %s: %s", key, exc)
+        context = cached if isinstance(cached, EngineeringSessionContext) else EngineeringSessionContext()
+    ENGINEERING_SESSION_CONTEXT[key] = context
+    return context
+
+
+def save_engineering_session(chat_id: Any, context: EngineeringSessionContext) -> None:
+    """Cache and persist context without writing the raw Telegram chat ID."""
+    key = str(chat_id)
+    if not isinstance(context, EngineeringSessionContext):
+        raise SessionContextError("INVALID_SESSION", "context must be an EngineeringSessionContext")
+    ENGINEERING_SESSION_CONTEXT[key] = context
+    try:
+        _CASE_REGISTRY.save_session(session_key_for_chat(key), context)
+    except (RuntimeError, OSError, ValueError) as exc:
+        # Local/in-process context remains valid.  Cross-redeploy durability is
+        # reported separately and is not claimed when the path is ephemeral.
+        logger.warning("Engineering session persistence failed for chat %s: %s", key, exc)
+
+
+def _remember_engineering_case(case: EngineeringCase, message: Optional[Dict[str, Any]] = None) -> None:
     _ENGINEERING_CASES[case.case_id] = case
     while len(_ENGINEERING_CASES) > _MAX_ENGINEERING_CASES:
         _ENGINEERING_CASES.pop(next(iter(_ENGINEERING_CASES)))
@@ -252,9 +301,15 @@ def _remember_engineering_case(case: EngineeringCase) -> None:
         # durable report remains authoritative; the in-process cache is still
         # refreshed for backward compatibility.
         pass
+    chat_id = _chat_id(message)
+    if chat_id:
+        try:
+            save_engineering_session(chat_id, load_engineering_session(chat_id).with_case(case))
+        except SessionContextError as exc:
+            logger.warning("Engineering session case update failed: %s", exc)
 
 
-def _remember_comparison(comparison: Any) -> None:
+def _remember_comparison(comparison: Any, message: Optional[Dict[str, Any]] = None) -> None:
     _COMPARISONS[comparison.comparison_id] = comparison
     while len(_COMPARISONS) > _MAX_COMPARISONS:
         _COMPARISONS.pop(next(iter(_COMPARISONS)))
@@ -267,6 +322,12 @@ def _remember_comparison(comparison: Any) -> None:
         # Keep the established in-process path alive for backward compatibility,
         # but make persistence failures visible instead of silently claiming durability.
         logger.warning("Scenario comparison persistence failed: %s", exc)
+    chat_id = _chat_id(message)
+    if chat_id:
+        try:
+            save_engineering_session(chat_id, load_engineering_session(chat_id).with_comparison(comparison))
+        except SessionContextError as exc:
+            logger.warning("Engineering session comparison update failed: %s", exc)
 
 
 def _case_flags(raw_tokens: Dict[str, str]) -> Tuple[bool, bool]:
@@ -274,6 +335,196 @@ def _case_flags(raw_tokens: Dict[str, str]) -> Tuple[bool, bool]:
         value = str(raw_tokens.get(name, "")).strip().lower()
         return value in {"1", "true", "yes", "on"}
     return enabled("case"), enabled("report")
+
+
+def _context_case(chat_id: Any, reference: Optional[str], action: str) -> EngineeringCase:
+    context = load_engineering_session(chat_id)
+    case_id = context.resolve_case_id(reference)
+    try:
+        return _CASE_REGISTRY.get_case(case_id, record_event=True, action=action)
+    except CaseNotFoundError:
+        case = _ENGINEERING_CASES.get(case_id)
+        if case is None:
+            raise ContextResolutionError("CASE_NOT_FOUND", f"no engineering case is available for {case_id}")
+        return case
+    except CaseIntegrityError as exc:
+        raise ContextResolutionError("CASE_INTEGRITY_FAILURE", str(exc)) from exc
+
+
+def _context_case_action(chat_id: Any, reference: Optional[str], action: str) -> str:
+    case = _context_case(chat_id, reference, action)
+    if action == "report":
+        try:
+            report = _CASE_REGISTRY.get_report(case.case_id)
+        except (CaseNotFoundError, CaseIntegrityError):
+            report = ""
+        return report or generate_report_v1(case)
+    try:
+        replayed = replay_case(case)
+    except CaseReplayError as exc:
+        try:
+            _CASE_REGISTRY.record_replay_result(case.case_id, matched=False, result=None)
+        except (CaseNotFoundError, ValueError):
+            pass
+        raise ContextResolutionError("CASE_REPLAY_FAILED", str(exc)) from exc
+    match = replay_matches(case, replayed)
+    try:
+        _CASE_REGISTRY.record_replay_result(case.case_id, matched=match, result=replayed.result)
+    except (CaseNotFoundError, ValueError):
+        pass
+    _remember_engineering_case(replayed)
+    note = (
+        "The same engineering case was reproduced by the deterministic engine."
+        if match else
+        "The replay produced a different result and requires engineering review."
+    )
+    return ("Replay comparison: MATCH" if match else "Replay comparison: DIFFERENT") + "\n\n" + note + "\n\n" + generate_report_v1(replayed)
+
+
+def _case_spec_from_context(case: EngineeringCase, label: str) -> ScenarioSpec:
+    """Adapt an existing compatible case to the released comparison contract."""
+    raw_inputs = case.inputs if isinstance(case.inputs, Mapping) else {}
+    calculation_type = str(case.calculation_type).lower()
+    if calculation_type in {"integrated_system_v1", "system", "system_v1"}:
+        inputs = build_system_input(raw_inputs)
+        kind = "system"
+    elif calculation_type in {"choke_v1", "choke"}:
+        inputs = build_choke_input(raw_inputs)
+        kind = "choke"
+    else:
+        raise ComparisonError(
+            "INCOMPATIBLE_CASES",
+            "context comparison supports only compatible System or Choke cases.",
+        )
+    pvt = case.pvt if isinstance(case.pvt, Mapping) else {}
+    mode = pvt.get("mode")
+    model = pvt.get("model")
+    pvt_context = pvt.get("context") if isinstance(pvt.get("context"), Mapping) else None
+    provider = BlackOilPvtProvider() if mode or model or pvt_context else None
+    if provider is not None and (not mode or not model or pvt_context is None):
+        raise ComparisonError(
+            "INCOMPATIBLE_CASES",
+            "the case has incomplete PVT context and cannot be compared safely.",
+        )
+    return ScenarioSpec(
+        label=label,
+        calculation_type=kind,
+        inputs=inputs,
+        request={"calculation": kind, "arguments": dict(raw_inputs)},
+        pvt_provider=provider,
+        pvt_context=dict(pvt_context) if pvt_context is not None else None,
+        pvt_mode=str(mode) if mode is not None else None,
+        pvt_model=str(model) if model is not None else None,
+    )
+
+
+def _context_comparison(chat_id: Any) -> str:
+    context = load_engineering_session(chat_id)
+    current_id = context.resolve_case_id("current")
+    previous_id = context.resolve_case_id("previous")
+    current = _context_case(chat_id, current_id, "comparison")
+    previous = _context_case(chat_id, previous_id, "comparison")
+    if current.status != "OK" or previous.status != "OK":
+        raise ComparisonError("INCOMPATIBLE_CASES", "both referenced cases must have engineering status OK.")
+    comparison = evaluate_comparison(
+        [_case_spec_from_context(previous, "previous"), _case_spec_from_context(current, "current")],
+        request={"calculation": "contextual", "references": [previous.case_id, current.case_id]},
+    )
+    _remember_comparison(comparison, {"chat": {"id": chat_id}})
+    return format_comparison(comparison)
+
+
+def _context_mutate_thp(chat_id: Any, value: float, message: Dict[str, Any]) -> str:
+    """Replay only an integrated system case with an explicit THP override."""
+    context = load_engineering_session(chat_id)
+    case = _context_case(chat_id, "current", "recalculate")
+    if str(case.calculation_type).lower() not in {"integrated_system_v1", "system", "system_v1"}:
+        raise ContextResolutionError(
+            "UNSUPPORTED_CONTEXT_MUTATION",
+            "THP-only mutation is supported only for a current Integrated System case.",
+        )
+    args = case.inputs if isinstance(case.inputs, Mapping) else {}
+    override = dict(args)
+    override["thp"] = value
+    try:
+        inputs = build_system_input(override)
+    except ComparisonError as exc:
+        raise ContextResolutionError(exc.code, exc.message) from exc
+    pvt = case.pvt if isinstance(case.pvt, Mapping) else {}
+    pvt_context = pvt.get("context") if isinstance(pvt.get("context"), Mapping) else None
+    provider = BlackOilPvtProvider() if pvt_context is not None else None
+    if provider is not None and (pvt.get("mode") != "pressure_dependent" or pvt.get("model") != "black_oil_v1"):
+        raise ContextResolutionError("INCOMPATIBLE_PVT_CONTEXT", "the current case PVT selectors are incomplete or unsupported.")
+    if provider is not None:
+        result = IntegratedSystemEngine().calculate(inputs, pvt_provider=provider, pvt_context=dict(pvt_context))
+    else:
+        result = IntegratedSystemEngine().calculate(inputs)
+    if provider is not None:
+        result.pvt_metadata["mode"] = str(pvt.get("mode"))
+        result.pvt_metadata["model"] = str(pvt.get("model"))
+    new_case = build_system_case(
+        inputs,
+        result,
+        request={"calculation": "system", "arguments": override, "context_override": "thp"},
+        pvt_context=pvt_context,
+        pvt_mode=pvt.get("mode") if isinstance(pvt, Mapping) else None,
+        pvt_model=pvt.get("model") if isinstance(pvt, Mapping) else None,
+    )
+    _remember_engineering_case(new_case, message)
+    return _format_system_result(result) + f"\n\nEngineering Case ID: {new_case.case_id}"
+
+
+def _context_reference(text: str) -> Optional[str]:
+    """Extract only an explicit reference; absence means current case."""
+    match = re.search(r"\b[0-9a-f]{64}\b", text, re.IGNORECASE)
+    if match:
+        return match.group(0).lower()
+    if any(term in text for term in ("previous case", "last case", "the one before", "الحالة السابقة", "السابقة", "اللي قبلها", "قبلها")):
+        return "previous"
+    if any(term in text for term in ("first case", "الحالة الأولى", "الحالة الاولي", "اول حالة", "أول حالة", "الأولى", "الاولي")):
+        return "first"
+    if any(term in text for term in ("current case", "this case", "الحالة الحالية", "هذه الحالة", "الحالية")):
+        return "current"
+    return None
+
+
+def handle_engineering_context_message(message: Dict[str, Any]) -> Optional[str]:
+    """Handle only explicit contextual engineering intents; return None otherwise."""
+    text = str(message.get("text", "")).strip()
+    if not text or text.startswith("/"):
+        return None
+    lowered = re.sub(r"\s+", " ", text.casefold()).strip()
+    chat_id = _chat_id(message)
+    reference = _context_reference(lowered)
+    try:
+        if (
+            ("compare" in lowered and any(term in lowered for term in ("previous", "last", "before")))
+            or ("قارن" in lowered and any(term in lowered for term in ("السابقة", "قبلها", "اللي قبلها")))
+        ):
+            return _context_comparison(chat_id)
+        if (
+            "replay" in lowered or "recalculate" in lowered or "calculate again" in lowered
+            or "اعمل replay" in lowered or "أعد الحساب" in lowered or "اعد الحساب" in lowered
+        ):
+            return _context_case_action(chat_id, reference, "replay")
+        if any(phrase in lowered for phrase in (
+            "give me the report", "give me report", "case report", "engineering report",
+            " اعطني التقرير", " أعطني التقرير", "اعطني تقرير", "أعطني تقرير",
+            "التقرير", "تقرير الحالة", "report",
+        )):
+            return _context_case_action(chat_id, reference, "report")
+        if re.search(r"(?:change|update|modify|set|غير|عد[ّلل]|بدل)\s*(?:the\s*)?thp", lowered):
+            match = re.search(r"(?:to|=|إلى|الى)\s*(-?\d+(?:\.\d+)?)\s*(psia|psi)\b", lowered)
+            if match is None:
+                raise ContextResolutionError("MISSING_OVERRIDE", "specify the new THP value with psia, for example: change THP to 200 psia")
+            if match.group(2).lower() != "psia":
+                raise ContextResolutionError("INVALID_UNIT", "THP context override requires psia")
+            return _context_mutate_thp(chat_id, float(match.group(1)), message)
+    except (ContextResolutionError, ComparisonError, ChokeError, SystemError, ValueError) as exc:
+        code = getattr(exc, "code", "INVALID_CONTEXT_REQUEST")
+        detail = getattr(exc, "message", str(exc))
+        return f"Error: {code}: {detail}"
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -317,6 +568,11 @@ def handle_reset(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Opt
     if chat_id in IMAGE_CONTEXT:
         _delete_temp_image(IMAGE_CONTEXT[chat_id])
         del IMAGE_CONTEXT[chat_id]
+    ENGINEERING_SESSION_CONTEXT.pop(str(chat_id), None)
+    try:
+        _CASE_REGISTRY.delete_session(session_key_for_chat(chat_id))
+    except (RuntimeError, OSError, SessionNotFoundError, ValueError):
+        pass
     return "Context cleared. Upload a new file or ask a question.", None, None
 
 
@@ -384,30 +640,35 @@ def handle_calc(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Opti
     formula_key = parts[1]
     args_str = parts[2] if len(parts) > 2 else ""
 
+    def _delegate_text(prefix: str) -> Dict[str, Any]:
+        delegated = dict(message)
+        delegated["text"] = prefix + args_str
+        return delegated
+
     if formula_key.lower() in ("gas_lift", "gaslift"):
         text, png, caption = handle_calc_gas_lift(
-            {"text": "/gas_lift " + args_str}, tg
+            _delegate_text("/gas_lift "), tg
         )
         return text, png, caption
     if formula_key.lower() in ("choke", "surface_choke"):
         text, png, caption = handle_calc_choke(
-            {"text": "/choke " + args_str}, tg
+            _delegate_text("/choke "), tg
         )
         return text, png, caption
     if formula_key.lower() == "system":
         text, png, caption = handle_calc_system(
-            {"text": "/system " + args_str}, tg
+            _delegate_text("/system "), tg
         )
         return text, png, caption
     if formula_key.lower() == "case":
-        return handle_case_command({"text": "/case " + args_str}, tg)
+        return handle_case_command(_delegate_text("/case "), tg)
     if formula_key.lower() == "vlp":
         # Deterministic Production VLP engine (Phase 2: VLP only); handled
         # separately from EXACT_FORMULAS so that Beggs-Brill guardrails and
         # curve/plot generation apply. Same parse_kv_args caution as IPR:
         # string keys (plot=) are kept before numeric parsing.
         text, png, caption = handle_calc_vlp(
-            {"text": "/vlp " + args_str}, tg
+            _delegate_text("/vlp "), tg
         )
         return text, png, caption
     if formula_key.lower() == "nodal":
@@ -415,7 +676,7 @@ def handle_calc(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Opti
         # the verified IPR + VLP engines); kept separate from EXACT_FORMULAS
         # for the same parse_kv_args caution (model=, plot= string keys).
         text, png, caption = handle_calc_nodal(
-            {"text": "/nodal " + args_str}, tg
+            _delegate_text("/nodal "), tg
         )
         return text, png, caption
 
@@ -426,26 +687,26 @@ def handle_calc(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Opti
         # the string keys (model=, plot=) that the generic numeric parser
         # would otherwise drop.
         text, png, caption = handle_calc_ipr(
-            {"text": "/ipr " + args_str}, tg
+            _delegate_text("/ipr "), tg
         )
         return text, png, caption
     if formula_key.lower() in ("sensitivity", "sens"):
         # Phase 4: deterministic sensitivity layer over the verified Nodal
         # engine; string keys (type=, plot=) are kept first like IPR/VLP.
         text, png, caption = handle_calc_sensitivity(
-            {"text": "/sensitivity " + args_str}, tg
+            _delegate_text("/sensitivity "), tg
         )
         return text, png, caption
     if formula_key.lower() in ("optimize", "optim"):
         # Phase 4: deterministic constrained candidate optimization over
         # the verified Nodal engine; string keys kept first like IPR/VLP.
         text, png, caption = handle_calc_optimize(
-            {"text": "/optimize " + args_str}, tg
+            _delegate_text("/optimize "), tg
         )
         return text, png, caption
     if formula_key.lower() in ("compare", "comparison"):
         text, png, caption = handle_calc_compare(
-            {"text": "/compare " + args_str}, tg
+            _delegate_text("/compare "), tg
         )
         return text, png, caption
     if formula_key.lower() in ("vlp_compare", "vlp_compare_models"):
@@ -453,7 +714,7 @@ def handle_calc(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], Opti
         # correlations (Beggs-Brill 1973 vs Hagedorn-Brown 1965) with an
         # overlay plot; same parse_kv_args caution as /calc vlp.
         text, png, caption = handle_calc_vlp_compare(
-            {"text": "/vlp_compare " + args_str}, tg
+            _delegate_text("/vlp_compare "), tg
         )
         return text, png, caption
 
@@ -649,7 +910,7 @@ def handle_calc_gas_lift(message: Dict[str, Any], tg) -> Tuple[str, Optional[byt
                 pvt_mode=pvt_kwargs.get("pvt_mode"),
                 pvt_model=pvt_kwargs.get("pvt_model"),
             )
-            _remember_engineering_case(failure_case)
+            _remember_engineering_case(failure_case, message)
             if report_requested:
                 return generate_report_v1(failure_case), None, None
             return (
@@ -668,7 +929,7 @@ def handle_calc_gas_lift(message: Dict[str, Any], tg) -> Tuple[str, Optional[byt
                 pvt_mode=pvt_kwargs.get("pvt_mode"),
                 pvt_model=pvt_kwargs.get("pvt_model"),
             )
-            _remember_engineering_case(failure_case)
+            _remember_engineering_case(failure_case, message)
             if report_requested:
                 return generate_report_v1(failure_case), None, None
             return (
@@ -690,7 +951,7 @@ def handle_calc_gas_lift(message: Dict[str, Any], tg) -> Tuple[str, Optional[byt
             pvt_mode=pvt_kwargs.get("pvt_mode"),
             pvt_model=pvt_kwargs.get("pvt_model"),
         )
-        _remember_engineering_case(engineering_case)
+        _remember_engineering_case(engineering_case, message)
         if report_requested:
             return generate_report_v1(engineering_case), None, None
         formatted += f"\n\nEngineering Case ID: {engineering_case.case_id}"
@@ -841,7 +1102,7 @@ def handle_calc_choke(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes]
                 pvt_mode=pvt_kwargs.get("pvt_mode"),
                 pvt_model=pvt_kwargs.get("pvt_model"),
             )
-            _remember_engineering_case(failure_case)
+            _remember_engineering_case(failure_case, message)
             if report_requested:
                 return generate_report_v1(failure_case), None, None
             return (
@@ -876,7 +1137,7 @@ def handle_calc_choke(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes]
             pvt_mode=pvt_kwargs.get("pvt_mode"),
             pvt_model=pvt_kwargs.get("pvt_model"),
         )
-        _remember_engineering_case(engineering_case)
+        _remember_engineering_case(engineering_case, message)
         if report_requested:
             return generate_report_v1(engineering_case), None, None
         formatted += f"\n\nEngineering Case ID: {engineering_case.case_id}"
@@ -999,7 +1260,7 @@ def handle_calc_compare(message: Dict[str, Any], tg) -> Tuple[str, Optional[byte
         comparison = _build_comparison_from_text(parts[1])
     except ComparisonError as exc:
         return f"Error: {exc.code}: {exc.message}\n\n{_COMPARISON_USAGE}", None, None
-    _remember_comparison(comparison)
+    _remember_comparison(comparison, message)
     return format_comparison(comparison), None, None
 
 
@@ -1064,7 +1325,7 @@ def handle_comparison_command(message: Dict[str, Any], tg) -> Tuple[str, Optiona
         )
     except (CaseNotFoundError, ValueError):
         pass
-    _remember_comparison(replayed)
+    _remember_comparison(replayed, message)
     prefix = "Replay comparison: MATCH" if match else "Replay comparison: DIFFERENT"
     return prefix + "\n\n" + generate_comparison_report_v1(replayed), None, None
 
@@ -1156,7 +1417,7 @@ def handle_case_command(message: Dict[str, Any], tg) -> Tuple[str, Optional[byte
         _CASE_REGISTRY.record_replay_result(case.case_id, matched=match, result=replayed.result)
     except (CaseNotFoundError, ValueError):
         pass
-    _remember_engineering_case(replayed)
+    _remember_engineering_case(replayed, message)
     report = generate_report_v1(replayed)
     prefix = "Replay comparison: MATCH" if match else "Replay comparison: DIFFERENT"
     replay_note = (
@@ -1333,7 +1594,7 @@ def handle_calc_system(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes
                 pvt_mode=pvt_kwargs.get("pvt_mode"),
                 pvt_model=pvt_kwargs.get("pvt_model"),
             )
-            _remember_engineering_case(failure_case)
+            _remember_engineering_case(failure_case, message)
             if report_requested:
                 return generate_report_v1(failure_case), None, None
             return (
@@ -1356,7 +1617,7 @@ def handle_calc_system(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes
             pvt_mode=pvt_kwargs.get("pvt_mode"),
             pvt_model=pvt_kwargs.get("pvt_model"),
         )
-        _remember_engineering_case(engineering_case)
+        _remember_engineering_case(engineering_case, message)
         if report_requested:
             return generate_report_v1(engineering_case), None, None
         formatted += f"\n\nEngineering Case ID: {engineering_case.case_id}"
@@ -2098,7 +2359,7 @@ def handle_calc_nodal(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes]
                 pvt_mode=pvt_mode or None,
                 pvt_model=pvt_model or None,
             )
-            _remember_engineering_case(failure_case)
+            _remember_engineering_case(failure_case, message)
             if report_requested:
                 return generate_report_v1(failure_case), None, None
             return (
@@ -2189,7 +2450,7 @@ def handle_calc_nodal(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes]
             pvt_mode=pvt_mode or None,
             pvt_model=pvt_model or None,
         )
-        _remember_engineering_case(engineering_case)
+        _remember_engineering_case(engineering_case, message)
         if report_requested:
             return generate_report_v1(engineering_case), png, None
         out.append("")
@@ -2454,7 +2715,7 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
                 pvt_mode=pvt_mode or None,
                 pvt_model=pvt_model or None,
             )
-            _remember_engineering_case(failure_case)
+            _remember_engineering_case(failure_case, message)
             if report_requested:
                 return generate_report_v1(failure_case), None, None
             return (
@@ -2479,7 +2740,7 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
                 pvt_mode=pvt_mode or None,
                 pvt_model=pvt_model or None,
             )
-            _remember_engineering_case(failure_case)
+            _remember_engineering_case(failure_case, message)
             if report_requested:
                 return generate_report_v1(failure_case), None, None
             return (
@@ -2518,7 +2779,7 @@ def handle_calc_vlp(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes], 
             pvt_mode=pvt_mode or None,
             pvt_model=pvt_model or None,
         )
-        _remember_engineering_case(engineering_case)
+        _remember_engineering_case(engineering_case, message)
         if report_requested:
             return generate_report_v1(engineering_case), png, None
         out.append("")
@@ -3375,7 +3636,7 @@ def handle_calc_sensitivity(message: Dict[str, Any], tg
                 pvt_mode=kwargs.get("pvt_mode") or None,
                 pvt_model=kwargs.get("pvt_model") or None,
             )
-            _remember_engineering_case(failure_case)
+            _remember_engineering_case(failure_case, message)
             if report_requested:
                 return generate_report_v1(failure_case), None, None
             return (
@@ -3402,7 +3663,7 @@ def handle_calc_sensitivity(message: Dict[str, Any], tg
                 pvt_mode=kwargs.get("pvt_mode") or None,
                 pvt_model=kwargs.get("pvt_model") or None,
             )
-            _remember_engineering_case(failure_case)
+            _remember_engineering_case(failure_case, message)
             if report_requested:
                 return generate_report_v1(failure_case), None, None
             return (
@@ -3426,7 +3687,7 @@ def handle_calc_sensitivity(message: Dict[str, Any], tg
                 pvt_mode=kwargs.get("pvt_mode") or None,
                 pvt_model=kwargs.get("pvt_model") or None,
             )
-            _remember_engineering_case(failure_case)
+            _remember_engineering_case(failure_case, message)
             if report_requested:
                 return generate_report_v1(failure_case), None, None
             return (
@@ -3520,7 +3781,7 @@ def handle_calc_sensitivity(message: Dict[str, Any], tg
             pvt_mode=kwargs.get("pvt_mode") or None,
             pvt_model=kwargs.get("pvt_model") or None,
         )
-        _remember_engineering_case(engineering_case)
+        _remember_engineering_case(engineering_case, message)
         if report_requested:
             return (generate_report_v1(engineering_case)
                     + f"\n\nEngineering Case ID: {engineering_case.case_id}"), png, None
@@ -3656,7 +3917,7 @@ def handle_calc_optimize(message: Dict[str, Any], tg
                 pvt_mode=kwargs.get("pvt_mode") or None,
                 pvt_model=kwargs.get("pvt_model") or None,
             )
-            _remember_engineering_case(failure_case)
+            _remember_engineering_case(failure_case, message)
             if report_requested:
                 return generate_report_v1(failure_case), None, None
             return (
@@ -3680,7 +3941,7 @@ def handle_calc_optimize(message: Dict[str, Any], tg
                 pvt_mode=kwargs.get("pvt_mode") or None,
                 pvt_model=kwargs.get("pvt_model") or None,
             )
-            _remember_engineering_case(failure_case)
+            _remember_engineering_case(failure_case, message)
             if report_requested:
                 return generate_report_v1(failure_case), None, None
             return (
@@ -3705,7 +3966,7 @@ def handle_calc_optimize(message: Dict[str, Any], tg
                 pvt_mode=kwargs.get("pvt_mode") or None,
                 pvt_model=kwargs.get("pvt_model") or None,
             )
-            _remember_engineering_case(failure_case)
+            _remember_engineering_case(failure_case, message)
             if report_requested:
                 return generate_report_v1(failure_case), None, None
             return (
@@ -3833,7 +4094,7 @@ def handle_calc_optimize(message: Dict[str, Any], tg
             pvt_mode=kwargs.get("pvt_mode") or None,
             pvt_model=kwargs.get("pvt_model") or None,
         )
-        _remember_engineering_case(engineering_case)
+        _remember_engineering_case(engineering_case, message)
         if report_requested:
             return (generate_report_v1(engineering_case)
                     + f"\n\nEngineering Case ID: {engineering_case.case_id}"), png, None
