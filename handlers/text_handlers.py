@@ -79,6 +79,11 @@ from services.engineering_context import (
     SessionContextError,
     session_key_for_chat,
 )
+from services.engineering_workflow import (
+    WorkflowError,
+    parse_workflow_intent,
+    render_result_interpretation,
+)
 from state import ENGINEERING_SESSION_CONTEXT
 from services.petroleum_knowledge import knowledge_usage
 from services.petroleum_qa import answer_engineering_question
@@ -525,6 +530,35 @@ def handle_engineering_context_message(message: Dict[str, Any]) -> Optional[str]
         detail = getattr(exc, "message", str(exc))
         return f"Error: {code}: {detail}"
     return None
+
+
+def handle_engineering_workflow_message(message: Dict[str, Any]) -> Optional[str]:
+    """Handle bounded natural workflow intents without invoking AI."""
+    text = str(message.get("text", "")).strip()
+    if not text or text.startswith("/"):
+        return None
+    try:
+        intent = parse_workflow_intent(text)
+        if intent is None:
+            return None
+        chat_id = _chat_id(message)
+        if intent.kind == "interpret":
+            previous = _context_case(chat_id, "previous", "interpretation")
+            current = _context_case(chat_id, "current", "interpretation")
+            return render_result_interpretation(previous, current)
+        if intent.kind == "natural_calculation":
+            if intent.thp_psia is None:
+                raise WorkflowError(
+                    "MISSING_DATA",
+                    "specify the THP value explicitly in psia; for example: "
+                    "calculate production at THP=200 psia",
+                )
+            return _context_mutate_thp(chat_id, intent.thp_psia, message)
+        raise WorkflowError("UNSUPPORTED_INTENT", "the natural workflow intent is not supported")
+    except (WorkflowError, ContextResolutionError, ComparisonError, ChokeError, SystemError, ValueError) as exc:
+        code = getattr(exc, "code", "INVALID_WORKFLOW_REQUEST")
+        detail = getattr(exc, "message", str(exc))
+        return f"Error: {code}: {detail}"
 
 
 # ═══════════════════════════════════════════════════════════════════════
