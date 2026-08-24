@@ -65,7 +65,8 @@ from services.engineering_case import (
     replay_case,
     replay_matches,
 )
-from services.engineering_report import generate_report_v1
+from services.engineering_report import generate_report_arabic_v1, generate_report_v1
+from services.engineering_language import is_arabic_text
 from services.engineering_case_registry import (
     CaseIntegrityError,
     CaseNotFoundError,
@@ -97,6 +98,7 @@ from services.scenario_comparison import (
     format_comparison,
     generate_comparison_report_v1,
     replay_comparison,
+    format_comparison_arabic,
 )
 from logging_config import get_logger
 
@@ -356,13 +358,21 @@ def _context_case(chat_id: Any, reference: Optional[str], action: str) -> Engine
         raise ContextResolutionError("CASE_INTEGRITY_FAILURE", str(exc)) from exc
 
 
-def _context_case_action(chat_id: Any, reference: Optional[str], action: str) -> str:
+def _context_case_action(
+    chat_id: Any,
+    reference: Optional[str],
+    action: str,
+    *,
+    language: str = "en",
+) -> str:
     case = _context_case(chat_id, reference, action)
     if action == "report":
         try:
             report = _CASE_REGISTRY.get_report(case.case_id)
         except (CaseNotFoundError, CaseIntegrityError):
             report = ""
+        if str(language).lower() == "ar":
+            return generate_report_arabic_v1(case)
         return report or generate_report_v1(case)
     try:
         replayed = replay_case(case)
@@ -383,7 +393,16 @@ def _context_case_action(chat_id: Any, reference: Optional[str], action: str) ->
         if match else
         "The replay produced a different result and requires engineering review."
     )
-    return ("Replay comparison: MATCH" if match else "Replay comparison: DIFFERENT") + "\n\n" + note + "\n\n" + generate_report_v1(replayed)
+    replay_note = (
+        "أُعيدت الحالة الهندسية نفسها بواسطة المحرك الحتمي."
+        if match
+        else "أعاد التشغيل نتيجة مختلفة وتحتاج إلى مراجعة هندسية."
+    ) if str(language).lower() == "ar" else note
+    replay_prefix = "مطابقة إعادة الحساب: MATCH" if str(language).lower() == "ar" and match else (
+        "مطابقة إعادة الحساب: DIFFERENT" if str(language).lower() == "ar" else ("Replay comparison: MATCH" if match else "Replay comparison: DIFFERENT")
+    )
+    replay_report = generate_report_arabic_v1(replayed) if str(language).lower() == "ar" else generate_report_v1(replayed)
+    return replay_prefix + "\n\n" + replay_note + "\n\n" + replay_report
 
 
 def _case_spec_from_context(case: EngineeringCase, label: str) -> ScenarioSpec:
@@ -423,7 +442,7 @@ def _case_spec_from_context(case: EngineeringCase, label: str) -> ScenarioSpec:
     )
 
 
-def _context_comparison(chat_id: Any) -> str:
+def _context_comparison(chat_id: Any, *, language: str = "en") -> str:
     context = load_engineering_session(chat_id)
     current_id = context.resolve_case_id("current")
     previous_id = context.resolve_case_id("previous")
@@ -436,6 +455,8 @@ def _context_comparison(chat_id: Any) -> str:
         request={"calculation": "contextual", "references": [previous.case_id, current.case_id]},
     )
     _remember_comparison(comparison, {"chat": {"id": chat_id}})
+    if str(language).lower() == "ar":
+        return format_comparison_arabic(comparison)
     return format_comparison(comparison)
 
 
@@ -476,6 +497,8 @@ def _context_mutate_thp(chat_id: Any, value: float, message: Dict[str, Any]) -> 
         pvt_model=pvt.get("model") if isinstance(pvt, Mapping) else None,
     )
     _remember_engineering_case(new_case, message)
+    if is_arabic_text(str(message.get("text", ""))):
+        return generate_report_arabic_v1(new_case)
     return _format_system_result(result) + f"\n\nEngineering Case ID: {new_case.case_id}"
 
 
@@ -506,18 +529,25 @@ def handle_engineering_context_message(message: Dict[str, Any]) -> Optional[str]
             ("compare" in lowered and any(term in lowered for term in ("previous", "last", "before")))
             or ("قارن" in lowered and any(term in lowered for term in ("السابقة", "قبلها", "اللي قبلها")))
         ):
-            return _context_comparison(chat_id)
+            return _context_comparison(
+                chat_id,
+                language="ar" if is_arabic_text(text) else "en",
+            )
         if (
             "replay" in lowered or "recalculate" in lowered or "calculate again" in lowered
             or "اعمل replay" in lowered or "أعد الحساب" in lowered or "اعد الحساب" in lowered
         ):
-            return _context_case_action(chat_id, reference, "replay")
+            return _context_case_action(
+                chat_id, reference, "replay", language="ar" if is_arabic_text(text) else "en"
+            )
         if any(phrase in lowered for phrase in (
             "give me the report", "give me report", "case report", "engineering report",
             " اعطني التقرير", " أعطني التقرير", "اعطني تقرير", "أعطني تقرير",
             "التقرير", "تقرير الحالة", "report",
         )):
-            return _context_case_action(chat_id, reference, "report")
+            return _context_case_action(
+                chat_id, reference, "report", language="ar" if is_arabic_text(text) else "en"
+            )
         if re.search(r"(?:change|update|modify|set|غير|عد[ّلل]|بدل)\s*(?:the\s*)?thp", lowered):
             match = re.search(r"(?:to|=|إلى|الى)\s*(-?\d+(?:\.\d+)?)\s*(psia|psi)\b", lowered)
             if match is None:
@@ -545,7 +575,11 @@ def handle_engineering_workflow_message(message: Dict[str, Any]) -> Optional[str
         if intent.kind == "interpret":
             previous = _context_case(chat_id, "previous", "interpretation")
             current = _context_case(chat_id, "current", "interpretation")
-            return render_result_interpretation(previous, current)
+            return render_result_interpretation(
+                previous,
+                current,
+                language="ar" if is_arabic_text(text) else "en",
+            )
         if intent.kind == "natural_calculation":
             if intent.thp_psia is None:
                 raise WorkflowError(
