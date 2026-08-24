@@ -19,6 +19,7 @@ import threading
 from typing import Any, Mapping, Optional
 
 from services.engineering_case import EngineeringCase
+from services.engineering_context import EngineeringSessionContext, SessionContextError
 
 
 _DEFAULT_DB_PATH = "./engineering_cases.sqlite3"
@@ -47,6 +48,8 @@ _VALID_COMPARISON_EVENT_TYPES = frozenset(
     }
 )
 _CASE_ID_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+_SESSION_KEY_RE = _CASE_ID_RE
+_SESSION_SCHEMA = "engineering_session_context_v2"
 _SECRET_VALUE_PATTERNS = (
     re.compile(r"\bghp_[A-Za-z0-9_]+\b"),
     re.compile(r"\bbot\d+:[A-Za-z0-9_-]+\b"),
@@ -170,6 +173,18 @@ class CaseIntegrityError(ValueError):
     """Typed, user-safe error for a tampered or unreadable case record."""
 
     code = "CASE_INTEGRITY_FAILURE"
+
+
+class SessionNotFoundError(LookupError):
+    """Typed error for a chat session with no persisted context."""
+
+    code = "SESSION_NOT_FOUND"
+
+
+class SessionIntegrityError(ValueError):
+    """Typed error for a tampered or incompatible persisted session."""
+
+    code = "SESSION_INTEGRITY_FAILURE"
 
 
 @dataclass(frozen=True)
@@ -313,6 +328,18 @@ class EngineeringCaseRegistry:
                 )
                 """
             )
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS engineering_sessions (
+                    session_key TEXT PRIMARY KEY,
+                    session_json TEXT NOT NULL,
+                    session_sha256 TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    schema_version TEXT NOT NULL DEFAULT 'engineering_session_context_v2'
+                )
+                """
+            )
             self._ensure_column("engineering_cases", "updated_at", "TEXT")
             self._ensure_column(
                 "engineering_cases", "schema_version", "TEXT NOT NULL DEFAULT 'engineering_case_v1'"
@@ -341,6 +368,9 @@ class EngineeringCaseRegistry:
             )
             self._connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_engineering_comparison_audit_sequence ON engineering_comparison_audit(comparison_id, sequence)"
+            )
+            self._connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_engineering_sessions_updated_at ON engineering_sessions(updated_at)"
             )
 
     def _ensure_column(self, table: str, column: str, definition: str) -> None:
@@ -1105,6 +1135,81 @@ class EngineeringCaseRegistry:
                 line += " — " + "; ".join(display_details)
             lines.append(line)
         return "\n".join(lines)
+
+    @staticmethod
+    def _normalise_session_key(session_key: Any) -> str:
+        candidate = str(session_key or "").strip().lower()
+        if not _SESSION_KEY_RE.fullmatch(candidate):
+            raise SessionNotFoundError("SESSION_NOT_FOUND: invalid session key")
+        return candidate
+
+    def save_session(
+        self,
+        session_key: str,
+        context: EngineeringSessionContext,
+    ) -> None:
+        """Persist a secret-free chat context in the existing Workspace database."""
+        normalized = self._normalise_session_key(session_key)
+        if not isinstance(context, EngineeringSessionContext):
+            raise ValueError("context must be an EngineeringSessionContext")
+        try:
+            payload = json.loads(context.to_json())
+            session_json = _safe_json(payload)
+        except (TypeError, ValueError, json.JSONDecodeError, SessionContextError) as exc:
+            raise ValueError("session context is not JSON serializable") from exc
+        content_hash = hashlib.sha256(session_json.encode("utf-8")).hexdigest()
+        now = _utc_now()
+        with self._lock, self._connection:
+            self._ensure_open()
+            self._connection.execute(
+                """
+                INSERT INTO engineering_sessions
+                    (session_key, session_json, session_sha256, created_at, updated_at, schema_version)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_key) DO UPDATE SET
+                    session_json=excluded.session_json,
+                    session_sha256=excluded.session_sha256,
+                    updated_at=excluded.updated_at,
+                    schema_version=excluded.schema_version
+                """,
+                (normalized, session_json, content_hash, now, now, _SESSION_SCHEMA),
+            )
+
+    def get_session(self, session_key: str) -> EngineeringSessionContext:
+        """Reload a context independently of the in-process cache."""
+        normalized = self._normalise_session_key(session_key)
+        with self._lock:
+            self._ensure_open()
+            row = self._connection.execute(
+                "SELECT * FROM engineering_sessions WHERE session_key = ?",
+                (normalized,),
+            ).fetchone()
+        if row is None:
+            raise SessionNotFoundError(f"SESSION_NOT_FOUND: no session for {normalized}")
+        session_json = row["session_json"]
+        stored_hash = str(row["session_sha256"] or "").lower()
+        if not isinstance(session_json, str) or stored_hash != hashlib.sha256(session_json.encode("utf-8")).hexdigest():
+            raise SessionIntegrityError("SESSION_INTEGRITY_FAILURE: stored session payload was modified")
+        if str(row["schema_version"] or "") != _SESSION_SCHEMA:
+            raise SessionIntegrityError("SESSION_INTEGRITY_FAILURE: unsupported session schema")
+        try:
+            payload = json.loads(session_json)
+            context = EngineeringSessionContext.from_dict(payload)
+        except (TypeError, ValueError, json.JSONDecodeError, SessionContextError) as exc:
+            raise SessionIntegrityError("SESSION_INTEGRITY_FAILURE: stored session payload is invalid") from exc
+        if context.to_json() != session_json:
+            raise SessionIntegrityError("SESSION_INTEGRITY_FAILURE: stored session payload is not canonical")
+        return context
+
+    def delete_session(self, session_key: str) -> None:
+        """Delete one chat context, used by explicit /reset only."""
+        normalized = self._normalise_session_key(session_key)
+        with self._lock, self._connection:
+            self._ensure_open()
+            self._connection.execute(
+                "DELETE FROM engineering_sessions WHERE session_key = ?",
+                (normalized,),
+            )
 
     def close(self) -> None:
         with self._lock:
