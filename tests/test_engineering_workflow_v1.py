@@ -118,8 +118,8 @@ def test_workflow_interpretation_is_deterministic_and_does_not_call_ai(tmp_path,
         ExplodingAI(),
     )
     assert len(telegram.messages) == 1
-    assert "Engineering Result Interpretation" in telegram.messages[0]
-    assert "Choke size" in telegram.messages[0]
+    assert "تفسير النتيجة الهندسية" in telegram.messages[0]
+    assert "مقاس الخنّاق" in telegram.messages[0]
     registry.close()
 
 
@@ -136,7 +136,8 @@ def test_natural_calculation_reuses_current_system_case_and_creates_new_case(tmp
         {"chat": {"id": CHAT}, "text": "احسب الإنتاج عند THP = 200 psia"}
     )
     assert response is not None
-    assert "Engineering Case ID:" in response
+    assert "معرّف الحالة:" in response
+    assert "نقطة التشغيل المتكاملة للبئر والخنّاق" in response
     updated = th.load_engineering_session(CHAT)
     assert updated.current_case_id != original.case_id
     assert updated.current_profile.get("well", "thp_psia").value == pytest.approx(200.0)
@@ -159,3 +160,17 @@ def test_natural_calculation_is_safe_when_context_or_data_is_missing(tmp_path, m
     )
     assert missing_override is not None and "MISSING_DATA" in missing_override
     registry.close()
+
+
+def test_arabic_result_interpretation_uses_petroleum_labels_and_transition_arrow():
+    previous = _system_case(100.0, 16.0, 711.218, 2525.833, 1654.175)
+    current = _system_case(100.0, 32.0, 1779.072, 1813.967, 1121.143)
+    text = render_result_interpretation(previous, current, language="ar")
+
+    assert "تفسير النتيجة الهندسية" in text
+    assert "مقاس الخنّاق" in text
+    assert "معدل السائل التشغيلي" in text
+    assert "ضغط قاع البئر أثناء الجريان (Pwf)" in text
+    assert "→" in text
+    assert "لا يُستنتج من ذلك استنتاج فيزيائي إضافي" not in text
+    assert "لم تُستنتج أي توصية" in text

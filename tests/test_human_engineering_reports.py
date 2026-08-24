@@ -5,6 +5,7 @@ change or re-implement any petroleum calculation.
 """
 
 from handlers import text_handlers as th
+from services.engineering_report import generate_report_arabic_v1
 
 
 BASE_VLP = (
@@ -112,3 +113,34 @@ def test_json_export_is_not_available_as_a_user_facing_case_command():
     assert "Use /case report" in response
     assert "{" not in response
     assert "}" not in response
+
+
+def test_report_uses_engineering_labels_for_temperature_and_geothermal_aliases():
+    _, case_id = _run(
+        "/calc sensitivity case=1 report=1 type=thp thp=100,200 " + BASE_VLP
+    )
+    report, _, error = th.handle_case_command(
+        {"text": f"/case report {case_id}"}, None
+    )
+
+    assert error is None
+    assert "Wellhead temperature: 120 degF" in report
+    assert "Geothermal gradient: 1.5 degF/100ft" in report
+    assert "T wh f" not in report
+    assert "Geothermal f 100ft" not in report
+
+
+def test_arabic_case_report_uses_verified_petroleum_labels_and_units():
+    _, case_id = _run(
+        "/calc sensitivity case=1 report=1 type=thp thp=100,200 " + BASE_VLP
+    )
+    case = th._CASE_REGISTRY.get_case(case_id)
+    report = generate_report_arabic_v1(case)
+
+    assert "تقرير الحالة الهندسية V1" in report
+    assert "درجة حرارة رأس البئر: 120 degF" in report
+    assert "التدرج الحراري الأرضي: 1.5 degF/100ft" in report
+    assert "المتبقي الضغطي للحل" in report or "المتبقي الضغطي" in report
+    assert "T wh f" not in report
+    assert "Geothermal f 100ft" not in report
+    assert "{\"" not in report

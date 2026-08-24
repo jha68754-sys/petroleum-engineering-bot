@@ -12,6 +12,7 @@ from services.scenario_comparison import (
     comparison_replay_matches,
     evaluate_comparison,
     replay_comparison,
+    format_comparison_arabic,
 )
 
 
@@ -127,6 +128,20 @@ def test_telegram_compare_surface_supports_repeated_labeled_scenarios():
     assert "small" in text and "large" in text
     assert "427.43" in text
     assert "Comparison ID:" in text
+
+
+def test_arabic_comparison_renderer_uses_petroleum_terms_without_raw_json():
+    comparison = evaluate_comparison([
+        choke_spec("الصغير", 16),
+        choke_spec("الكبير", 32),
+    ])
+    text = format_comparison_arabic(comparison)
+
+    assert "مقارنة السيناريوهات V1" in text
+    assert "معدل السائل المحسوب" in text
+    assert "معرّف الحالة" in text
+    assert "الأمانة الهندسية" in text
+    assert "{" not in text and "}" not in text
 
 
 def test_telegram_compare_rejects_unknown_override_as_typed_input_error():

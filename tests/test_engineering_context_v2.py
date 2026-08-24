@@ -157,10 +157,10 @@ def test_natural_report_previous_replay_and_comparison_are_deterministic(tmp_pat
     assert first.case_id in previous_report
 
     replay = th.handle_engineering_context_message({**message, "text": "اعمل replay"})
-    assert replay is not None and "Replay comparison: MATCH" in replay
+    assert replay is not None and "مطابقة إعادة الحساب: MATCH" in replay
 
     comparison = th.handle_engineering_context_message({**message, "text": "قارنها بالحالة السابقة"})
-    assert comparison is not None and "Scenario Comparison V1" in comparison
+    assert comparison is not None and "مقارنة السيناريوهات V1" in comparison
     assert "previous" in comparison and "current" in comparison
     registry.close()
 
@@ -193,7 +193,7 @@ def test_context_route_does_not_invoke_ai(monkeypatch):
     telegram = FakeTelegram()
     main.process_message({"chat": {"id": CHAT}, "text": "اعطني التقرير"}, telegram, ExplodingAI())
     assert telegram.messages
-    assert "Engineering Case Report" in telegram.messages[0][1]
+    assert "تقرير الحالة الهندسية V1" in telegram.messages[0][1]
 
 
 def test_calc_system_updates_chat_context_and_explicit_thp_override_recalculates(tmp_path, monkeypatch):
@@ -214,7 +214,7 @@ def test_calc_system_updates_chat_context_and_explicit_thp_override_recalculates
     changed = th.handle_engineering_context_message(
         {"chat": {"id": CHAT}, "text": "غير THP فقط إلى 200 psia"}
     )
-    assert changed and "Engineering Case ID:" in changed
+    assert changed and "معرّف الحالة:" in changed
     assert th.load_engineering_session(CHAT).current_case_id != context.current_case_id
     registry.close()
 

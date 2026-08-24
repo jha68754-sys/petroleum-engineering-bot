@@ -17,9 +17,9 @@ def test_definition_is_composed_from_verified_knowledge_with_source_basis():
 def test_engineering_meaning_intent_is_distinct_from_definition():
     response = answer_engineering_question("شن معناها هندسيًا Rs؟")
     assert response is not None
-    assert "Engineering meaning:" in response
-    assert "المعنى" not in response or "Engineering meaning" in response
-    assert "Source basis:" in response
+    assert "المعنى الهندسي:" in response
+    assert "Solution Gas-Oil Ratio" in response
+    assert "أساس المصدر:" in response
 
 
 def test_definition_and_unit_are_composed_together():
@@ -35,53 +35,53 @@ def test_definition_and_unit_are_composed_together():
 def test_unit_intent_understands_informal_arabic_request():
     response = answer_engineering_question("نبي وحدة Rs")
     assert response is not None
-    assert "Common unit: scf/STB" in response
-    assert "SI unit where applicable: m³/m³" in response
-    assert "Definition:" not in response
+    assert "الوحدة الشائعة: scf/STB" in response
+    assert "وحدة النظام الدولي عند انطباقها: m³/m³" in response
+    assert "التعريف:" not in response
 
 
 def test_rs_pb_relationship_uses_verified_state_relationship():
     response = answer_engineering_question("شن العلاقة بين Rs و Pb؟")
     assert response is not None
-    assert "Rs and Pb are linked through the oil PVT phase boundary." in response
-    assert "علاقة Rs:" in response
-    assert "No numerical value is inferred" in response
-    assert "Source basis:" in response
+    assert "العلاقة بين Rs وPb مرتبطة بحد التشبع في خواص النفط (PVT)." in response
+    assert "استجابة Rs:" in response
+    assert "ليست حسابًا عدديًا" in response
+    assert "أساس المصدر:" in response
 
 
 def test_related_concepts_are_listed_for_arabic_related_request():
     response = answer_engineering_question("شن المصطلحات المرتبطة بـ PVT؟")
     assert response is not None
-    assert "Related to PVT:" in response
-    assert "Source basis:" in response
+    assert "المصطلحات المرتبطة بـ PVT:" in response
+    assert "أساس المصدر:" in response
     assert "Bo" in response or "Pb" in response
 
 
 def test_three_term_comparison_is_not_reduced_to_two_terms():
     response = answer_engineering_question("شن الفرق بين Bo و Bg و Bw؟")
     assert response is not None
-    assert "Bo vs Bg vs Bw" in response
-    assert "Oil Formation Volume Factor" in response
-    assert "Gas Formation Volume Factor" in response
-    assert "Water Formation Volume Factor" in response
-    assert "not interchangeable" in response
+    assert "مقارنة المصطلحات: Bo مقابل Bg مقابل Bw" in response
+    assert "معامل حجم تكوين النفط" in response
+    assert "معامل حجم تكوين الغاز" in response
+    assert "معامل حجم تكوين الماء" in response
+    assert "لا يجوز اعتبار هذه المصطلحات متبادلة" in response
 
 
 def test_comparison_with_usage_is_one_coherent_answer():
     response = answer_engineering_question("شن الفرق بين Rs و GOR ووين نستخدم كل واحد؟")
     assert response is not None
-    assert "Rs vs GOR" in response
-    assert "Usage of each term:" in response
+    assert "مقارنة المصطلحات: Rs مقابل GOR" in response
+    assert "الاستخدام الهندسي لكل مصطلح:" in response
     assert "Rs:" in response and "GOR:" in response
-    assert "not interchangeable" in response
+    assert "ليسا مصطلحين متبادلين" in response or "لا يجوز اعتبار هذه المصطلحات متبادلة" in response
 
 
 def test_context_question_connects_rs_to_pb_without_calculating():
     response = answer_engineering_question("شن يصير لـ Rs لما الضغط ينزل تحت Pb؟")
     assert response is not None
-    assert "Pressure condition: below Pb" in response
-    assert "Rs response:" in response
-    assert "below Pb it declines as gas evolves" in response
+    assert "حالة الضغط: أقل من Pb" in response
+    assert "استجابة Rs:" in response
+    assert "عند انخفاض الضغط تحت Pb، تنخفض Rs" in response
     assert "استجابة Rs: عند انخفاض الضغط تحت Pb، تنخفض Rs" in response
     assert "استجابة Rs: Above Pb" not in response
     assert "ليست حسابًا عدديًا" in response
@@ -90,34 +90,37 @@ def test_context_question_connects_rs_to_pb_without_calculating():
 def test_explanation_intent_builds_simple_engineering_explanation():
     response = answer_engineering_question("اشرحلي PVT بطريقة بسيطة لكن هندسية.")
     assert response is not None
-    assert "Simple engineering explanation:" in response
-    assert "Pressure-Volume-Temperature" in response
-    assert "Why it matters:" in response
-    assert "Source basis:" in response
+    assert "التعريف المبسط:" in response
+    assert "الضغط والحجم ودرجة الحرارة" in response
+    assert "لماذا يهم هندسيًا؟" in response
+    assert "أساس المصدر:" in response
 
 
 def test_calculation_request_bridges_to_released_path_only():
     response = answer_engineering_question("عندي قيمة ضغط، احسبلي Bo")
     assert response is not None
-    assert "Calculation bridge for Bo" in response
+    assert "جسر الحساب للمصطلح Bo" in response
     assert "/calc vlp" in response
-    assert "does not create a second calculator" in response
+    assert "لا تنشئ حاسبة ثانية" in response
     assert "No numerical answer" not in response
 
 
 def test_ambiguous_symbols_are_clarified_without_random_resolution():
     for query, expected in [
         ("What is P?", "Pwf"),
-        ("ما معنى T؟", "reservoir temperature"),
+        ("ما معنى T؟", "درجة حرارة المكمن"),
         ("What is B?", "Bo"),
         ("What is GOR?", "solution GOR (Rs)"),
         ("What is pressure?", "Pwf"),
-        ("ما معنى درجة الحرارة؟", "reservoir temperature"),
+        ("ما معنى درجة الحرارة؟", "درجة حرارة المكمن"),
     ]:
         response = answer_engineering_question(query)
         assert response is not None, query
         assert expected in response, query
-        assert "no numerical value was inferred" in response
+        assert (
+            "no numerical value was inferred" in response
+            or "لم تُستنتج قيمة رقمية" in response
+        )
 
 
 def test_batch_keeps_known_and_unknown_questions_in_one_safe_response():
@@ -158,7 +161,7 @@ def test_main_dispatches_natural_qa_before_ai_fallback():
     )
     assert len(telegram.messages) == 1
     assert "Solution Gas-Oil Ratio" in telegram.messages[0][1]
-    assert "Source basis:" in telegram.messages[0][1]
+    assert "أساس المصدر:" in telegram.messages[0][1]
 
 
 def test_define_command_uses_the_same_qa_composer():
