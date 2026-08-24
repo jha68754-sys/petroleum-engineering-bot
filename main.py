@@ -213,7 +213,7 @@ def save_offset(offset: int) -> None:
 _STRAY_WORD_RE = re.compile(
     r"\S*[^\x00-\x7F\u0370-\u03FF"  # ASCII (plain English/digits/punctuation), Greek (gamma, mu, etc.)
     r"\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF"  # Arabic (all blocks)
-    r"\u2000-\u206F\u2200-\u22FF\u00B0\u00B2\u00B3\u00B5\u00B7\u00D7\s]\S*"  # units, punctuation, math operators
+    r"\u2000-\u206F\u2192\u2200-\u22FF\u00B0\u00B2\u00B3\u00B5\u00B7\u00D7\s]\S*"  # units, punctuation, math operators
 )
 
 

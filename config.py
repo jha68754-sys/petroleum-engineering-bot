@@ -118,8 +118,15 @@ TEMP_DIR: Path = Path(os.getenv("TEMP_DIR", tempfile.mkdtemp(prefix="pvt_bot_"))
 #  STATE PERSISTENCE
 # ─────────────────────────────────────────────────────────────────────
 
-# Path for persistent offset storage (survives Railway restarts)
-OFFSET_STATE_FILE: Path = Path(os.getenv("OFFSET_STATE_FILE", "offset_state.json"))
+# Reuse an attached Railway Volume for polling-offset durability when one exists.
+# Without a mounted volume, preserve the existing local fallback explicitly.
+_RAILWAY_VOLUME_MOUNT_PATH = os.getenv("RAILWAY_VOLUME_MOUNT_PATH", "")
+_DEFAULT_OFFSET_PATH = (
+    str(Path(_RAILWAY_VOLUME_MOUNT_PATH) / "offset_state.json")
+    if _RAILWAY_VOLUME_MOUNT_PATH
+    else "offset_state.json"
+)
+OFFSET_STATE_FILE: Path = Path(os.getenv("OFFSET_STATE_FILE", _DEFAULT_OFFSET_PATH))
 
 # SQLite path for the Engineering Case Registry. Set this to a mounted
 # persistent-volume path in Railway for survival across redeployments.
