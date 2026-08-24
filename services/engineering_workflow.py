@@ -15,6 +15,7 @@ from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 from services.engineering_case import EngineeringCase, canonical_json
 from services.engineering_report import _KEY_LABELS, _UNIT_BY_KEY
+from services.engineering_language import arabic_label, arabic_model_name, arabic_status
 
 
 class WorkflowError(ValueError):
@@ -235,6 +236,28 @@ def _format_input_difference(key: str, before: Any, after: Any) -> str:
     return f"{label}: {_display_number(before)}{unit_text} → {_display_number(after)}{unit_text}"
 
 
+def _format_delta_ar(key: str, before: Any, after: Any, delta: float, category: str) -> str:
+    unit = _UNIT_BY_KEY.get(key)
+    if category == "rate" and key == "calculated_rate_bpd":
+        unit = "bbl/day"
+    if category == "pressure":
+        unit = "psia"
+    if category == "residual":
+        unit = "psi"
+    unit_text = f" {unit}" if unit else ""
+    percent = ""
+    try:
+        before_number = float(before)
+        if not math.isclose(before_number, 0.0, abs_tol=1e-12):
+            percent = f" ({(delta / before_number) * 100:+.3f}%)"
+    except (TypeError, ValueError):
+        pass
+    return (
+        f"- {arabic_label(key)}: قبل {_display_number(before)}{unit_text}؛ "
+        f"بعد {_display_number(after)}{unit_text}؛ الفارق {delta:+,.6g}{unit_text}{percent}"
+    )
+
+
 def _format_delta(key: str, before: Any, after: Any, delta: float, category: str) -> str:
     unit = _UNIT_BY_KEY.get(key)
     if category == "rate" and key == "calculated_rate_bpd":
@@ -257,8 +280,82 @@ def _format_delta(key: str, before: Any, after: Any, delta: float, category: str
     )
 
 
-def render_result_interpretation(previous: EngineeringCase, current: EngineeringCase) -> str:
+def _render_result_interpretation_ar(previous: EngineeringCase, current: EngineeringCase) -> str:
+    if previous.status != "OK" or current.status != "OK":
+        return (
+            "تفسير النتيجة الهندسية\n"
+            "=====================\n"
+            f"حالة الحالة السابقة: {arabic_status(previous.status)}\n"
+            f"حالة الحالة الحالية: {arabic_status(current.status)}\n\n"
+            "لم يُنتج تفسير عددي لأن الحالتين يجب أن تكونا بحالة OK."
+        )
+    input_changes = _input_differences(previous, current)
+    result_changes = _metric_deltas(previous, current)
+    model_changed = _model_signature(previous) != _model_signature(current)
+    lines = [
+        "تفسير النتيجة الهندسية",
+        "=====================",
+        "مقارنة حتمية بين حالتين هندسيتين محفوظتين.",
+        "",
+        f"الحالة السابقة: {previous.case_id}",
+        f"الحالة الحالية: {current.case_id}",
+        f"نوع الحساب: {current.calculation_type}",
+        "",
+        "الفروق في المدخلات الهندسية",
+    ]
+    if input_changes:
+        for key, before, after in input_changes[:12]:
+            label_key = _label_key(key)
+            label = arabic_label(label_key)
+            unit = _unit_for_input(key)
+            unit_text = f" {unit}" if unit else ""
+            lines.append(
+                f"- {label}: {_display_number(before)}{unit_text} → {_display_number(after)}{unit_text}"
+            )
+        if len(input_changes) > 12:
+            lines.append(f"- فروق إضافية في المدخلات: {len(input_changes) - 12}")
+    else:
+        lines.append("- لم يُرصد فرق في مدخلات الحالتين المحفوظتين.")
+    lines.extend(["", "الفروق في النتائج المحسوبة"])
+    if result_changes:
+        lines.extend(_format_delta_ar(key, before, after, delta, category) for key, before, after, delta, category in result_changes)
+    else:
+        lines.append("- لم يُرصد فرق عددي في مقاييس النتيجة المختارة.")
+    lines.extend(["", "التفسير الهندسي"])
+    if result_changes and input_changes:
+        changed_names = "، ".join(arabic_label(_label_key(key)) for key, _, _ in input_changes[:6])
+        lines.append(
+            "تختلف الحالة الحالية عن السابقة في المدخلات المحفوظة التالية: "
+            f"{changed_names}. وتمثل الفروق المذكورة استجابة النموذج الحتمي المختار لهذه المدخلات المتغيرة."
+        )
+    elif result_changes:
+        lines.append(
+            "تختلف مقاييس النتيجة المحفوظة، لكن لم يُعثر على فرق في مدخلات الحالتين؛ "
+            "لذلك تُعامل الحالة كنقطة مراجعة لقابلية إعادة الإنتاج ولا يُستنتج سبب سببي."
+        )
+    else:
+        lines.append("لم تتغير مقاييس النتيجة المختارة بين الحالتين، ولا يُستنتج من ذلك استنتاج فيزيائي إضافي.")
+    if model_changed:
+        lines.append("تختلف أيضًا محددات النموذج أو اختيار الموديل أو مصدر خواص الموائع، ويجب أخذ ذلك في الاعتبار عند قراءة الفروق.")
+    else:
+        lines.append("محددات النموذج ومصدر خواص الموائع لم تتغير بين الحالتين.")
+    lines.extend([
+        "",
+        "ملاحظة النطاق: هذه مقارنة حتمية لنموذج هندسي، وليست بيانات حقلية مقاسة أو توقعًا أو تعليمات تشغيلية.",
+        "لم تُستنتج أي توصية أو خطوة تشغيلية.",
+    ])
+    return "\n".join(lines)
+
+
+def render_result_interpretation(
+    previous: EngineeringCase,
+    current: EngineeringCase,
+    *,
+    language: str = "en",
+) -> str:
     """Render a traceable, non-prescriptive interpretation of two Cases."""
+    if str(language).lower() in {"ar", "arabic", "العربية"}:
+        return _render_result_interpretation_ar(previous, current)
     if previous.status != "OK" or current.status != "OK":
         return (
             "Engineering Result Interpretation\n"

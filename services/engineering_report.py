@@ -12,6 +12,13 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from services.engineering_case import EngineeringCase
+from services.engineering_language import (
+    arabic_calculation_title,
+    arabic_domain,
+    arabic_label,
+    arabic_model_name,
+    arabic_status,
+)
 
 
 _REPORT_NOTE = (
@@ -62,9 +69,11 @@ _KEY_LABELS = {
     "j": "Productivity index",
     "q_op": "Operating production rate",
     "operating_rate_bpd": "Operating liquid rate",
+    "operating_rate_stbd": "Operating production rate",
     "calculated_rate_bpd": "Calculated liquid rate",
     "pwf_op": "Flowing bottomhole pressure",
     "pwf_psia": "Flowing bottomhole pressure",
+    "bottomhole_pressure_psia": "Bottomhole pressure",
     "pwf": "Flowing bottomhole pressure",
     "rate": "Production rate",
     "predicted_oil_rate_stbd": "Predicted oil production rate",
@@ -76,6 +85,7 @@ _KEY_LABELS = {
     "pressure_ratio": "Pressure ratio",
     "residual": "Pressure residual",
     "solver_residual_psi": "Solver pressure residual",
+    "pressure_residual_psi": "Solver pressure residual",
     "choke_size_64th_in": "Choke size",
     "liquid_rate_bpd": "Supplied liquid rate",
     "gas_injection_rate_mscfd": "Gas injection rate",
@@ -86,7 +96,9 @@ _KEY_LABELS = {
     "injection_depth_ft": "Injection depth",
     "tubing_gradient_psi_ft": "Tubing pressure gradient",
     "t_wh": "Wellhead temperature",
+    "t_wh_f": "Wellhead temperature",
     "geothermal": "Geothermal gradient",
+    "geothermal_f_100ft": "Geothermal gradient",
     "sigma": "Surface tension",
     "q_min": "Minimum production rate",
     "q_max": "Maximum production rate",
@@ -133,9 +145,11 @@ _UNIT_BY_KEY = {
     "j": "STB/day/psi",
     "q_op": "STB/day",
     "operating_rate_bpd": "bbl/day",
+    "operating_rate_stbd": "STB/day",
     "calculated_rate_bpd": "bbl/day",
     "pwf_op": "psia",
     "pwf_psia": "psia",
+    "bottomhole_pressure_psia": "psia",
     "pwf": "psia",
     "rate": "STB/day",
     "predicted_oil_rate_stbd": "STB/day",
@@ -146,6 +160,7 @@ _UNIT_BY_KEY = {
     "downstream_pressure_psia": "psia",
     "residual": "psi",
     "solver_residual_psi": "psi",
+    "pressure_residual_psi": "psi",
     "choke_size_64th_in": "64ths of an inch",
     "liquid_rate_bpd": "bbl/day",
     "gas_injection_rate_mscfd": "Mscf/day",
@@ -155,6 +170,10 @@ _UNIT_BY_KEY = {
     "average_temperature_f": "degF",
     "injection_depth_ft": "ft",
     "tubing_gradient_psi_ft": "psi/ft",
+    "t_wh": "degF",
+    "t_wh_f": "degF",
+    "geothermal": "degF/100ft",
+    "geothermal_f_100ft": "degF/100ft",
     "solver_iterations": "iterations",
     "n_points": "points",
     "segments": "segments",
@@ -498,8 +517,211 @@ def _case_inputs(case: EngineeringCase) -> list[str]:
     return lines
 
 
-def generate_report_v1(case: EngineeringCase) -> str:
+_AR_REPORT_NOTE = (
+    "نتيجة حساب هندسي حتمية مبنية على النموذج المختار؛ وليست قياسًا حقليًا، "
+    "ولا توقعًا للإنتاج، ولا توصية تشغيلية."
+)
+
+
+def _arabic_value_text(key: Any, value: Any, units: Mapping[str, Any] | None = None) -> str:
+    if value is None:
+        return "غير مقدم"
+    if isinstance(value, bool):
+        return "نعم" if value else "لا"
+    if isinstance(value, (int, float)):
+        return _value_text(key, value, units)
+    if isinstance(value, str):
+        lower = value.strip().lower()
+        if lower in {"ok", "converged", "unique_operating_point", "critical", "subcritical", "no_operating_point", "physically_invalid_state"}:
+            return arabic_status(value)
+        if lower in {"linear", "vogel", "composite", "auto", "beggs_brill", "gilbert_1954", "black_oil_v1", "pressure_dependent", "blackoilpvtprovider"}:
+            return arabic_model_name(value)
+        return _safe_text(value)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return "، ".join(_arabic_value_text(key, item, units) for item in value)
+    return "بيانات هندسية محفوظة"
+
+
+def _arabic_append_mapping_lines(
+    lines: list[str],
+    data: Mapping[str, Any],
+    *,
+    units: Mapping[str, Any] | None = None,
+    indent: str = "",
+    skip: frozenset[str] = _INTERNAL_KEYS,
+) -> None:
+    for key, value in data.items():
+        key_text = str(key)
+        if key_text in skip or value is None:
+            continue
+        if isinstance(value, Mapping):
+            lines.append(f"{indent}{arabic_label(key_text)}:")
+            _arabic_append_mapping_lines(lines, value, units=units, indent=indent + "  ", skip=skip)
+        elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            if value and all(not isinstance(item, (Mapping, Sequence)) for item in value):
+                lines.append(f"{indent}{arabic_label(key_text)}: {_arabic_value_text(key_text, value, units)}")
+            else:
+                lines.append(f"{indent}{arabic_label(key_text)}:")
+                for item in value:
+                    if isinstance(item, Mapping):
+                        _arabic_append_mapping_lines(lines, item, units=units, indent=indent + "  ", skip=skip)
+                    else:
+                        lines.append(f"{indent}  {_arabic_value_text(key_text, item, units)}")
+        else:
+            lines.append(f"{indent}{arabic_label(key_text)}: {_arabic_value_text(key_text, value, units)}")
+
+
+def _arabic_pvt_lines(pvt: Any) -> list[str]:
+    if not isinstance(pvt, Mapping) or not pvt:
+        return [
+            "وصف خواص الموائع (PVT): استُخدمت المدخلات التقليدية المحددة؛ ولم يُطلب تقييم Black-Oil معتمد على الضغط."
+        ]
+    mode = str(pvt.get("mode", "")).lower()
+    model = str(pvt.get("model", "")).lower()
+    provenance = pvt.get("provenance")
+    enabled = mode == "pressure_dependent" or model == "black_oil_v1" or (
+        isinstance(provenance, Mapping) and provenance.get("enabled")
+    )
+    if not enabled:
+        return ["وصف خواص الموائع (PVT): استُخدمت خواص الموائع التقليدية المحددة في الحالة."]
+    metadata = provenance if isinstance(provenance, Mapping) else {}
+    pressure_range = metadata.get("pressure_range_psia") or metadata.get("pressure_ranges")
+    values: list[float] = []
+    if isinstance(pressure_range, Sequence) and not isinstance(pressure_range, (str, bytes, bytearray)):
+        for item in pressure_range:
+            if isinstance(item, (int, float)):
+                values.append(float(item))
+            elif isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+                values.extend(float(x) for x in item if isinstance(x, (int, float)))
+    lines = [
+        "وصف خواص الموائع (PVT): خواص Black-Oil معتمدة على الضغط.",
+        f"نمط خواص الموائع: {arabic_model_name(mode) if mode else 'معتمد على الضغط'}.",
+        f"نموذج خواص الموائع: {arabic_model_name(model) if model else 'Black-Oil'}.",
+    ]
+    if len(values) >= 2:
+        lines.append(f"نطاق الضغط المقيم: {_number(values[0])} إلى {_number(values[-1])} psia.")
+    elif isinstance(pvt.get("context"), Mapping) and pvt["context"].get("pressure_psia") is not None:
+        lines.append(f"ضغط التقييم المسجل: {_number(pvt['context']['pressure_psia'])} psia.")
+    phases = metadata.get("phase_regions")
+    if phases:
+        lines.append("منطقة الطور: " + "، ".join(_safe_text(item) for item in phases) + ".")
+    evaluations = metadata.get("pvt_evaluations")
+    if evaluations:
+        lines.append(f"عدد تقييمات خواص الضغط: {_number(evaluations)} حالة.")
+    return lines
+
+
+def _arabic_generic_result(result: Any, units: Mapping[str, Any]) -> list[str]:
+    lines: list[str] = []
+    if isinstance(result, Mapping):
+        prominent = (
+            "operating_rate_bpd", "calculated_rate_bpd", "operating_rate_stbd", "q_op",
+            "pwf_op", "wellhead_pressure_psia", "bottomhole_pressure_psia",
+            "pressure_residual_psi", "residual", "flow_regime", "classification",
+        )
+        rendered: set[str] = set()
+        for key in prominent:
+            if key in result and result[key] is not None:
+                rendered.add(key)
+                lines.append(f"{arabic_label(key)}: {_arabic_value_text(key, result[key], units)}")
+        remaining = {
+            key: value for key, value in result.items()
+            if key not in rendered and key not in _INTERNAL_KEYS
+            and key not in {"warnings", "limitations", "pvt_metadata", "provenance", "choke_result", "vlp_result"}
+        }
+        if remaining:
+            _arabic_append_mapping_lines(lines, remaining, units=units)
+    elif result:
+        lines.append(_safe_text(result))
+    return lines
+
+
+def generate_report_arabic_v1(case: EngineeringCase) -> str:
+    """Return a deterministic, Arabic-first report from the stored Case envelope."""
+    if not isinstance(case, EngineeringCase):
+        raise TypeError("generate_report_arabic_v1 requires an EngineeringCase")
+    lines = [
+        "# تقرير الحالة الهندسية V1",
+        "",
+        f"## {arabic_calculation_title(case.calculation_type)}",
+        "",
+        "> " + _AR_REPORT_NOTE,
+        "",
+        "## هوية الحالة",
+        "",
+        f"- **معرّف الحالة:** `{_safe_text(case.case_id)}`",
+        f"- **الحالة:** `{arabic_status(case.status)}`",
+        "",
+        f"الحالة الهندسية: {arabic_status(case.status)}.",
+        "",
+        "## النموذج الهندسي",
+        "",
+        "يعرض هذا التقرير النموذج النفطي المختار، والمدخلات المقدمة، والنتائج المحسوبة، والقيود المسجلة دون إضافة بيانات غير موجودة في الحالة.",
+        "",
+    ]
+    if isinstance(case.model, Mapping):
+        model_name = case.model.get("engine") or case.model.get("model")
+        if model_name:
+            lines.append(f"نموذج الحساب: {arabic_model_name(model_name)}.")
+        if isinstance(case.selectors, Mapping) and case.selectors:
+            controls: list[str] = []
+            for key, value in case.selectors.items():
+                if str(key) in _INTERNAL_KEYS or value is None:
+                    continue
+                controls.append(f"{arabic_label(key)} = {_arabic_value_text(key, value)}")
+            if controls:
+                lines.append("ضوابط النموذج المختارة: " + "؛ ".join(controls) + ".")
+        lines.append("")
+    lines.extend(["## المدخلات الهندسية المقدمة", ""])
+    if isinstance(case.inputs, Mapping) and case.inputs:
+        _arabic_append_mapping_lines(lines, case.inputs, units=case.units)
+    else:
+        lines.append("استُخدمت حالة المدخلات الهندسية الكاملة المحفوظة مع معرّف الحالة.")
+    lines.extend(["", "## وصف خواص الموائع (PVT)", ""])
+    lines.extend(_arabic_pvt_lines(case.pvt))
+    lines.append("")
+    error = _result_error(case)
+    if error is not None:
+        code, message = error
+        lines.extend([
+            "## النتيجة",
+            "",
+            "لم ينتج الحساب نقطة تشغيل هندسية صالحة.",
+            f"الحالة الهندسية: {_safe_text(code)}.",
+            f"التفصيل الهندسي: {_safe_text(message)}",
+            "",
+        ])
+    else:
+        lines.extend(["## النتيجة", ""])
+        result_lines = _arabic_generic_result(case.result, case.units)
+        lines.extend(result_lines or ["اكتمل الحساب دون حقول عددية إضافية للنتيجة."])
+        lines.extend(["", "هذه نتيجة محسوبة من المحرك الهندسي الحتمي المختار، وليست قياسًا حقليًا.", ""])
+    if case.limitations:
+        lines.extend(["## القيود الهندسية", ""])
+        lines.extend(f"- القيد المسجل من المحرك: {_safe_text(item)}" for item in case.limitations if item)
+        lines.append("")
+    if case.warnings:
+        lines.extend(["## التحذيرات الهندسية", ""])
+        lines.extend(f"- التحذير المسجل من المحرك: {_safe_text(item)}" for item in case.warnings if item)
+        lines.append("")
+    lines.extend([
+        "## قابلية إعادة الحساب",
+        "",
+        "يحفظ معرّف الحالة حالة المدخلات، واختيار النموذج، وسياق خواص الموائع، ومسار الحساب الحتمي لإتاحة إعادة الحساب داخل البوت.",
+        "",
+        "## الأمانة الهندسية",
+        "",
+        _AR_REPORT_NOTE,
+        "لا يضيف التقرير قياسات حقلية أو توصيات أو تعليمات تشغيلية غير موجودة في نتيجة المحرك.",
+        "",
+    ])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def generate_report_v1(case: EngineeringCase, language: str = "en") -> str:
     """Return a stable, human-readable engineering report derived from ``case``."""
+    if str(language).lower() in {"ar", "arabic", "العربية"}:
+        return generate_report_arabic_v1(case)
     if not isinstance(case, EngineeringCase):
         raise TypeError("generate_report_v1 requires an EngineeringCase")
 
@@ -616,4 +838,4 @@ def generate_report_v1(case: EngineeringCase) -> str:
 render_report_v1 = generate_report_v1
 
 
-__all__ = ["generate_report_v1", "render_report_v1"]
+__all__ = ["generate_report_arabic_v1", "generate_report_v1", "render_report_v1"]

@@ -17,6 +17,7 @@ from services.petroleum_knowledge import (
     answer_knowledge_question,
     normalize_term,
 )
+from services.engineering_language import arabic_domain, is_arabic_text
 
 
 class EngineeringQALayer:
@@ -266,7 +267,251 @@ class EngineeringQALayer:
             base += usage
         return base
 
+    def _arabic_source_footer(self, records: Sequence[KnowledgeRecord]) -> str:
+        sources = self._unique_sources(records)
+        status = "؛ ".join(dict.fromkeys(
+            "موثق" if record.verification_status == "VERIFIED" else "غير موثق ويحتاج مراجعة"
+            for record in records
+        ))
+        if not sources:
+            return "\n\nأساس المصدر: لا يتوفر مصدر موثق لهذا الرد.\nحالة التحقق: " + status
+        return "\n\nأساس المصدر: " + "؛ ".join(sources) + f"\nحالة التحقق: {status}"
+
+    @staticmethod
+    def _arabic_unknown(text: str) -> str:
+        topic = str(text or "").strip()
+        return (
+            f"لا أملك سجلًا هندسيًا موثقًا للمصطلح أو السؤال: {topic}.\n"
+            "لن أخترع تعريفًا أو قيمة رقمية. حدّد مصطلحًا نفطيًا معروفًا مثل Bo أو Rs أو Bg أو Pb أو Pwf أو PI أو IPR أو VLP."
+        )
+
+    @staticmethod
+    def _arabic_clarify(symbol: str) -> str:
+        prompts = {
+            "P": "الحرف P رمز يعتمد معناه على السياق. حدّد ضغط المكمن، أو ضغط رأس البئر، أو ضغط المنبع، أو ضغط المصب، أو Pwf.",
+            "T": "الحرف T رمز يعتمد معناه على السياق. حدّد درجة حرارة المكمن، أو درجة حرارة الجريان، أو درجة حرارة الفاصل.",
+            "B": "الحرف B ليس رمزًا واحدًا كافيًا. حدّد معامل حجم تكوين النفط Bo، أو الغاز Bg، أو الماء Bw.",
+            "GOR": "حدّد هل تقصد نسبة الغاز إلى النفط المنتج GOR، أم نسبة الغاز المذاب إلى النفط Rs؛ فهما ليسا مصطلحين متبادلين.",
+        }
+        return prompts.get(symbol, "يرجى تحديد المصطلح النفطي المقصود قبل الإجابة.") + "\n\nالحالة: يلزم توضيح المصطلح؛ لم تُستنتج قيمة رقمية."
+
+    @staticmethod
+    def _arabic_record_heading(record: KnowledgeRecord) -> str:
+        return f"{record.symbol} — {record.canonical_arabic_name} ({record.canonical_english_name})"
+
+    def _arabic_definition(self, record: KnowledgeRecord) -> str:
+        related = "، ".join(item.symbol for item in self.knowledge._related_records(record)) or "لا توجد قائمة مرتبطة"
+        lines = [
+            self._arabic_record_heading(record),
+            "",
+            "التعريف:",
+            record.definition_ar,
+            "",
+            "المعنى الهندسي:",
+            record.engineering_meaning_ar,
+            "",
+            f"الوحدة الشائعة: {record.unit}",
+            f"وحدة النظام الدولي عند انطباقها: {record.si_unit}",
+            f"المجال الهندسي: {arabic_domain(record.domain)}",
+            f"المصطلحات المرتبطة: {related}",
+            f"حالة التحقق: {'موثق' if record.verification_status == 'VERIFIED' else 'غير موثق ويحتاج مراجعة'}",
+        ]
+        if record.notes:
+            lines.extend(["", f"ملاحظة هندسية: {record.notes}"])
+        if record.limitations:
+            lines.append(f"القيد: {record.limitations}")
+        return "\n".join(lines) + self._arabic_source_footer([record])
+
+    def _arabic_unit(self, record: KnowledgeRecord) -> str:
+        common = "، ".join(record.common_field_units) or record.unit
+        return (
+            f"{self._arabic_record_heading(record)}\n\n"
+            f"الوحدة الشائعة: {record.unit}\n"
+            f"وحدة النظام الدولي عند انطباقها: {record.si_unit}\n"
+            f"اصطلاحات الحقل: {common}\n"
+            f"المعنى البُعدي: {record.dimensional_meaning}\n\n"
+            f"ملاحظة: {record.notes or 'يجب تحديد حالة المائع وأساس القياس عند الحاجة.'}\n"
+            f"حالة التحقق: {'موثق' if record.verification_status == 'VERIFIED' else 'غير موثق ويحتاج مراجعة'}"
+        ) + self._arabic_source_footer([record])
+
+    def _arabic_formula(self, record: KnowledgeRecord) -> str:
+        if not record.formula:
+            return (
+                f"{self._arabic_record_heading(record)}\n\n"
+                "لا توجد معادلة واحدة لهذا المصطلح؛ فقيمته تعتمد على حالة المائع أو النموذج أو عملية الحساب.\n"
+                "لم تُستنتج قيمة رقمية."
+            )
+        variables = "؛ ".join(f"{key}: {value}" for key, value in record.formula_variables.items())
+        return (
+            f"{self._arabic_record_heading(record)}\n\n"
+            f"العلاقة الشائعة: {record.formula}\n"
+            f"المتغيرات: {variables or 'لا توجد متغيرات منفصلة مسجلة.'}\n\n"
+            "هذه علاقة تفسيرية؛ أما القيم الرقمية فتصدر فقط من مسارات الحساب الحتمية المعتمدة."
+        ) + self._arabic_source_footer([record])
+
+    def _arabic_comparison(self, records: Sequence[KnowledgeRecord], include_usage: bool = False) -> str:
+        sections = [f"مقارنة المصطلحات: {' مقابل '.join(record.symbol for record in records[:4])}"]
+        for record in records[:4]:
+            sections.extend([
+                "",
+                self._arabic_record_heading(record),
+                f"التعريف: {record.definition_ar}",
+                f"الوحدة: {record.unit}",
+            ])
+        sections.extend([
+            "",
+            "الخلاصة الهندسية: لكل مصطلح تعريف وأساس حجمي ووحدة بحسب الطور أو المفهوم؛ ولا يجوز اعتبار هذه المصطلحات متبادلة.",
+        ])
+        if include_usage:
+            sections.extend([
+                "",
+                "الاستخدام الهندسي لكل مصطلح:",
+            ])
+            for record in records[:4]:
+                sections.append(f"{record.symbol}: {record.usage}")
+        return "\n".join(sections) + self._arabic_source_footer(records[:4])
+
+    def _arabic_relationship(self, records: Sequence[KnowledgeRecord]) -> str:
+        ids = {record.canonical_id for record in records}
+        by_id = {record.canonical_id: record for record in records}
+        if ids == {"rs", "pb"}:
+            rs, pb = by_id["rs"], by_id["pb"]
+            text = (
+                "العلاقة بين Rs وPb مرتبطة بحد التشبع في خواص النفط (PVT).\n"
+                f"استجابة Rs: {rs.engineering_meaning_ar}\n"
+                f"دور Pb: {pb.engineering_meaning_ar}\n\n"
+                "هذه علاقة حالة، وليست حسابًا عدديًا."
+            )
+        elif ids == {"rs", "gor"}:
+            rs, gor = by_id["rs"], by_id["gor"]
+            text = (
+                "Rs وGOR يصفان مفهومين مختلفين للغاز والنفط.\n"
+                f"Rs: {rs.definition_ar}\n"
+                f"GOR: {gor.definition_ar}\n\n"
+                "يمكن استخدامهما معًا في حسابات النفط، لكنهما ليسا مصطلحين متبادلين."
+            )
+        else:
+            text = "\n".join(
+                [f"العلاقة بين {' و'.join(record.symbol for record in records[:2])} ضمن السياق الهندسي المحدد:"]
+                + [f"{record.symbol}: {record.engineering_meaning_ar}" for record in records[:2]]
+                + ["\nتظل التعريفات والوحدات مختلفة ويجب تحديد حالة المائع عند التطبيق."]
+            )
+        return text + self._arabic_source_footer(records[:2])
+
+    def _arabic_context(self, records: Sequence[KnowledgeRecord]) -> str:
+        by_id = {record.canonical_id: record for record in records}
+        if "rs" in by_id and "pb" in by_id:
+            rs, pb = by_id["rs"], by_id["pb"]
+            return (
+                "حالة الضغط: أقل من Pb\n"
+                f"استجابة Rs: عند انخفاض الضغط تحت Pb، تنخفض Rs مع تحرر الغاز من المحلول. {rs.engineering_meaning_ar}\n\n"
+                f"معنى Pb: {pb.engineering_meaning_ar}\n\n"
+                "هذه علاقة حالة مستخرجة من سجل Knowledge موثق، وليست حسابًا عدديًا."
+            ) + self._arabic_source_footer([rs, pb])
+        return self._arabic_definition(records[0]) if records else self._arabic_unknown("حالة الضغط")
+
+    def _arabic_calculation_bridge(self, records: Sequence[KnowledgeRecord]) -> str:
+        record = records[0] if records else None
+        if record is None:
+            return self._arabic_unknown("الحساب")
+        routes = {
+            "bo": "/calc vlp أو /calc nodal أو /calc system أو /calc gas_lift مع سياق Black-Oil كامل",
+            "bg": "/calc vlp أو /calc nodal أو /calc system أو /calc gas_lift مع سياق Black-Oil كامل",
+            "bw": "/calc vlp أو /calc nodal أو /calc system مع مدخلات الماء المطلوبة",
+            "rs": "/calc vlp أو /calc nodal أو /calc system أو /calc gas_lift مع سياق Black-Oil كامل",
+            "pwf": "/calc ipr أو /calc vlp أو /calc nodal أو /calc system",
+            "pi": "/calc ipr أو /calc nodal",
+            "ipr": "/calc ipr أو /calc nodal",
+            "vlp": "/calc vlp أو /calc nodal",
+            "thp": "/calc vlp أو /calc nodal أو /calc sensitivity أو /calc system",
+            "pwh": "/calc vlp أو /calc nodal أو /calc system",
+            "choke": "/calc choke أو /calc system",
+            "gas_lift": "/calc gas_lift",
+            "water_cut": "/calc water_cut",
+            "wor": "/calc wor",
+            "gor": "/calc gor_produced",
+            "api_gravity": "/calc api",
+            "porosity": "/calc ooip عندما تكون المسامية مدخلًا؛ لا يوجد حاسبة مسامية مستقلة",
+            "permeability": "/calc darcy عندما تكون النفاذية مدخلًا؛ لا يوجد مقدّر نفاذية مستقل",
+        }
+        route = routes.get(record.canonical_id)
+        if not route:
+            return f"يمكن للبوت شرح {record.symbol}، لكن لا توجد حاسبة مستقلة موثقة له حاليًا.\nلن تُختلق قيمة رقمية."
+        if record.canonical_id in {"bo", "bg", "bw", "rs"}:
+            return (
+                f"جسر الحساب للمصطلح {record.symbol} ({record.canonical_arabic_name}):\n"
+                f"لا يوجد أمر مستقل /calc {record.symbol.lower()} في الإصدار المعتمد. تُقيَّم الخاصية داخل المسار الحتمي: {route}.\n"
+                "قدّم الضغط والحرارة وبيانات المائع واختيار النموذج المطلوبة، ثم اقرأ المصدر والوحدات والقيود والحالة.\n\n"
+                "طبقة Knowledge لا تنشئ حاسبة ثانية ولا تختلق رقمًا."
+            )
+        return (
+            f"مسار الحساب الحتمي للمصطلح {record.symbol}: {route}.\n\n"
+            "قدّم المدخلات الهندسية المطلوبة، ثم اقرأ النموذج والوحدات والقيود والحالة التي يعيدها محرك الحساب.\n"
+            "لن تُختلق قيمة رقمية."
+        ) + self._arabic_source_footer([record])
+
+    def _answer_one_ar(self, text: str) -> Tuple[Optional[str], bool]:
+        if not self._is_candidate(text):
+            return None, False
+        bare_symbol = self._topic_is_bare_ambiguous_symbol(text)
+        if bare_symbol:
+            return self._arabic_clarify(bare_symbol), True
+        records = self.knowledge.resolve_terms(text)
+        intent = self._intent(text)
+        if not records:
+            return self._arabic_unknown(text), True
+        if intent == "comparison":
+            return self._arabic_comparison(
+                records,
+                include_usage=self._has_phrase(text, "where used", "used for", "وين نستخدم", "نستخدم", "استخدام"),
+            ), True
+        if intent == "relationship":
+            return self._arabic_relationship(records), True
+        if intent == "definition_unit":
+            return self._arabic_definition(records[0]), True
+        if intent == "unit":
+            return self._arabic_unit(records[0]), True
+        if intent == "formula":
+            return self._arabic_formula(records[0]), True
+        if intent == "calculation":
+            return self._arabic_calculation_bridge(records), True
+        if intent == "related":
+            related = self.knowledge._related_records(records[0])
+            if related:
+                items = "، ".join(f"{item.symbol} — {item.canonical_arabic_name}" for item in related[:8])
+                return f"المصطلحات المرتبطة بـ {records[0].symbol}: {items}" + self._arabic_source_footer(records[:1]), True
+            return f"لا توجد مصطلحات مرتبطة مسجلة بـ {records[0].symbol}." + self._arabic_source_footer(records[:1]), True
+        if intent == "context":
+            return self._arabic_context(records), True
+        if intent == "engineering_meaning":
+            return (
+                "\n\n--------------------\n\n".join(
+                    f"{self._arabic_record_heading(record)}\nالمعنى الهندسي:\n{record.engineering_meaning_ar}\nالمجال: {arabic_domain(record.domain)}\nحالة التحقق: موثق"
+                    for record in records[:4]
+                ) + self._arabic_source_footer(records[:4]),
+                True,
+            )
+        if intent == "usage":
+            return (
+                "\n\n--------------------\n\n".join(
+                    f"{self._arabic_record_heading(record)}\nالمعنى التطبيقي: {record.engineering_meaning_ar}\nالمجال: {arabic_domain(record.domain)}"
+                    for record in records[:4]
+                ) + self._arabic_source_footer(records[:4]),
+                True,
+            )
+        if intent == "explanation":
+            return (
+                "\n\n--------------------\n\n".join(
+                    f"{self._arabic_record_heading(record)}\nالتعريف المبسط: {record.definition_ar}\n\nلماذا يهم هندسيًا؟ {record.engineering_meaning_ar}"
+                    for record in records[:3]
+                ) + self._arabic_source_footer(records[:3]),
+                True,
+            )
+        return self._arabic_definition(records[0]), True
+
     def _answer_one(self, text: str) -> Tuple[Optional[str], bool]:
+        if is_arabic_text(text):
+            return self._answer_one_ar(text)
         candidate = self._is_candidate(text)
         if not candidate:
             return None, False

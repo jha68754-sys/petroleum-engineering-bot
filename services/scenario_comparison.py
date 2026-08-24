@@ -12,7 +12,9 @@ from dataclasses import asdict, dataclass
 import json
 import math
 import re
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+
+from services.engineering_language import arabic_label, arabic_status
 
 from services.choke_engine import ChokeEngine, ChokeError, ChokeInput
 from services.engineering_case import (
@@ -545,6 +547,40 @@ def _metric_line(outcome: ScenarioOutcome) -> str:
     )
 
 
+def format_comparison_arabic(comparison: ScenarioComparison) -> str:
+    """Create concise Arabic-first Telegram-safe comparison output."""
+    lines = [
+        "مقارنة السيناريوهات V1",
+        "====================",
+        "تقييم حتمي متجاور للسيناريوهات الهندسية المقدمة.",
+        "",
+        f"معرّف المقارنة: {comparison.comparison_id}",
+        f"عدد السيناريوهات: {len(comparison.scenarios)}",
+        "",
+        "السيناريوهات",
+    ]
+    for outcome in comparison.scenarios:
+        case = outcome.case
+        result = case.result if isinstance(case.result, Mapping) else {}
+        if case.calculation_type in {"choke", "choke_v1"}:
+            metrics = f"معدل السائل المحسوب = {result.get('calculated_rate_bpd', 'غير متاح')} bbl/day"
+        else:
+            metrics = (
+                f"معدل الإنتاج التشغيلي = {result.get('operating_rate_bpd', 'غير متاح')} STB/day؛ "
+                f"ضغط قاع البئر أثناء الجريان (Pwf) = {result.get('pwf_psia', 'غير متاح')} psia؛ "
+                f"ضغط رأس البئر (Pwh) = {result.get('wellhead_pressure_psia', 'غير متاح')} psia"
+            )
+        lines.append(
+            f"- {outcome.label}: الحالة = {arabic_status(case.status)}؛ {metrics}؛ "
+            f"معرّف الحالة = {case.case_id}"
+        )
+    lines.extend([
+        "",
+        "الأمانة الهندسية: هذه نتائج نماذج محسوبة، وليست قياسات حقلية أو توقعات إنتاج أو تعليمات تشغيلية.",
+    ])
+    return "\n".join(lines)
+
+
 def format_comparison(comparison: ScenarioComparison) -> str:
     """Create concise Telegram-safe side-by-side output."""
     lines = [
@@ -636,5 +672,6 @@ __all__ = [
     "replay_comparison",
     "comparison_replay_matches",
     "format_comparison",
+    "format_comparison_arabic",
     "generate_comparison_report_v1",
 ]
