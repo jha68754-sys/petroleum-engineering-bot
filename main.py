@@ -69,7 +69,11 @@ from handlers.error_handlers import get_user_safe_error
 
 # Force import of all handler modules to register commands
 import handlers.text_handlers  # noqa: F401
-from handlers.text_handlers import handle_engineering_context_message, load_engineering_session
+from handlers.text_handlers import (
+    handle_engineering_context_message,
+    handle_engineering_workflow_message,
+    load_engineering_session,
+)
 
 logger = get_logger("main")
 
@@ -425,7 +429,19 @@ def process_message(
             )
             return
 
-        # --- Free text: deterministic Engineering Assistant Context first ---
+        # --- Free text: deterministic Workflow Orchestrator first ---
+        # Bounded natural calculation/interpretation intents use only stored
+        # deterministic Cases and released handlers; AI is deliberately not invoked.
+        workflow_answer = handle_engineering_workflow_message(message)
+        if workflow_answer is not None:
+            tg.send_message(
+                chat_id,
+                clean_text(workflow_answer),
+                reply_to_message_id=message_id,
+            )
+            return
+
+        # --- Free text: deterministic Engineering Assistant Context next ---
         # Explicit report/replay/comparison/override references are resolved
         # from stored deterministic cases. AI is deliberately not invoked.
         context_answer = handle_engineering_context_message(message)
