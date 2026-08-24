@@ -69,6 +69,7 @@ from handlers.error_handlers import get_user_safe_error
 
 # Force import of all handler modules to register commands
 import handlers.text_handlers  # noqa: F401
+from handlers.text_handlers import handle_engineering_context_message, load_engineering_session
 
 logger = get_logger("main")
 
@@ -81,6 +82,7 @@ from state import (
     IMAGE_CONTEXT,
     CONVERSATION_HISTORY,
     _LAST_AI_CALL_TIME,
+    ENGINEERING_SESSION_CONTEXT,
     _delete_temp_image
 )
 
@@ -330,6 +332,11 @@ def process_message(
     message_id = message.get("message_id")
     text = message.get("text", "").strip()
 
+    # Core V2 context is loaded before any routing. It is a sidecar to the
+    # released command handlers and does not alter calculation inputs.
+    if chat_id:
+        load_engineering_session(chat_id)
+
     try:
         # --- Document upload ---
         if message.get("document"):
@@ -414,6 +421,18 @@ def process_message(
                 "7. Separator Test\n8. Viscosity Test\n9. EOS Tuning\n\n"
                 "Use /classify after getting GOR and API.\n"
                 "Use /pvto or /pvtg for simulation table requirements.",
+                reply_to_message_id=message_id,
+            )
+            return
+
+        # --- Free text: deterministic Engineering Assistant Context first ---
+        # Explicit report/replay/comparison/override references are resolved
+        # from stored deterministic cases. AI is deliberately not invoked.
+        context_answer = handle_engineering_context_message(message)
+        if context_answer is not None:
+            tg.send_message(
+                chat_id,
+                clean_text(context_answer),
                 reply_to_message_id=message_id,
             )
             return

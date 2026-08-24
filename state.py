@@ -50,3 +50,6 @@ FILE_CONTEXT = _BoundedChatDict(MAX_TRACKED_CHATS)
 IMAGE_CONTEXT = _BoundedChatDict(MAX_TRACKED_CHATS, on_evict=_delete_temp_image)
 CONVERSATION_HISTORY = _BoundedChatDict(MAX_TRACKED_CHATS)
 _LAST_AI_CALL_TIME = _BoundedChatDict(MAX_TRACKED_CHATS)
+# Core V2 chat-scoped engineering context. The durable registry is the source
+# of truth when configured; this bounded map is only the fast in-process cache.
+ENGINEERING_SESSION_CONTEXT = _BoundedChatDict(MAX_TRACKED_CHATS)
