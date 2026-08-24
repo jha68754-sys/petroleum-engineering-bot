@@ -4,11 +4,11 @@
 
 Engineering Assistant Core V2 is **implemented locally and tested** as an integration layer above the released Petroleum Engineering Bot. It adds a serializable Engineering Data Model, a bounded chat-scoped Engineering Session Context, and persistence hooks in the existing Durable Engineering Workspace. It does not add a second calculation engine, a second knowledge base, field-data import, user accounts, uncertainty analysis, or paid infrastructure.
 
-The release is not yet deployable from this session because the managed GitHub connector has read-only access and rejected the write operation with HTTP 403. Therefore the accurate release status is:
+The release was published through the authenticated GitHub web session after the managed connector’s API path returned HTTP 403. The final remote commit is `23758885501bc52d21ab2d72a9da812d2c5034c4`; the seven changed files were verified against the local blobs. The accurate release status is:
 
-> **CORE IMPLEMENTED · TESTED · DEPLOYMENT BLOCKED · PERSISTENCE CROSS-REDEPLOY BLOCKED**
+> **CORE IMPLEMENTED · TESTED · DEPLOYED · PERSISTENCE CROSS-REDEPLOY BLOCKED**
 
-The local commit is ready, but `origin/main` has not advanced and Railway has not received a new deployment trigger.
+Railway accepted the resulting GitHub deployment and reported `Success` for the production service.
 
 ## Audit and actual gap
 
@@ -85,21 +85,21 @@ No secret was added to the repository. Credentials sent in chat were not used or
 
 ## Deployment and live acceptance
 
-The implementation is committed locally and the local worktree is clean. The remote branch remains at `f2e67ea97b2357b09098dbe67785c8de877a603d` because the managed GitHub connector rejected both git push and the write API operation with HTTP 403. The connector can read the repository and reports the account, but it does not currently have write permission.
+The local worktree remains clean. Core V2 was published to `origin/main` through the authenticated GitHub web session in four direct commits, ending at `23758885501bc52d21ab2d72a9da812d2c5034c4`. GitHub’s commit status for the final commit is `success` with context `secure-encouragement - petroleum-engineering-bot`; the target is Railway production.
 
-Because the commit has not reached GitHub, Railway has not received a deployment trigger for Core V2. No live Telegram acceptance is claimed for this increment. The prior deployed service remains the last verified Railway release; it does not contain this local Core V2 commit.
+Railway reported deployment status `Success` for the production service. This confirms deployment of the published repository state. No live Telegram acceptance is claimed here because no owner-led Telegram interaction was observed in this session.
 
 ## Limitations, blocked dependency and roadmap
 
 The current implementation provides local restart/reopen validation through the SQLite Workspace and a bounded in-memory fast cache. Cross-redeploy persistence is blocked until a durable Railway Volume or managed database is explicitly approved and provisioned. That decision remains outside this increment because the user required free availability and the checked Railway Volume model is usage-metered.
 
-The next safe step is operational rather than architectural: grant the managed GitHub connector `Contents: Read and write`, or push the local commit manually. After GitHub accepts the commit, verify the commit status, wait for Railway automatic deployment, inspect the online deployment, and perform owner-led live Telegram acceptance. Only after paid/credit-consuming storage is explicitly approved should cross-redeploy context persistence be tested on Railway.
+The next safe step is owner-led live Telegram acceptance against the deployed service. Cross-redeploy persistence remains blocked until a durable Railway Volume or managed database is explicitly approved and provisioned; no such paid or credit-consuming storage was created. Only after that approval should cross-redeploy context persistence be tested on Railway.
 
 ## Final status
 
-> **Engineering Assistant Core V2: IMPLEMENTED · TESTED · NOT YET DEPLOYED · PERSISTENCE BLOCKED**
+> **Engineering Assistant Core V2: IMPLEMENTED · TESTED · DEPLOYED · PERSISTENCE BLOCKED**
 
-The software layer is ready. The remaining blocker is write access to GitHub, followed by the deployment and live acceptance steps that cannot honestly be claimed until the commit is present on `origin/main`.
+The software layer is deployed and Railway reported success. Cross-redeploy persistence is intentionally blocked by the unprovisioned paid/credit-consuming storage dependency, and live Telegram acceptance remains owner-led rather than claimed by this session.
 
 ## References
 
