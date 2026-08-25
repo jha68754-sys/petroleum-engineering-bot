@@ -140,18 +140,24 @@ def test_arabic_case_report_uses_verified_petroleum_labels_and_units():
     report = generate_report_arabic_v1(case)
 
     assert "تقرير الحالة الهندسية V1" in report
-    assert "درجة حرارة رأس البئر: 120 درجة فهرنهايت" in report
-    assert "التدرج الحراري الأرضي: 1.5 درجة فهرنهايت/100 قدم" in report
-    assert "عامل الانضغاطية (Z): 0.9" in report
-    assert "التقارب العددي: متقاربة" in report
-    assert "مسح معدلات الإنتاج + تنصيف محاط" in report
+    assert "درجة حرارة رأس البئر (Twh): 120 degF" in report
+    assert "التدرج الحراري الأرضي (Geothermal gradient): 1.5 degF/100ft" in report
+    assert "عامل الانضغاطية (Z factor): 0.9" in report
+    assert "التقارب العددي (Convergence): متقاربة" not in report
+    assert "التقارب العددي (Convergence): converged" in report
+    assert "rate_scan + bracketed_bisection" in report
     assert "توافقت علاقة الضغط في جانب البئر" in report
-    assert "مقاس الخنّاق: 16 جزءًا من 64 من البوصة" in report
-    assert "الكثافة النوعية للغاز: 0.65 كثافة نوعية" in report
-    assert "معدل السائل التشغيلي: 711.218 برميل/يوم" in report
+    assert "Choke size: 16 64ths of an inch" in report
+    assert "الكثافة النوعية للغاز (Gas specific gravity): 0.65 specific gravity" in report
+    assert "معدل السائل التشغيلي: 711.218 bbl/day" in report
+    assert "Choke correlation = Gilbert correlation" in report
+    assert "نموذج IPR (IPR model) = Linear" in report
+    assert "نموذج VLP (VLP model) = Beggs–Brill" in report
+    assert "نقطة التشغيل المتكاملة للبئر وChoke" in report
     assert "T wh f" not in report
     assert "Geothermal f 100ft" not in report
     assert "Well-side and choke-side" not in report
-    assert "rate_scan + bracketed_bisection" not in report
-    assert "specific gravity" not in report
+    assert "الخنّاق" not in report
+    assert "نموذج الجريان الداخل" not in report
+    assert "جريان الخنّاق" not in report
     assert "{\"" not in report

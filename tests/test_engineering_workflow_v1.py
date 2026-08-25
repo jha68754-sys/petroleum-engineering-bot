@@ -119,7 +119,7 @@ def test_workflow_interpretation_is_deterministic_and_does_not_call_ai(tmp_path,
     )
     assert len(telegram.messages) == 1
     assert "تفسير النتيجة الهندسية" in telegram.messages[0]
-    assert "مقاس الخنّاق" in telegram.messages[0]
+    assert "Choke size" in telegram.messages[0]
     registry.close()
 
 
@@ -137,7 +137,7 @@ def test_natural_calculation_reuses_current_system_case_and_creates_new_case(tmp
     )
     assert response is not None
     assert "معرّف الحالة:" in response
-    assert "نقطة التشغيل المتكاملة للبئر والخنّاق" in response
+    assert "نقطة التشغيل المتكاملة للبئر وChoke" in response
     updated = th.load_engineering_session(CHAT)
     assert updated.current_case_id != original.case_id
     assert updated.current_profile.get("well", "thp_psia").value == pytest.approx(200.0)
@@ -168,7 +168,7 @@ def test_arabic_result_interpretation_uses_petroleum_labels_and_transition_arrow
     text = render_result_interpretation(previous, current, language="ar")
 
     assert "تفسير النتيجة الهندسية" in text
-    assert "مقاس الخنّاق" in text
+    assert "Choke size" in text
     assert "معدل السائل التشغيلي" in text
     assert "ضغط قاع البئر أثناء الجريان (Pwf)" in text
     assert "→" in text
