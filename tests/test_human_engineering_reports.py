@@ -132,15 +132,26 @@ def test_report_uses_engineering_labels_for_temperature_and_geothermal_aliases()
 
 def test_arabic_case_report_uses_verified_petroleum_labels_and_units():
     _, case_id = _run(
-        "/calc sensitivity case=1 report=1 type=thp thp=100,200 " + BASE_VLP
+        "/calc system case=1 model=linear pr=3000 j=1.5 tvd=8000 id=1.995 "
+        "gor=1000 rs=600 api=35 gamma_g=0.65 mu_l=1 bo=1.4 "
+        "t_wh=120 geothermal=1.5 choke=16 p_down=200"
     )
     case = th._CASE_REGISTRY.get_case(case_id)
     report = generate_report_arabic_v1(case)
 
     assert "تقرير الحالة الهندسية V1" in report
-    assert "درجة حرارة رأس البئر: 120 degF" in report
-    assert "التدرج الحراري الأرضي: 1.5 degF/100ft" in report
-    assert "المتبقي الضغطي للحل" in report or "المتبقي الضغطي" in report
+    assert "درجة حرارة رأس البئر: 120 درجة فهرنهايت" in report
+    assert "التدرج الحراري الأرضي: 1.5 درجة فهرنهايت/100 قدم" in report
+    assert "عامل الانضغاطية (Z): 0.9" in report
+    assert "التقارب العددي: متقاربة" in report
+    assert "مسح معدلات الإنتاج + تنصيف محاط" in report
+    assert "توافقت علاقة الضغط في جانب البئر" in report
+    assert "مقاس الخنّاق: 16 جزءًا من 64 من البوصة" in report
+    assert "الكثافة النوعية للغاز: 0.65 كثافة نوعية" in report
+    assert "معدل السائل التشغيلي: 711.218 برميل/يوم" in report
     assert "T wh f" not in report
     assert "Geothermal f 100ft" not in report
+    assert "Well-side and choke-side" not in report
+    assert "rate_scan + bracketed_bisection" not in report
+    assert "specific gravity" not in report
     assert "{\"" not in report
