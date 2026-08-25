@@ -14,11 +14,8 @@ from typing import Any
 from services.engineering_case import EngineeringCase
 from services.engineering_language import (
     arabic_calculation_title,
-    arabic_domain,
     arabic_label,
-    arabic_model_name,
     arabic_status,
-    arabic_unit,
 )
 
 
@@ -524,6 +521,105 @@ _AR_REPORT_NOTE = (
 )
 
 
+_ARABIC_REPORT_LABELS = {
+    "pr": "ضغط المكمن (Pr)",
+    "thp": "ضغط رأس البئر (THP)",
+    "tvd": "العمق الرأسي الحقيقي (TVD)",
+    "id": "القطر الداخلي للأنبوب (Tubing ID)",
+    "tubing_id_in": "القطر الداخلي للأنبوب (Tubing ID)",
+    "gor": "نسبة الغاز إلى النفط (GOR)",
+    "gor_scf_stb": "نسبة الغاز إلى النفط (GOR)",
+    "rs": "نسبة الغاز المذاب إلى النفط (Rs)",
+    "rs_scf_stb": "نسبة الغاز المذاب إلى النفط (Rs)",
+    "api": "درجة API للنفط (Oil API gravity)",
+    "gamma_g": "الكثافة النوعية للغاز (Gas specific gravity)",
+    "gamma_w": "الكثافة النوعية للماء (Water specific gravity)",
+    "mu_l": "لزوجة السائل (Liquid viscosity)",
+    "mu_l_cp": "لزوجة السائل (Liquid viscosity)",
+    "bo": "معامل حجم تكوين النفط (Bo)",
+    "bo_rb_stb": "معامل حجم تكوين النفط (Bo)",
+    "bw": "معامل حجم تكوين الماء (Bw)",
+    "wc": "القطع المائي (Water cut)",
+    "water_cut": "القطع المائي (Water cut)",
+    "j": "معامل الإنتاجية (PI)",
+    "operating_rate_bpd": "معدل السائل التشغيلي",
+    "operating_rate_stbd": "معدل الإنتاج التشغيلي",
+    "calculated_rate_bpd": "معدل السائل المحسوب",
+    "q_op": "معدل الإنتاج التشغيلي",
+    "pwf_op": "ضغط قاع البئر أثناء الجريان (Pwf)",
+    "pwf_psia": "ضغط قاع البئر أثناء الجريان (Pwf)",
+    "wellhead_pressure_psia": "ضغط رأس البئر (Pwh)",
+    "upstream_pressure_psia": "ضغط المنبع (Upstream pressure)",
+    "downstream_pressure_psia": "ضغط المصب (Downstream pressure)",
+    "pressure_ratio": "نسبة الضغط (Pressure ratio)",
+    "residual": "المتبقي الضغطي (Pressure residual)",
+    "solver_residual_psi": "المتبقي الضغطي للحل (Solver pressure residual)",
+    "pressure_residual_psi": "المتبقي الضغطي للحل (Solver pressure residual)",
+    "choke_size_64th_in": "Choke size",
+    "liquid_rate_bpd": "معدل السائل المقدم",
+    "t_wh": "درجة حرارة رأس البئر (Twh)",
+    "t_wh_f": "درجة حرارة رأس البئر (Twh)",
+    "geothermal": "التدرج الحراري الأرضي (Geothermal gradient)",
+    "geothermal_f_100ft": "التدرج الحراري الأرضي (Geothermal gradient)",
+    "sigma": "التوتر السطحي (Surface tension)",
+    "q_min": "الحد الأدنى لمعدل الإنتاج",
+    "q_max": "الحد الأقصى لمعدل الإنتاج",
+    "tol": "سماحية الضغط (Pressure tolerance)",
+    "pressure_tol": "سماحية الضغط (Pressure tolerance)",
+    "max_refine_iter": "الحد الأقصى لتكرارات التحسين (Maximum refinement iterations)",
+    "parameter_value": "قيمة المتغير (Parameter value)",
+    "classification": "التصنيف الهندسي (Engineering classification)",
+    "flow_regime": "نظام الجريان (Flow regime)",
+    "choke_flow_regime": "Choke flow regime",
+    "reason": "التفسير الهندسي",
+    "solver_iterations": "تكرارات Solver (Solver iterations)",
+    "solver_method": "طريقة Solver (Solver method)",
+    "convergence": "التقارب العددي (Convergence)",
+    "n_points": "عدد النقاط المقيمة (Evaluated points)",
+    "segments": "مقاطع الأنبوب (Tubing segments)",
+    "n_segments": "مقاطع الأنبوب (Tubing segments)",
+    "vlp_model": "نموذج VLP (VLP model)",
+    "ipr_model": "نموذج IPR (IPR model)",
+    "choke_model": "Choke correlation",
+    "z_factor": "عامل الانضغاطية (Z factor)",
+}
+
+
+def _arabic_report_label(key: Any) -> str:
+    return _ARABIC_REPORT_LABELS.get(str(key), arabic_label(key))
+
+
+def _arabic_report_model(value: Any) -> str:
+    models = {
+        "linear": "Linear",
+        "linear ipr": "Linear IPR",
+        "vogel": "Vogel",
+        "composite": "Composite",
+        "auto": "Auto",
+        "beggs_brill": "Beggs–Brill",
+        "gilbert_1954": "Gilbert correlation",
+        "black_oil_v1": "Black-Oil",
+        "pressure_dependent": "pressure-dependent",
+        "blackoilpvtprovider": "Black-Oil PVT",
+    }
+    text = str(value)
+    return models.get(text.lower(), text)
+
+
+def _arabic_report_status(value: Any) -> str:
+    statuses = {
+        "ok": "OK",
+        "converged": "converged",
+        "unique_operating_point": "UNIQUE_OPERATING_POINT",
+        "critical": "CRITICAL",
+        "subcritical": "SUBCRITICAL",
+        "no_operating_point": "NO_OPERATING_POINT",
+        "physically_invalid_state": "PHYSICALLY_INVALID_STATE",
+    }
+    text = str(value).strip()
+    return statuses.get(text.lower(), text)
+
+
 def _arabic_value_text(key: Any, value: Any, units: Mapping[str, Any] | None = None) -> str:
     if value is None:
         return "غير مقدم"
@@ -531,22 +627,22 @@ def _arabic_value_text(key: Any, value: Any, units: Mapping[str, Any] | None = N
         return "نعم" if value else "لا"
     if isinstance(value, (int, float)):
         rendered = _number(value)
-        unit = arabic_unit(_unit(key, units))
+        unit = _unit(key, units)
         return f"{rendered} {unit}".strip()
     if isinstance(value, str):
         lower = value.strip().lower()
         if lower in {"ok", "converged", "unique_operating_point", "critical", "subcritical", "no_operating_point", "physically_invalid_state"}:
-            return arabic_status(value)
+            return _arabic_report_status(value)
         if lower in {"linear", "linear ipr", "vogel", "composite", "auto", "beggs_brill", "gilbert_1954", "black_oil_v1", "pressure_dependent", "blackoilpvtprovider"}:
-            return arabic_model_name(value)
+            return _arabic_report_model(value)
         if lower == "rate_scan + bracketed_bisection":
-            return "مسح معدلات الإنتاج + تنصيف محاط"
+            return "rate_scan + bracketed_bisection"
         if lower == "well-side and choke-side pressure relationships agree within tolerance.":
-            return "توافقت علاقة الضغط في جانب البئر مع علاقة الضغط في جانب الخنّاق ضمن السماحية المحددة."
+            return "توافقت علاقة الضغط في جانب البئر مع علاقة الضغط في جانب Choke ضمن السماحية المحددة."
         if lower == "black-oil":
-            return "النفط الأسود"
+            return "Black-Oil"
         if lower == "pressure-dependent":
-            return "معتمد على الضغط"
+            return "pressure-dependent"
         return _safe_text(value)
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return "، ".join(_arabic_value_text(key, item, units) for item in value)
@@ -566,26 +662,26 @@ def _arabic_append_mapping_lines(
         if key_text in skip or value is None:
             continue
         if isinstance(value, Mapping):
-            lines.append(f"{indent}{arabic_label(key_text)}:")
+            lines.append(f"{indent}{_arabic_report_label(key_text)}:")
             _arabic_append_mapping_lines(lines, value, units=units, indent=indent + "  ", skip=skip)
         elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
             if value and all(not isinstance(item, (Mapping, Sequence)) for item in value):
-                lines.append(f"{indent}{arabic_label(key_text)}: {_arabic_value_text(key_text, value, units)}")
+                lines.append(f"{indent}{_arabic_report_label(key_text)}: {_arabic_value_text(key_text, value, units)}")
             else:
-                lines.append(f"{indent}{arabic_label(key_text)}:")
+                lines.append(f"{indent}{_arabic_report_label(key_text)}:")
                 for item in value:
                     if isinstance(item, Mapping):
                         _arabic_append_mapping_lines(lines, item, units=units, indent=indent + "  ", skip=skip)
                     else:
                         lines.append(f"{indent}  {_arabic_value_text(key_text, item, units)}")
         else:
-            lines.append(f"{indent}{arabic_label(key_text)}: {_arabic_value_text(key_text, value, units)}")
+            lines.append(f"{indent}{_arabic_report_label(key_text)}: {_arabic_value_text(key_text, value, units)}")
 
 
 def _arabic_pvt_lines(pvt: Any) -> list[str]:
     if not isinstance(pvt, Mapping) or not pvt:
         return [
-            "وصف خواص الموائع (PVT): استُخدمت المدخلات التقليدية المحددة؛ ولم يُطلب تقييم خواص النفط الأسود المعتمد على الضغط."
+            "وصف خواص الموائع (PVT): استُخدمت المدخلات التقليدية المحددة؛ ولم يُطلب تقييم Black-Oil المعتمد على الضغط."
         ]
     mode = str(pvt.get("mode", "")).lower()
     model = str(pvt.get("model", "")).lower()
@@ -605,9 +701,9 @@ def _arabic_pvt_lines(pvt: Any) -> list[str]:
             elif isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
                 values.extend(float(x) for x in item if isinstance(x, (int, float)))
     lines = [
-        "وصف خواص الموائع (PVT): خواص النفط الأسود معتمدة على الضغط.",
-        f"نمط خواص الموائع: {arabic_model_name(mode) if mode else 'معتمد على الضغط'}.",
-        f"نموذج خواص الموائع: {arabic_model_name(model) if model else 'النفط الأسود'}.",
+        "وصف خواص الموائع (PVT): خواص Black-Oil معتمدة على الضغط.",
+        f"نمط خواص الموائع: {_arabic_report_model(mode) if mode else 'pressure-dependent'}.",
+        f"نموذج خواص الموائع: {_arabic_report_model(model) if model else 'Black-Oil'}.",
     ]
     if len(values) >= 2:
         lines.append(f"نطاق الضغط المقيم: {_number(values[0])} إلى {_number(values[-1])} psia.")
@@ -634,7 +730,7 @@ def _arabic_generic_result(result: Any, units: Mapping[str, Any]) -> list[str]:
         for key in prominent:
             if key in result and result[key] is not None:
                 rendered.add(key)
-                lines.append(f"{arabic_label(key)}: {_arabic_value_text(key, result[key], units)}")
+                lines.append(f"{_arabic_report_label(key)}: {_arabic_value_text(key, result[key], units)}")
         remaining = {
             key: value for key, value in result.items()
             if key not in rendered and key not in _INTERNAL_KEYS
@@ -673,13 +769,13 @@ def generate_report_arabic_v1(case: EngineeringCase) -> str:
     if isinstance(case.model, Mapping):
         model_name = case.model.get("engine") or case.model.get("model")
         if model_name:
-            lines.append(f"نموذج الحساب: {arabic_model_name(model_name)}.")
+            lines.append(f"نموذج الحساب: {_arabic_report_model(model_name)}.")
         if isinstance(case.selectors, Mapping) and case.selectors:
             controls: list[str] = []
             for key, value in case.selectors.items():
                 if str(key) in _INTERNAL_KEYS or value is None:
                     continue
-                controls.append(f"{arabic_label(key)} = {_arabic_value_text(key, value)}")
+                controls.append(f"{_arabic_report_label(key)} = {_arabic_value_text(key, value)}")
             if controls:
                 lines.append("ضوابط النموذج المختارة: " + "؛ ".join(controls) + ".")
         lines.append("")
