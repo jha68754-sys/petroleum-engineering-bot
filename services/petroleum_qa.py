@@ -17,7 +17,12 @@ from services.petroleum_knowledge import (
     answer_knowledge_question,
     normalize_term,
 )
-from services.engineering_language import arabic_domain, is_arabic_text
+from services.engineering_language import (
+    arabic_domain,
+    arabic_limitation,
+    arabic_note,
+    is_arabic_text,
+)
 
 
 class EngineeringQALayer:
@@ -314,12 +319,11 @@ class EngineeringQALayer:
             f"وحدة النظام الدولي عند انطباقها: {record.si_unit}",
             f"المجال الهندسي: {arabic_domain(record.domain)}",
             f"المصطلحات المرتبطة: {related}",
-            f"حالة التحقق: {'موثق' if record.verification_status == 'VERIFIED' else 'غير موثق ويحتاج مراجعة'}",
         ]
         if record.notes:
-            lines.extend(["", f"ملاحظة هندسية: {record.notes}"])
+            lines.extend(["", f"ملاحظة هندسية: {arabic_note(record.canonical_id)}"])
         if record.limitations:
-            lines.append(f"القيد: {record.limitations}")
+            lines.append(f"القيد: {arabic_limitation(record.canonical_id)}")
         return "\n".join(lines) + self._arabic_source_footer([record])
 
     def _arabic_unit(self, record: KnowledgeRecord) -> str:
@@ -330,8 +334,7 @@ class EngineeringQALayer:
             f"وحدة النظام الدولي عند انطباقها: {record.si_unit}\n"
             f"اصطلاحات الحقل: {common}\n"
             f"المعنى البُعدي: {record.dimensional_meaning}\n\n"
-            f"ملاحظة: {record.notes or 'يجب تحديد حالة المائع وأساس القياس عند الحاجة.'}\n"
-            f"حالة التحقق: {'موثق' if record.verification_status == 'VERIFIED' else 'غير موثق ويحتاج مراجعة'}"
+            f"ملاحظة: {arabic_note(record.canonical_id)}\n"
         ) + self._arabic_source_footer([record])
 
     def _arabic_formula(self, record: KnowledgeRecord) -> str:
