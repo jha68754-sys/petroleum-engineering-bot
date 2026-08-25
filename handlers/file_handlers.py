@@ -78,6 +78,11 @@ def handle_document_upload(
     file_bytes = tg.download_file(file_path)
     if not file_bytes:
         return "Failed to download file.", "Download failed"
+    if len(file_bytes) > MAX_UPLOAD_SIZE:
+        return (
+            f"Downloaded file too large: {len(file_bytes) / 1024 / 1024:.1f} MB "
+            f"(max {MAX_UPLOAD_SIZE / 1024 / 1024:.0f} MB)"
+        ), "File too large"
 
     # Save to temp file
     tmp_path = save_uploaded_file(file_bytes, filename)
@@ -158,6 +163,11 @@ def handle_photo_upload(
     photo_bytes = tg.download_file(file_path)
     if not photo_bytes:
         return "Failed to download photo.", "Download failed"
+    if len(photo_bytes) > MAX_UPLOAD_SIZE:
+        return (
+            f"Downloaded photo too large: {len(photo_bytes) / 1024 / 1024:.1f} MB "
+            f"(max {MAX_UPLOAD_SIZE / 1024 / 1024:.0f} MB)"
+        ), "File too large"
 
     # Determine format
     file_ext = ".png"
@@ -173,6 +183,15 @@ def handle_photo_upload(
     tmp_path = save_uploaded_file(photo_bytes, f"photo_upload{file_ext}")
     if not tmp_path:
         return "Failed to save photo.", "Save failed"
+
+    # Replace an older image for this chat without leaking its temp file.
+    previous_path = image_context.get(chat_id)
+    if previous_path and previous_path != tmp_path:
+        try:
+            if os.path.exists(previous_path):
+                os.unlink(previous_path)
+        except OSError:
+            logger.warning("Failed to clean up replaced photo: %s", previous_path)
 
     # Store context
     image_context[chat_id] = tmp_path
