@@ -46,8 +46,8 @@ _ARABIC_LABELS = {
     "bo_rb_stb": "معامل حجم تكوين النفط (Bo)",
     "bw": "معامل حجم تكوين الماء (Bw)",
     "bw_rb_stb": "معامل حجم تكوين الماء (Bw)",
-    "wc": "القطع المائي (Water Cut)",
-    "water_cut": "القطع المائي (Water Cut)",
+    "wc": "القطع المائي (WC)",
+    "water_cut": "القطع المائي (WC)",
     "j": "معامل الإنتاجية (PI)",
     "q_op": "معدل الإنتاج التشغيلي",
     "operating_rate_bpd": "معدل السائل التشغيلي",
@@ -67,7 +67,7 @@ _ARABIC_LABELS = {
     "residual": "المتبقي الضغطي",
     "solver_residual_psi": "المتبقي الضغطي للحل",
     "pressure_residual_psi": "المتبقي الضغطي للحل",
-    "choke_size_64th_in": "مقاس الخنّاق (Choke)",
+    "choke_size_64th_in": "مقاس الخنّاق",
     "liquid_rate_bpd": "معدل السائل المقدم",
     "gas_injection_rate_mscfd": "معدل حقن الغاز",
     "injection_pressure_psia": "ضغط الحقن",
@@ -92,13 +92,16 @@ _ARABIC_LABELS = {
     "status": "الحالة الهندسية",
     "reason": "التفسير الهندسي",
     "solver_iterations": "تكرارات الحل",
-    "solver_method": "طريقة الحل",
+    "solver_method": "طريقة الحل العددي",
+    "convergence": "التقارب العددي",
     "n_points": "عدد النقاط المقيمة",
     "segments": "عدد مقاطع الأنبوب",
     "n_segments": "عدد مقاطع الأنبوب",
+    "choke_flow_regime": "نظام جريان الخنّاق",
     "vlp_model": "نموذج الجريان الخارج (VLP)",
     "ipr_model": "نموذج الجريان الداخل (IPR)",
     "choke_model": "ارتباط الخنّاق",
+    "z_factor": "عامل الانضغاطية (Z)",
     "base_kwargs": "مدخلات الحالة الأساسية",
     "ipr_kwargs": "مدخلات نموذج الجريان الداخل",
     "sweep": "قيم المسح الهندسي",
@@ -133,6 +136,7 @@ def arabic_calculation_title(calculation_type: Any) -> str:
 
 _ARABIC_MODELS = {
     "linear": "النموذج الخطي",
+    "linear ipr": "نموذج الجريان الداخل الخطي (IPR)",
     "vogel": "نموذج فوغل",
     "composite": "النموذج المركب",
     "auto": "اختيار تلقائي للنموذج",
@@ -149,6 +153,31 @@ _ARABIC_MODELS = {
 def arabic_model_name(value: Any) -> str:
     text = str(value)
     return _ARABIC_MODELS.get(text, _ARABIC_MODELS.get(text.lower(), text))
+
+
+_ARABIC_UNITS = {
+    "deg API": "درجة API",
+    "specific gravity": "كثافة نوعية",
+    "degF": "درجة فهرنهايت",
+    "degF/100ft": "درجة فهرنهايت/100 قدم",
+    "ft": "قدم",
+    "in": "بوصة",
+    "bbl/day": "برميل/يوم",
+    "STB/day": "STB/يوم",
+    "STB/day/psi": "STB/يوم/psi",
+    "Mscf/day": "Mscf/يوم",
+    "64ths of inch": "جزءًا من 64 من البوصة",
+    "64ths of an inch": "جزءًا من 64 من البوصة",
+    "iterations": "تكرار",
+    "points": "نقطة",
+    "segments": "مقطع",
+    "fraction": "كسر",
+}
+
+
+def arabic_unit(value: Any) -> str:
+    text = str(value)
+    return _ARABIC_UNITS.get(text, text)
 
 
 _ARABIC_NOTES = {
@@ -188,7 +217,8 @@ def arabic_status(value: Any) -> str:
         "NO_OPERATING_POINT": "لا توجد نقطة تشغيل",
         "PHYSICALLY_INVALID_STATE": "حالة فيزيائية غير صالحة",
     }
-    return statuses.get(str(value), str(value))
+    text = str(value)
+    return statuses.get(text, statuses.get(text.upper(), text))
 
 
 def arabic_domain(value: Any) -> str:
@@ -216,6 +246,7 @@ __all__ = [
     "arabic_model_name",
     "arabic_source_heading",
     "arabic_status",
+    "arabic_unit",
     "is_arabic_text",
     "language_for_text",
 ]

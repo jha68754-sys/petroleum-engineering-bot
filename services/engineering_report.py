@@ -18,6 +18,7 @@ from services.engineering_language import (
     arabic_label,
     arabic_model_name,
     arabic_status,
+    arabic_unit,
 )
 
 
@@ -529,13 +530,23 @@ def _arabic_value_text(key: Any, value: Any, units: Mapping[str, Any] | None = N
     if isinstance(value, bool):
         return "نعم" if value else "لا"
     if isinstance(value, (int, float)):
-        return _value_text(key, value, units)
+        rendered = _number(value)
+        unit = arabic_unit(_unit(key, units))
+        return f"{rendered} {unit}".strip()
     if isinstance(value, str):
         lower = value.strip().lower()
         if lower in {"ok", "converged", "unique_operating_point", "critical", "subcritical", "no_operating_point", "physically_invalid_state"}:
             return arabic_status(value)
-        if lower in {"linear", "vogel", "composite", "auto", "beggs_brill", "gilbert_1954", "black_oil_v1", "pressure_dependent", "blackoilpvtprovider"}:
+        if lower in {"linear", "linear ipr", "vogel", "composite", "auto", "beggs_brill", "gilbert_1954", "black_oil_v1", "pressure_dependent", "blackoilpvtprovider"}:
             return arabic_model_name(value)
+        if lower == "rate_scan + bracketed_bisection":
+            return "مسح معدلات الإنتاج + تنصيف محاط"
+        if lower == "well-side and choke-side pressure relationships agree within tolerance.":
+            return "توافقت علاقة الضغط في جانب البئر مع علاقة الضغط في جانب الخنّاق ضمن السماحية المحددة."
+        if lower == "black-oil":
+            return "النفط الأسود"
+        if lower == "pressure-dependent":
+            return "معتمد على الضغط"
         return _safe_text(value)
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return "، ".join(_arabic_value_text(key, item, units) for item in value)
@@ -574,7 +585,7 @@ def _arabic_append_mapping_lines(
 def _arabic_pvt_lines(pvt: Any) -> list[str]:
     if not isinstance(pvt, Mapping) or not pvt:
         return [
-            "وصف خواص الموائع (PVT): استُخدمت المدخلات التقليدية المحددة؛ ولم يُطلب تقييم Black-Oil معتمد على الضغط."
+            "وصف خواص الموائع (PVT): استُخدمت المدخلات التقليدية المحددة؛ ولم يُطلب تقييم خواص النفط الأسود المعتمد على الضغط."
         ]
     mode = str(pvt.get("mode", "")).lower()
     model = str(pvt.get("model", "")).lower()
@@ -594,9 +605,9 @@ def _arabic_pvt_lines(pvt: Any) -> list[str]:
             elif isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
                 values.extend(float(x) for x in item if isinstance(x, (int, float)))
     lines = [
-        "وصف خواص الموائع (PVT): خواص Black-Oil معتمدة على الضغط.",
+        "وصف خواص الموائع (PVT): خواص النفط الأسود معتمدة على الضغط.",
         f"نمط خواص الموائع: {arabic_model_name(mode) if mode else 'معتمد على الضغط'}.",
-        f"نموذج خواص الموائع: {arabic_model_name(model) if model else 'Black-Oil'}.",
+        f"نموذج خواص الموائع: {arabic_model_name(model) if model else 'النفط الأسود'}.",
     ]
     if len(values) >= 2:
         lines.append(f"نطاق الضغط المقيم: {_number(values[0])} إلى {_number(values[-1])} psia.")
