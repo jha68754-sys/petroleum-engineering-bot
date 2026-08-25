@@ -30,218 +30,40 @@ SYSTEM_PROMPT_FILE = "prompts/system_prompt.txt"
 #  KNOWLEDGE BASE
 # ═══════════════════════════════════════════════════════════════════════
 
-KNOWLEDGE_BASE: List[KnowledgeEntry] = [
-    {
-        "en": "Oil Formation Volume Factor (Bo)",
-        "ar": "معامل حجم تكوين الزيت",
-        "category": "PVT (Group B - Context Dependent)",
-        "unit": "rb/STB",
-        "def_ar": "نسبة حجم الزيت مع الغاز المذاب داخل المكمن الى حجمه في خزان التخزين السطحي. Bo = حجم الزيت في المكمن / حجم زيت خزان التخزين. مرجع: Tarek Ahmed, Reservoir Engineering Handbook; SPE PetroWiki. مستوى الثقة: High.",
-        "trend": "rises to max at Pb (above Pb), decreases below Pb",
-        "relationship_key": "bo_vs_p",
-        "typical_range": "n/a (Context-dependent fluid property; varies with pressure, temperature, and composition)",
-    },
-    {
-        "en": "Solution Gas-Oil Ratio (Rs)",
-        "ar": "نسبة الغاز المذاب",
-        "category": "PVT (Group B - Context Dependent)",
-        "unit": "scf/STB",
-        "def_ar": "حجم الغاز الذائب في برميل واحد من زيت خزان التخزين عند ضغط وحرارة المكمن. مرجع: Tarek Ahmed, Reservoir Engineering Handbook; Standing (1947). مستوى الثقة: High.",
-        "trend": "constant = Rsi above Pb, decreases below Pb",
-        "relationship_key": "rs_vs_p",
-        "typical_range": "n/a (Context-dependent fluid property; depends on saturation pressure and separator flash)",
-    },
-    {
-        "en": "Bubble Point Pressure (Pb)",
-        "ar": "ضغط نقطة الفقاعة",
-        "category": "PVT (Group B - Context Dependent)",
-        "unit": "psia",
-        "def_ar": "الضغط الذي يبدأ عنده انفصال أول فقاعة غاز عن الزيت. مرجع: Dake, Fundamentals of Reservoir Engineering; SPE PetroWiki. مستوى الثقة: High.",
-        "trend": "pivot point",
-        "relationship_key": "saturation_pressure_oil",
-        "typical_range": "n/a (Context-dependent PVT property; unique to fluid composition and thermal state)",
-    },
-    {
-        "en": "Gas Formation Volume Factor (Bg)",
-        "ar": "معامل حجم تكوين الغاز",
-        "category": "PVT (Group B - Context Dependent)",
-        "unit": "rb/scf",
-        "def_ar": "نسبة حجم الغاز عند ظروف المكمن الى حجمه عند الظروف القياسية. مرجع: Craft & Hawkins, Applied Petroleum Reservoir Engineering. مستوى الثقة: High.",
-        "trend": "smooth hyperbolic decrease as pressure increases",
-        "relationship_key": "bg_vs_p",
-        "typical_range": "n/a (Context-dependent gas property; function of pressure, temperature, and Z-factor)",
-    },
-    {
-        "en": "Gas Compressibility Factor (Z-factor)",
-        "ar": "معامل الانضغاطية للغاز",
-        "category": "PVT (Group B - Context Dependent)",
-        "unit": "dimensionless",
-        "def_ar": "معامل تصحيح في معادلة PV=ZnRT يعكس انحراف سلوك الغاز الحقيقي عن الغاز المثالي. مرجع: Standing & Katz (1942); Dranchuk-Abou-Kassem (1975). مستوى الثقة: High.",
-        "trend": "U-shaped: decreases from 1, reaches minimum, increases again",
-        "relationship_key": "z_vs_p",
-        "typical_range": "n/a (Context-dependent real gas property; function of pseudo-reduced pressure and temperature)",
-    },
-    {
-        "en": "Oil Viscosity",
-        "ar": "لزوجة الزيت",
-        "category": "PVT (Group B - Context Dependent)",
-        "unit": "cP",
-        "def_ar": "مقاومة الزيت للتدفق. تتأثر بكمية الغاز المذاب والضغط والحرارة. مرجع: Beggs & Robinson (1975); SPE PetroWiki. مستوى الثقة: High.",
-        "trend": "decreases to min at Pb (above Pb), increases below Pb",
-        "relationship_key": "oil_visc_vs_p",
-        "typical_range": "n/a (Context-dependent fluid property; depends on pressure, temperature, and dissolved gas content)",
-    },
-    {
-        "en": "Gas Viscosity",
-        "ar": "لزوجة الغاز",
-        "category": "PVT (Group B - Context Dependent)",
-        "unit": "cP",
-        "def_ar": "مقاومة الغاز للتدفق تحت ظروف المكمن. مرجع: Lee, Gonzalez, and Eakin (1966). مستوى الثقة: High.",
-        "trend": "monotonically increases with pressure",
-        "relationship_key": "gas_visc_vs_p",
-        "typical_range": "n/a (Context-dependent gas property; function of pressure, temperature, and gas specific gravity)",
-    },
-    {
-        "en": "Oil Density",
-        "ar": "كثافة الزيت",
-        "category": "PVT (Group B - Context Dependent)",
-        "unit": "lb/ft3",
-        "def_ar": "كتلة الزيت لكل وحدة حجم عند ظروف المكمن. مرجع: Tarek Ahmed, Reservoir Engineering Handbook. مستوى الثقة: High.",
-        "trend": "decreases to min at Pb, increases below Pb",
-        "relationship_key": "oil_density_vs_p",
-        "typical_range": "n/a (Context-dependent fluid property; depends on API gravity, solution gas, and pressure)",
-    },
-    {
-        "en": "Relative Volume (CCE)",
-        "ar": "الحجم النسبي",
-        "category": "PVT (Group B - Context Dependent)",
-        "unit": "V/Vsat",
-        "def_ar": "حجم العينة عند ضغط معين منسوباً الى حجمها عند ضغط التشبع في تجربة التمدد ذي الحجم الثابت. مرجع: Ahmed, Reservoir Engineering Handbook. مستوى الثقة: High.",
-        "trend": "gentle slope above Pb, =1.0 at Pb, steep slope below Pb",
-        "relationship_key": "vrel_vs_p_cce",
-        "typical_range": "n/a",
-    },
-    {
-        "en": "Liquid Dropout (CVD)",
-        "ar": "نسبة تكثف السوائل",
-        "category": "PVT (Group B - Context Dependent)",
-        "unit": "% HC pore volume",
-        "def_ar": "نسبة السائل المتكثف من الغاز داخل المكمن عند ضغوط أقل من ضغط نقطة الندى. مرجع: Ahmed, Petroleum Reservoir Engineering. مستوى الثقة: High.",
-        "trend": "0% above Pd, rises to peak (retrograde), then decreases",
-        "relationship_key": "liquid_dropout_vs_p",
-        "typical_range": "n/a (Context-dependent retrograde condensate property; depends on retrograde gas composition and depletion path)",
-    },
-    {
-        "en": "Condensate-Gas Ratio (CGR)",
-        "ar": "نسبة المكثفات إلى الغاز",
-        "category": "Production (Group B - Context Dependent)",
-        "unit": "STB/MMscf",
-        "def_ar": "حجم المكثفات السطحية المنتجة لكل وحدة حجم من الغاز المنتج. مرجع: Economides, Petroleum Production Systems. مستوى الثقة: High.",
-        "trend": "roughly constant above Pd, decreases below Pd",
-        "relationship_key": "cgr_vs_p",
-        "typical_range": "n/a (Context-dependent production parameter; depends on initial fluid composition and separator conditions)",
-    },
-    {
-        "en": "Porosity",
-        "ar": "المسامية",
-        "category": "Reservoir (Group A - Magnitude Ranked)",
-        "unit": "fraction or %",
-        "def_ar": "نسبة حجم الفراغات الى الحجم الكلي للصخرة. مرجع: Tiab & Donaldson, Petrophysics. مستوى الثقة: High.",
-        "trend": "static property",
-        "relationship_key": None,
-        "typical_range": "0.05 - 0.35",
-    },
-    {
-        "en": "Permeability",
-        "ar": "النفاذية",
-        "category": "Reservoir (Group A - Magnitude Ranked)",
-        "unit": "mD",
-        "def_ar": "قدرة الصخرة على نقل الموائع تحت فرق ضغط (قانون دارسي). مرجع: Tiab & Donaldson, Petrophysics; SPE PetroWiki. مستوى الثقة: High.",
-        "trend": "static property",
-        "relationship_key": None,
-        "typical_range": "0.1 - 1000+ mD",
-    },
-    {
-        "en": "Original Oil In Place (OOIP)",
-        "ar": "النفط الأصلي في المكمن",
-        "category": "Reservoir (Group A - Volumetric)",
-        "unit": "STB",
-        "def_ar": "OOIP = (7758 x A x h x phi x (1-Sw)) / Bo. مرجع: Craft & Hawkins, Applied Petroleum Reservoir Engineering. مستوى الثقة: High.",
-        "trend": "static",
-        "relationship_key": None,
-        "typical_range": "varies widely",
-    },
-    {
-        "en": "Original Gas In Place (OGIP)",
-        "ar": "الغاز الأصلي في المكمن",
-        "category": "Reservoir (Group A - Volumetric)",
-        "unit": "scf",
-        "def_ar": "OGIP = (43560 x A x h x phi x (1-Sw)) / Bg بوحدة ft3/scf، أو (7758 x A x h x phi x (1-Sw)) / Bg بوحدة rb/scf. مرجع: Craft & Hawkins, Applied Petroleum Reservoir Engineering. مستوى الثقة: High.",
-        "trend": "static",
-        "relationship_key": None,
-        "typical_range": "varies widely",
-    },
-    {
-        "en": "Recovery Factor",
-        "ar": "عامل الاسترداد",
-        "category": "Reservoir (Group A - Magnitude Ranked)",
-        "unit": "% or fraction",
-        "def_ar": "RF = Np / OOIP. نسبة النسبة المستخرجة إلى النفط الأصلي في المكمن. مرجع: Dake, Fundamentals of Reservoir Engineering. مستوى الثقة: High.",
-        "trend": "static",
-        "relationship_key": None,
-        "typical_range": "20% - 50% (oil), 50% - 90% (gas)",
-    },
-    {
-        "en": "Skin Factor",
-        "ar": "عامل الجلد",
-        "category": "Production (Group A - Magnitude Ranked)",
-        "unit": "dimensionless",
-        "def_ar": "مقياس تأثير الضرر أو التحفيز حول البئر (معادلة هورنر/دارسي المعدلة). مرجع: Earlougher, Advances in Well Test Analysis. مستوى الثقة: High.",
-        "trend": "well condition indicator",
-        "relationship_key": None,
-        "typical_range": "-5 to +20",
-    },
-    {
-        "en": "Productivity Index (PI)",
-        "ar": "مؤشر الإنتاجية",
-        "category": "Production (Group A - Magnitude Ranked)",
-        "unit": "STB/day/psi",
-        "def_ar": "PI = q / (Pr - Pwf). معدل الإنتاج لكل وحدة هبوط ضغط. مرجع: Economides, Petroleum Production Systems. مستوى الثقة: High.",
-        "trend": "well performance indicator",
-        "relationship_key": None,
-        "typical_range": "0.5 - 50 STB/day/psi",
-    },
-    {
-        "en": "Water Cut (WC)",
-        "ar": "نسبة الماء المنتج",
-        "category": "Production (Group A - Magnitude Ranked)",
-        "unit": "%",
-        "def_ar": "WC = qw / (qo + qw) x 100. نسبة حجم الماء المنتج إلى إجمالي السوائل المنتجة. مرجع: Dake, Fundamentals of Reservoir Engineering. مستوى الثقة: High.",
-        "trend": "increases over field life",
-        "relationship_key": None,
-        "typical_range": "0 - 98%",
-    },
-    {
-        "en": "Hydrostatic Pressure",
-        "ar": "الضغط الهيدروستاتيكي",
-        "category": "Drilling (Group B - Operational)",
-        "unit": "psi",
-        "def_ar": "P = 0.052 x MW x TVD. ضغط عمود الطين في البئر. مرجع: Bourgoyne et al., Applied Drilling Engineering. مستوى الثقة: High.",
-        "trend": "calculated from mud column",
-        "relationship_key": None,
-        "typical_range": "n/a (Operational parameter calculated from mud weight and true vertical depth)",
-    },
-    {
-        "en": "Net Present Value (NPV)",
-        "ar": "صافي القيمة الحالية",
-        "category": "Economics (Group B - Economic Metric)",
-        "unit": "$",
-        "def_ar": "NPV = Sum[CFt/(1+r)^t] - C0. مقياس ربحية المشروع المالي. مرجع: SPE Petroleum Engineering Handbook, Economics and Evaluation. مستوى الثقة: Medium.",
-        "trend": "n/a",
-        "relationship_key": None,
-        "typical_range": "n/a (Economic evaluation metric; depends on Capex, Opex, hydrocarbon pricing, and discount rate)",
-    },
-]
+def _load_knowledge_base_from_v1() -> List[KnowledgeEntry]:
+    """Expose the single reviewed Knowledge V1 dataset through the legacy shape.
+
+    The active Q&A layer and the AI grounding layer must read the same source
+    data.  This adapter preserves the existing ``KNOWLEDGE_BASE`` interface for
+    prompt construction without maintaining a second hard-coded dataset.
+    """
+    import json
+    from pathlib import Path
+
+    dataset_path = Path(__file__).resolve().parent / "data" / "petroleum_knowledge_v1.json"
+    payload = json.loads(dataset_path.read_text(encoding="utf-8"))
+    if payload.get("schema_version") != "petroleum_knowledge_v1":
+        raise ValueError("Unsupported petroleum knowledge dataset schema")
+    records = payload.get("records", [])
+    if not records:
+        raise ValueError("Petroleum knowledge dataset is empty")
+
+    entries: List[KnowledgeEntry] = []
+    for record in records:
+        entries.append({
+            "en": f"{record['canonical_english_name']} ({record['symbol']})",
+            "ar": record["canonical_arabic_name"],
+            "category": record.get("domain", "Petroleum Engineering"),
+            "unit": record.get("unit", "not specified"),
+            "def_ar": record.get("definition_ar", ""),
+            "trend": record.get("notes", ""),
+            "relationship_key": None,
+            "typical_range": "n/a (Context-dependent engineering record)",
+        })
+    return entries
+
+
+KNOWLEDGE_BASE: List[KnowledgeEntry] = _load_knowledge_base_from_v1()
 
 
 # ═══════════════════════════════════════════════════════════════════════
