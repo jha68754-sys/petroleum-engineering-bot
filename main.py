@@ -183,6 +183,9 @@ def load_offset() -> int:
         if OFFSET_STATE_FILE.exists():
             data = json.loads(OFFSET_STATE_FILE.read_text())
             offset = data.get("current_offset", 0)
+            if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+                logger.warning("Invalid persisted Telegram offset; starting from zero")
+                return 0
             logger.info("Loaded offset from disk: %d", offset)
             return offset
     except (json.JSONDecodeError, OSError) as exc:
@@ -191,13 +194,33 @@ def load_offset() -> int:
 
 
 def save_offset(offset: int) -> None:
-    """Persist the current offset to disk."""
+    """Persist the current offset using an atomic same-directory replacement."""
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        logger.warning("Refusing to save invalid Telegram offset: %r", offset)
+        return
+    temporary_path: Optional[Path] = None
     try:
-        OFFSET_STATE_FILE.write_text(
-            json.dumps({"current_offset": offset, "ts": time.time()}, indent=2)
+        OFFSET_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary_name = tempfile.mkstemp(
+            prefix=f".{OFFSET_STATE_FILE.name}.",
+            suffix=".tmp",
+            dir=str(OFFSET_STATE_FILE.parent),
         )
+        temporary_path = Path(temporary_name)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump({"current_offset": offset, "ts": time.time()}, handle, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, OFFSET_STATE_FILE)
+        temporary_path = None
     except OSError as exc:
         logger.warning("Failed to save offset: %s", exc)
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 # ═══════════════════════════════════════════════════════════════════════
