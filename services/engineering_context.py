@@ -41,6 +41,7 @@ class EngineeringValueOrigin(str, Enum):
     USER_PROVIDED = "USER_PROVIDED"
     DEFAULTED = "DEFAULTED"
     CALCULATED = "CALCULATED"
+    DERIVED = "DERIVED"
     UNKNOWN = "UNKNOWN"
 
 
@@ -203,6 +204,7 @@ _FIELD_MAP: Dict[str, Tuple[str, str, str]] = {
     "tubing_id_in": ("well", "tubing_id_in", "in"),
     "tubing_id": ("well", "tubing_id_in", "in"),
     "thp": ("well", "thp_psia", "psia"),
+    "thp_guess": ("well", "thp_psia", "psia"),
     "thp_psia": ("well", "thp_psia", "psia"),
     "t_wh": ("well", "wellhead_temperature_f", "degF"),
     "t_wh_f": ("well", "wellhead_temperature_f", "degF"),
@@ -226,13 +228,23 @@ _FIELD_MAP: Dict[str, Tuple[str, str, str]] = {
     "liquid_rate_bpd": ("flow", "rate_stbd", "STB/day"),
     "liquid_rate_stbd": ("flow", "rate_stbd", "STB/day"),
     "choke": ("equipment", "choke_size_64th_in", "64ths of inch"),
+    "choke_size": ("equipment", "choke_size_64th_in", "64ths of inch"),
     "choke_size_64th_in": ("equipment", "choke_size_64th_in", "64ths of inch"),
     "p_down": ("equipment", "downstream_pressure_psia", "psia"),
+    "p_downstream": ("equipment", "downstream_pressure_psia", "psia"),
+    "downstream_pressure": ("equipment", "downstream_pressure_psia", "psia"),
     "downstream_pressure_psia": ("equipment", "downstream_pressure_psia", "psia"),
     "p_up": ("equipment", "upstream_pressure_psia", "psia"),
     "upstream_pressure_psia": ("equipment", "upstream_pressure_psia", "psia"),
     "j": ("reservoir_fluid", "productivity_index_stbd_psi", "STB/day/psi"),
     "productivity_index_stbd_psi": ("reservoir_fluid", "productivity_index_stbd_psi", "STB/day/psi"),
+    "mu_l": ("reservoir_fluid", "liquid_viscosity_cp", "cP"),
+    "mu_l_cp": ("reservoir_fluid", "liquid_viscosity_cp", "cP"),
+    "gamma_w": ("reservoir_fluid", "water_specific_gravity", "specific gravity"),
+    "bw": ("reservoir_fluid", "water_fvf_rb_stb", "rb/STB"),
+    "sigma": ("flow", "surface_tension", "surface-tension units"),
+    "q_min": ("flow", "minimum_rate_stbd", "STB/day"),
+    "q_max": ("flow", "maximum_rate_stbd", "STB/day"),
     "pvt_pressure_psia": ("reservoir_fluid", "pvt_pressure_psia", "psia"),
     "pvt_temperature_f": ("reservoir_fluid", "pvt_temperature_f", "degF"),
     "pvt_oil_api": ("reservoir_fluid", "pvt_oil_api", "deg API"),
@@ -240,7 +252,25 @@ _FIELD_MAP: Dict[str, Tuple[str, str, str]] = {
     "pvt_separator_pressure_psia": ("reservoir_fluid", "separator_pressure_psia", "psia"),
     "pvt_separator_temperature_f": ("reservoir_fluid", "separator_temperature_f", "degF"),
     "pvt_bubble_point_psia": ("reservoir_fluid", "bubble_point_psia", "psia"),
+    "model": ("well", "ipr_model", "selector"),
+    "ipr_model": ("well", "ipr_model", "selector"),
+    "vlp_model": ("well", "vlp_model", "selector"),
+    "choke_model": ("equipment", "choke_model", "selector"),
+    "z": ("reservoir_fluid", "z_factor", "dimensionless"),
+    "z_factor": ("reservoir_fluid", "z_factor", "dimensionless"),
+    "segments": ("well", "n_segments", "count"),
+    "n_segments": ("well", "n_segments", "count"),
+    "n_points": ("well", "n_points", "count"),
+    "pressure_tol": ("well", "pressure_tolerance_psi", "psi"),
+    "max_refine_iter": ("well", "max_refinement_iterations", "count"),
 }
+
+
+_DEFAULT_INPUT_KEYS = frozenset({
+    "thp", "choke_model", "ipr_model", "vlp_model", "wc", "gamma_w", "bw",
+    "z_factor", "sigma", "n_segments", "q_min", "n_points", "pressure_tol",
+    "max_refine_iter",
+})
 
 
 def _request_keys(case: Any) -> set[str]:
@@ -261,6 +291,54 @@ def _case_value_origin(key: str, explicit_keys: set[str], field_name: Optional[s
         if field_name and target[1] == field_name:
             candidates.add(alias.lower())
     return EngineeringValueOrigin.USER_PROVIDED if candidates & explicit_keys else EngineeringValueOrigin.DEFAULTED
+
+
+def input_origins_for_case(case: Any) -> Dict[str, EngineeringValueOrigin]:
+    """Return conservative deterministic origins for stored Case input fields.
+
+    The request envelope is the only source for explicit user input. A missing
+    field is marked DEFAULTED only for the released SystemInput default contract;
+    otherwise its origin remains UNKNOWN. Context mutations mark inherited values
+    DERIVED so copied inputs are never presented as newly user-supplied.
+    """
+    inputs = getattr(case, "inputs", {})
+    if not isinstance(inputs, Mapping):
+        return {}
+    request = getattr(case, "request", {})
+    if not isinstance(request, Mapping):
+        request = {}
+    arguments = request.get("arguments", request)
+    arguments = arguments if isinstance(arguments, Mapping) else {}
+    explicit_keys = {str(key).strip().lower() for key in arguments}
+    has_request_envelope = isinstance(request, Mapping) and ("arguments" in request or bool(request))
+    context_override = str(request.get("context_override", "")).strip().lower()
+    override_target = _FIELD_MAP.get(context_override)
+    override_field = override_target[1] if override_target else context_override
+
+    origins: Dict[str, EngineeringValueOrigin] = {}
+    for raw_key in inputs:
+        key = str(raw_key).strip().lower()
+        target = _FIELD_MAP.get(key)
+        field_name = target[1] if target else None
+        if context_override:
+            if key == context_override or field_name == override_field:
+                origins[str(raw_key)] = EngineeringValueOrigin.USER_PROVIDED
+            else:
+                origins[str(raw_key)] = EngineeringValueOrigin.DERIVED
+            continue
+        candidates = {key}
+        if field_name:
+            candidates.add(field_name.lower())
+            for alias, mapped in _FIELD_MAP.items():
+                if mapped[1] == field_name:
+                    candidates.add(alias.lower())
+        if has_request_envelope and candidates & explicit_keys:
+            origins[str(raw_key)] = EngineeringValueOrigin.USER_PROVIDED
+        elif has_request_envelope and (key in _DEFAULT_INPUT_KEYS or field_name in _DEFAULT_INPUT_KEYS):
+            origins[str(raw_key)] = EngineeringValueOrigin.DEFAULTED
+        else:
+            origins[str(raw_key)] = EngineeringValueOrigin.UNKNOWN
+    return origins
 
 
 def data_model_from_case(case: Any) -> EngineeringDataModel:
@@ -488,5 +566,6 @@ __all__ = [
     "SessionContextError",
     "ContextResolutionError",
     "data_model_from_case",
+    "input_origins_for_case",
     "session_key_for_chat",
 ]
