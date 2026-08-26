@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from services.engineering_case import EngineeringCase
+from services.engineering_context import EngineeringValueOrigin, input_origins_for_case
 from services.engineering_language import (
     arabic_calculation_title,
     arabic_label,
@@ -225,6 +226,16 @@ def _unit(key: Any, units: Mapping[str, Any] | None = None) -> str:
     return ""
 
 
+def _origin_tag(origin: Any) -> str:
+    """Render a deterministic input-origin tag without exposing internal JSON."""
+    value = getattr(origin, "value", str(origin or "UNKNOWN")).upper()
+    return value if value in {item.value for item in EngineeringValueOrigin} else "UNKNOWN"
+
+
+def _origin_suffix(origin: Any) -> str:
+    return f" [origin: {_origin_tag(origin)}]"
+
+
 def _value_text(key: Any, value: Any, units: Mapping[str, Any] | None = None) -> str:
     if value is None:
         return "not supplied"
@@ -244,6 +255,7 @@ def _value_text(key: Any, value: Any, units: Mapping[str, Any] | None = None) ->
 def _append_mapping_lines(
     lines: list[str], data: Mapping[str, Any], *, units: Mapping[str, Any] | None = None,
     indent: str = "", skip: frozenset[str] = _INTERNAL_KEYS,
+    origins: Mapping[str, Any] | None = None,
 ) -> None:
     for key, value in data.items():
         key_text = str(key)
@@ -265,7 +277,8 @@ def _append_mapping_lines(
                     else:
                         lines.append(f"{indent}  {_value_text(key_text, item, units)}")
         else:
-            lines.append(f"{indent}{_label(key_text)}: {_value_text(key_text, value, units)}")
+            suffix = _origin_suffix(origins.get(key_text)) if origins and key_text in origins else ""
+            lines.append(f"{indent}{_label(key_text)}: {_value_text(key_text, value, units)}{suffix}")
 
 
 def _calculation_title(calculation_type: str) -> str:
@@ -511,7 +524,13 @@ def _generic_result(result: Any, units: Mapping[str, Any]) -> list[str]:
 def _case_inputs(case: EngineeringCase) -> list[str]:
     lines: list[str] = []
     if isinstance(case.inputs, Mapping) and case.inputs:
-        _append_mapping_lines(lines, case.inputs, units=case.units)
+        origins = input_origins_for_case(case)
+        lines.append(
+            "Input origin labels: USER_PROVIDED = supplied in the request; "
+            "DEFAULTED = filled by the released input contract; "
+            "DERIVED = inherited during a context override; UNKNOWN = origin not recorded."
+        )
+        _append_mapping_lines(lines, case.inputs, units=case.units, origins=origins)
     return lines
 
 
@@ -656,6 +675,7 @@ def _arabic_append_mapping_lines(
     units: Mapping[str, Any] | None = None,
     indent: str = "",
     skip: frozenset[str] = _INTERNAL_KEYS,
+    origins: Mapping[str, Any] | None = None,
 ) -> None:
     for key, value in data.items():
         key_text = str(key)
@@ -675,7 +695,8 @@ def _arabic_append_mapping_lines(
                     else:
                         lines.append(f"{indent}  {_arabic_value_text(key_text, item, units)}")
         else:
-            lines.append(f"{indent}{_arabic_report_label(key_text)}: {_arabic_value_text(key_text, value, units)}")
+            suffix = _origin_suffix(origins.get(key_text)) if origins and key_text in origins else ""
+            lines.append(f"{indent}{_arabic_report_label(key_text)}: {_arabic_value_text(key_text, value, units)}{suffix}")
 
 
 def _arabic_pvt_lines(pvt: Any) -> list[str]:
@@ -781,7 +802,12 @@ def generate_report_arabic_v1(case: EngineeringCase) -> str:
         lines.append("")
     lines.extend(["## المدخلات الهندسية المقدمة", ""])
     if isinstance(case.inputs, Mapping) and case.inputs:
-        _arabic_append_mapping_lines(lines, case.inputs, units=case.units)
+        origins = input_origins_for_case(case)
+        lines.append(
+            "مصدر المدخلات: USER_PROVIDED = مقدم في الطلب؛ DEFAULTED = قيمة افتراضية "
+            "من عقد المدخلات؛ DERIVED = موروث أثناء تعديل سياقي؛ UNKNOWN = المصدر غير مسجل."
+        )
+        _arabic_append_mapping_lines(lines, case.inputs, units=case.units, origins=origins)
     else:
         lines.append("استُخدمت حالة المدخلات الهندسية الكاملة المحفوظة مع معرّف الحالة.")
     lines.extend(["", "## وصف خواص الموائع (PVT)", ""])
