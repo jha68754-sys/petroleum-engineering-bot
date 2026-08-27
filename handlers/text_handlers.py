@@ -67,6 +67,7 @@ from services.engineering_case import (
 )
 from services.engineering_report import generate_report_arabic_v1, generate_report_v1
 from services.engineering_language import is_arabic_text
+from services.engineering_quality import format_quality_issues, validate_numeric_inputs
 from services.engineering_case_registry import (
     CaseIntegrityError,
     CaseNotFoundError,
@@ -82,6 +83,7 @@ from services.engineering_context import (
 )
 from services.engineering_workflow import (
     WorkflowError,
+    guided_missing_thp_message,
     parse_workflow_intent,
     render_result_interpretation,
 )
@@ -582,10 +584,8 @@ def handle_engineering_workflow_message(message: Dict[str, Any]) -> Optional[str
             )
         if intent.kind == "natural_calculation":
             if intent.thp_psia is None:
-                raise WorkflowError(
-                    "MISSING_DATA",
-                    "specify the THP value explicitly in psia; for example: "
-                    "calculate production at THP=200 psia",
+                return guided_missing_thp_message(
+                    language="ar" if is_arabic_text(text) else "en"
                 )
             return _context_mutate_thp(chat_id, intent.thp_psia, message)
         raise WorkflowError("UNSUPPORTED_INTENT", "the natural workflow intent is not supported")
@@ -1401,6 +1401,7 @@ def handle_comparison_command(message: Dict[str, Any], tg) -> Tuple[str, Optiona
 _CASE_USAGE = (
     "Usage: /case report <case_id>\n"
     "       /case replay <case_id>\n"
+    "       /case snapshot <case_id>\n"
     "       /case audit <case_id>\n"
     "       /case json <case_id>"
 )
@@ -1416,7 +1417,7 @@ def handle_case_command(message: Dict[str, Any], tg) -> Tuple[str, Optional[byte
     """Display, serialize, audit, or replay a persistent Engineering Case."""
     text = message.get("text", "")
     parts = text.split(None, 2)
-    if len(parts) < 3 or parts[1].lower() not in {"report", "replay", "audit", "json"}:
+    if len(parts) < 3 or parts[1].lower() not in {"report", "replay", "snapshot", "audit", "json"}:
         return _CASE_USAGE, None, None
     action = parts[1].lower()
     case_id = parts[2].strip().split()[0]
@@ -1463,6 +1464,19 @@ def handle_case_command(message: Dict[str, Any], tg) -> Tuple[str, Optional[byte
         except (CaseNotFoundError, ValueError):
             pass
         return report, None, None
+    if action == "snapshot":
+        from services.case_snapshot import build_case_snapshot
+        try:
+            _CASE_REGISTRY.record_event(
+                case.case_id,
+                "CASE_SNAPSHOT_REQUESTED",
+                {"action": "snapshot", "format": "markdown"},
+            )
+        except (CaseNotFoundError, ValueError):
+            pass
+        filename = f"engineering_case_{case.case_id[:16]}_snapshot.md"
+        caption = f"Portable Case Snapshot V1 — Case ID: {case.case_id}"
+        return caption, build_case_snapshot(case), filename
     if action == "json":
         return (
             "Raw JSON export is not available to users. "
@@ -1574,6 +1588,12 @@ def handle_calc_system(message: Dict[str, Any], tg) -> Tuple[str, Optional[bytes
     for key in ("model", "vlp_model", "choke_model", "pvt_mode", "pvt_model"):
         if key in raw_tokens:
             kwargs[key] = raw_tokens[key]
+    quality_issues = validate_numeric_inputs(kwargs)
+    if quality_issues:
+        return format_quality_issues(
+            quality_issues,
+            language="ar" if is_arabic_text(text) else "en",
+        ), None, None
     case_requested, report_requested = _case_flags(raw_tokens)
     case_requested = case_requested or report_requested
     pvt_kwargs: Dict[str, Any] = {}
