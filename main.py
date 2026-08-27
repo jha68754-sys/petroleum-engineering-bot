@@ -414,8 +414,17 @@ def process_message(
                     tg.send_message(chat_id, msg_to_send, reply_to_message_id=message_id)
 
                 if png_bytes:
-                    caption = _plot_caption_for(text)
-                    tg.send_photo_bytes(chat_id, png_bytes, caption=caption, reply_to_message_id=message_id)
+                    if doc_filename:
+                        tg.send_document(
+                            chat_id,
+                            png_bytes,
+                            filename=doc_filename,
+                            caption=msg_to_send,
+                            reply_to_message_id=message_id,
+                        )
+                    else:
+                        caption = _plot_caption_for(text)
+                        tg.send_photo_bytes(chat_id, png_bytes, caption=caption, reply_to_message_id=message_id)
                 return
 
             # Command not found

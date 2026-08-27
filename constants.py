@@ -1214,6 +1214,8 @@ HELP_MESSAGE = (
     "  عرض تقرير Engineering Case المحفوظ.\n"
     "/case replay <case_id>\n"
     "  إعادة الحساب ومقارنة النتيجة الأصلية؛ المتوقع MATCH للحالة الحتمية.\n"
+    "/case snapshot <case_id>\n"
+    "  تنزيل Portable Case Snapshot بصيغة Markdown لحفظ الحالة خارج Railway.\n"
     "/case json <case_id>\n"
     "  عرض الحالة بصيغة JSON.\n\n"
     "/define <term>\n"
