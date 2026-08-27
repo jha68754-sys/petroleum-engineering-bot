@@ -27,6 +27,31 @@ class WorkflowError(ValueError):
         super().__init__(f"{self.code}: {self.message}")
 
 
+def guided_missing_thp_message(*, language: str = "en") -> str:
+    """Explain the next required input without inferring a value."""
+    if str(language).lower() in {"ar", "arabic", "العربية"}:
+        return (
+            "إرشاد الحساب الهندسي\n"
+            "====================\n"
+            "الحالة: MISSING_DATA — قيمة THP مطلوبة.\n\n"
+            "أستطيع إعادة حساب معدل الإنتاج من الحالة الهندسية الحالية، "
+            "لكن يجب تحديد THP صراحةً.\n\n"
+            "أرسل قيمة ضغط رأس البئر بوحدة psia، مثل:\n"
+            "احسب الإنتاج عند THP=200 psia\n\n"
+            "لم أستخدم قيمة افتراضية ولم أستنتج قيمة من السياق."
+        )
+    return (
+        "Engineering Calculation Guidance\n"
+        "=================================\n"
+        "Status: MISSING_DATA — THP value required.\n\n"
+        "I can recalculate production from the current engineering case, "
+        "but the THP value must be explicit.\n\n"
+        "Provide wellhead pressure in psia, for example:\n"
+        "calculate production at THP=200 psia\n\n"
+        "No default or inferred value was used."
+    )
+
+
 @dataclass(frozen=True)
 class WorkflowIntent:
     """Allow-listed natural-language intent; no free-form calculation parsing."""
@@ -430,6 +455,7 @@ def render_result_interpretation(
 __all__ = [
     "WorkflowError",
     "WorkflowIntent",
+    "guided_missing_thp_message",
     "parse_workflow_intent",
     "render_result_interpretation",
 ]
