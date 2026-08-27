@@ -171,3 +171,144 @@ def test_replacing_photo_removes_the_previous_temp_file(tmp_path, monkeypatch):
     assert image_context[7] == str(current)
     assert not previous.exists()
     assert current.exists()
+
+
+
+def _portable_case():
+    return build_case(
+        calculation_type="integrated_system_v1",
+        request={
+            "calculation": "system",
+            "arguments": {"pr": "3000", "thp": "100", "j": "1.5"},
+            "telegram_chat_id": "12345",
+            "bot_token": "bot1234567890:SECRET",
+        },
+        inputs={
+            "pr": 3000.0,
+            "thp": 100.0,
+            "ipr_model": "linear",
+            "j": 1.5,
+            "choke_size_64th_in": 16.0,
+        },
+        units={"pr": "psia", "thp": "psia", "j": "STB/day/psi"},
+        model={"engine": "IntegratedSystemEngine"},
+        selectors={"ipr_model": "linear", "vlp_model": "beggs_brill"},
+        pvt={"mode": "conventional", "provider": "released inputs"},
+        result={"operating_rate_bpd": 711.22, "pwf_psia": 2525.83},
+    )
+
+
+def test_quality_gate_rejects_obvious_system_input_before_engine():
+    from handlers import text_handlers as th
+
+    command = (
+        "/calc system model=linear pr=-1 j=1.5 tvd=8000 id=1.995 "
+        "gor=1000 rs=600 api=35 gamma_g=0.65 mu_l=1 bo=1.4 "
+        "t_wh=120 geothermal=1.5 choke=16 p_down=200"
+    )
+    text, png, filename = th.handle_calc({"text": command}, None)
+    assert png is None
+    assert filename is None
+    assert "Engineering Data Quality Gate" in text
+    assert "Reservoir pressure" in text
+    assert "q_op" not in text
+
+
+def test_quality_gate_preserves_valid_system_engine_path():
+    from handlers import text_handlers as th
+
+    command = (
+        "/calc system model=linear pr=3000 j=1.5 tvd=8000 id=1.995 "
+        "gor=1000 rs=600 api=35 gamma_g=0.65 mu_l=1 bo=1.4 "
+        "t_wh=120 geothermal=1.5 choke=16 p_down=200"
+    )
+    text, png, filename = th.handle_calc({"text": command}, None)
+    assert png is None
+    assert filename is None
+    assert "Status: OK" in text
+    assert "q_op =" in text
+
+
+def test_guided_workflow_requests_explicit_thp_without_inference():
+    from handlers.text_handlers import handle_engineering_workflow_message
+
+    arabic = handle_engineering_workflow_message(
+        {"chat": {"id": 991001}, "text": "احسب الإنتاج"}
+    )
+    english = handle_engineering_workflow_message(
+        {"chat": {"id": 991002}, "text": "calculate production"}
+    )
+    assert arabic is not None
+    assert "THP" in arabic
+    assert "THP=200 psia" in arabic
+    assert "لم أستخدم قيمة افتراضية" in arabic
+    assert english is not None
+    assert "THP=200 psia" in english
+    assert "No default or inferred value" in english
+
+
+def test_portable_snapshot_is_secret_free_and_contains_traceability():
+    from services.case_snapshot import build_case_snapshot
+
+    snapshot = build_case_snapshot(_portable_case()).decode("utf-8")
+    assert "Portable Engineering Case Snapshot V1" in snapshot
+    assert _portable_case().case_id in snapshot
+    assert "integrated_system_v1" in snapshot
+    assert "USER_PROVIDED" in snapshot
+    assert "Engineering Case Report V1" in snapshot
+    assert "bot1234567890:SECRET" not in snapshot
+    assert "telegram_chat_id" not in snapshot
+    assert "ghp_" not in snapshot
+
+
+def test_case_snapshot_handler_returns_markdown_document():
+    from handlers import text_handlers as th
+
+    case = _portable_case()
+    th._ENGINEERING_CASES[case.case_id] = case
+    text, content, filename = th.handle_case_command(
+        {"chat": {"id": 991003}, "text": f"/case snapshot {case.case_id}"},
+        None,
+    )
+    assert "Portable Case Snapshot V1" in text
+    assert content is not None and content.startswith(b"# Portable Engineering Case Snapshot V1")
+    assert filename == f"engineering_case_{case.case_id[:16]}_snapshot.md"
+
+
+def test_process_message_sends_snapshot_as_document_not_photo(monkeypatch):
+    import main
+    from handlers import text_handlers as th
+
+    case = _portable_case()
+    th._ENGINEERING_CASES[case.case_id] = case
+
+    class FakeTelegram:
+        def __init__(self):
+            self.messages = []
+            self.documents = []
+            self.photos = []
+
+        def send_message(self, chat_id, text, reply_to_message_id=None):
+            self.messages.append((chat_id, text, reply_to_message_id))
+
+        def send_document(self, chat_id, content, filename, caption=None, reply_to_message_id=None):
+            self.documents.append((chat_id, content, filename, caption, reply_to_message_id))
+
+        def send_photo_bytes(self, *args, **kwargs):
+            self.photos.append((args, kwargs))
+            raise AssertionError("Portable snapshot must not be sent as a photo")
+
+    telegram = FakeTelegram()
+    main.process_message(
+        {
+            "chat": {"id": 991004},
+            "message_id": 44,
+            "text": f"/case snapshot {case.case_id}",
+        },
+        telegram,
+        object(),
+    )
+    assert len(telegram.documents) == 1
+    assert telegram.documents[0][2].endswith("_snapshot.md")
+    assert telegram.documents[0][1].startswith(b"# Portable Engineering Case Snapshot V1")
+    assert not telegram.photos
