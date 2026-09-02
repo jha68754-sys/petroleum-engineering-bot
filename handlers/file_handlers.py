@@ -67,7 +67,7 @@ def handle_document_upload(
         ext = os.path.splitext(filename)[1]
         return (
             f"Unsupported file type: {ext}\n"
-            f"Supported: PDF, DOCX, XLSX, XLS, CSV"
+            f"Supported: PDF, DOCX, Markdown Snapshot, XLSX, XLS, CSV"
         ), "Unsupported file type"
 
     # Download file
@@ -105,9 +105,20 @@ def handle_document_upload(
             f"Try uploading a text-based PDF or DOCX file."
         ), "No content extracted"
 
-    # Store context
+    # Store context.  A Snapshot remains available to the existing document
+    # analysis path, while the explicit restore command will validate it before
+    # any EngineeringCase is reconstructed.
     file_context[chat_id] = content
     char_count = len(content)
+
+    if file_type == "markdown":
+        from services.case_snapshot import is_case_snapshot_text
+        if is_case_snapshot_text(content):
+            return (
+                f"Engineering Case Snapshot received: {filename}\n"
+                f"Extracted: {char_count} characters\n"
+                "Snapshot recognized. Send /case restore or say: أكمل الحساب."
+            ), None
 
     return (
         f"File received: {filename} ({file_type.upper()})\n"

@@ -114,6 +114,16 @@ def extract_docx_text(file_path: str) -> str:
         return ""
 
 
+def extract_markdown_text(file_path: str) -> str:
+    """Read UTF-8 Markdown used by the bot's Portable Case Snapshot."""
+    try:
+        with open(file_path, "r", encoding="utf-8-sig") as f:
+            return f.read()
+    except (OSError, UnicodeError) as exc:
+        logger.error("Markdown extraction failed: %s", exc)
+        return ""
+
+
 def extract_csv_text(file_path: str) -> str:
     """
     Extract text from a CSV file with auto-detected delimiter.
@@ -226,6 +236,7 @@ def extract_file_content(file_path: str, file_type: str) -> str:
     extractors = {
         "pdf": extract_pdf_text,
         "docx": extract_docx_text,
+        "markdown": extract_markdown_text,
         "csv": extract_csv_text,
         "excel": extract_excel_text,
     }
@@ -314,6 +325,8 @@ def detect_file_type(filename: str) -> str:
         ".pdf": "pdf",
         ".docx": "docx",
         ".doc": "docx",
+        ".md": "markdown",
+        ".markdown": "markdown",
         ".csv": "csv",
         ".xlsx": "excel",
         ".xls": "excel",

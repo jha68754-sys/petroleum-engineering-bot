@@ -72,6 +72,7 @@ import handlers.text_handlers  # noqa: F401
 from handlers.text_handlers import (
     handle_engineering_context_message,
     handle_engineering_workflow_message,
+    handle_snapshot_resume_message,
     load_engineering_session,
 )
 
@@ -457,6 +458,18 @@ def process_message(
                 "7. Separator Test\n8. Viscosity Test\n9. EOS Tuning\n\n"
                 "Use /classify after getting GOR and API.\n"
                 "Use /pvto or /pvtg for simulation table requirements.",
+                reply_to_message_id=message_id,
+            )
+            return
+
+        # --- Free text: explicit Snapshot continuation first ---
+        # Only a bot-generated Snapshot in this chat can activate this path;
+        # ordinary documents and arbitrary prose continue through existing flow.
+        snapshot_answer = handle_snapshot_resume_message(message)
+        if snapshot_answer is not None:
+            tg.send_message(
+                chat_id,
+                clean_text(snapshot_answer),
                 reply_to_message_id=message_id,
             )
             return

@@ -87,6 +87,8 @@ MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024
 # Supported upload MIME types
 SUPPORTED_MIME_TYPES: set[str] = {
     "application/pdf",
+    "text/markdown",
+    "text/plain",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/msword",
     "text/csv",
@@ -102,6 +104,8 @@ FILE_EXT_HANDLERS: dict[str, str] = {
     ".pdf": "pdf",
     ".docx": "docx",
     ".doc": "docx",
+    ".md": "markdown",
+    ".markdown": "markdown",
     ".csv": "csv",
     ".xlsx": "excel",
     ".xls": "excel",

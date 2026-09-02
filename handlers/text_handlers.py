@@ -66,6 +66,12 @@ from services.engineering_case import (
     replay_matches,
 )
 from services.engineering_report import generate_report_arabic_v1, generate_report_v1
+from services.case_snapshot import (
+    CaseSnapshotError,
+    extract_case_id,
+    is_case_snapshot_text,
+    parse_case_snapshot,
+)
 from services.engineering_language import is_arabic_text
 from services.engineering_quality import format_quality_issues, validate_numeric_inputs
 from services.engineering_case_registry import (
@@ -500,7 +506,7 @@ def _context_mutate_thp(chat_id: Any, value: float, message: Dict[str, Any]) -> 
     )
     _remember_engineering_case(new_case, message)
     if is_arabic_text(str(message.get("text", ""))):
-        return generate_report_arabic_v1(new_case)
+        return generate_report_arabic_v1(new_case) + f"\n\nمعرّف الحالة: {new_case.case_id}"
     return _format_system_result(result) + f"\n\nEngineering Case ID: {new_case.case_id}"
 
 
@@ -1402,9 +1408,126 @@ _CASE_USAGE = (
     "Usage: /case report <case_id>\n"
     "       /case replay <case_id>\n"
     "       /case snapshot <case_id>\n"
+    "       /case restore   (reply after uploading a bot Snapshot)\n"
+    "       /case resume    (restore and deterministically recalculate)\n"
     "       /case audit <case_id>\n"
     "       /case json <case_id>"
 )
+
+
+def _snapshot_context(message: Dict[str, Any]) -> str:
+    """Return the uploaded document text without accepting arbitrary prose."""
+    chat_id = message.get("chat", {}).get("id", "")
+    from main import FILE_CONTEXT
+    value = FILE_CONTEXT.get(chat_id)
+    return value if isinstance(value, str) else ""
+
+
+def _snapshot_thp_override(text: str) -> Optional[float]:
+    """Extract an explicit THP in psia; bare values are rejected by the caller."""
+    match = re.search(
+        r"\bthp\s*(?:=|:|to|at|إلى|الى|عند)\s*(-?\d+(?:\.\d+)?)\s*(psia|psi)?\b",
+        str(text),
+        re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    unit = (match.group(2) or "").lower()
+    if unit != "psia":
+        raise ContextResolutionError(
+            "INVALID_UNIT",
+            "THP continuation requires an explicit psia unit, for example: THP=200 psia",
+        )
+    return float(match.group(1))
+
+
+def _restore_snapshot_case(message: Dict[str, Any], *, resume: bool) -> str:
+    """Restore a bot Snapshot into the existing registry and optionally replay it."""
+    chat_id = _chat_id(message)
+    content = _snapshot_context(message)
+    if not content or not is_case_snapshot_text(content):
+        raise ContextResolutionError(
+            "SNAPSHOT_REQUIRED",
+            "upload a Portable Engineering Case Snapshot first, then send /case restore or say: أكمل الحساب.",
+        )
+
+    try:
+        case = parse_case_snapshot(content)
+    except CaseSnapshotError as snapshot_error:
+        # V1 Snapshots created before the restore payload was added remain
+        # useful only while their Case ID still exists in the current registry.
+        # Integrity failures must never fall back to a visible Case ID.
+        if snapshot_error.code != "SNAPSHOT_PAYLOAD_MISSING":
+            raise ContextResolutionError(snapshot_error.code, str(snapshot_error)) from snapshot_error
+        try:
+            case_id = extract_case_id(content)
+            case = _CASE_REGISTRY.get_case(case_id, record_event=True, action="snapshot_restore")
+        except (CaseSnapshotError, CaseNotFoundError, CaseIntegrityError) as exc:
+            raise ContextResolutionError(
+                getattr(exc, "code", "SNAPSHOT_INVALID"),
+                str(exc),
+            ) from snapshot_error
+
+    # This is the same Case registry and the same session context used by all
+    # existing /case commands; no second store is created.
+    _remember_engineering_case(case, message)
+    if not resume:
+        language = "ar" if is_arabic_text(str(message.get("text", ""))) else "en"
+        report = generate_report_arabic_v1(case) if language == "ar" else generate_report_v1(case)
+        return (
+            "تمت استعادة الحالة من Snapshot.\n"
+            f"Case ID: {case.case_id}\n"
+            "أرسل «أكمل الحساب» لإعادة الحساب الحتمي، أو حدّد تغييرًا صريحًا مثل THP=200 psia.\n\n"
+            + report
+        )
+
+    text = str(message.get("text", ""))
+    override = _snapshot_thp_override(text)
+    if override is not None:
+        return _context_mutate_thp(chat_id, override, message)
+
+    try:
+        replayed = replay_case(case)
+    except CaseReplayError as exc:
+        raise ContextResolutionError("CASE_REPLAY_FAILED", str(exc)) from exc
+    match = replay_matches(case, replayed)
+    _remember_engineering_case(replayed, message)
+    language = "ar" if is_arabic_text(text) else "en"
+    if language == "ar":
+        prefix = "مطابقة الاستعادة وإعادة الحساب: MATCH" if match else "نتيجة إعادة الحساب: DIFFERENT"
+        note = (
+            "أُعيد حساب الحالة المستعادة بواسطة المحرك الحتمي."
+            if match else
+            "أُعيد الحساب، لكن النتيجة اختلفت عن Snapshot وتحتاج إلى مراجعة هندسية."
+        )
+        return prefix + "\n\n" + note + "\n\n" + generate_report_arabic_v1(replayed)
+    prefix = "Snapshot restore replay: MATCH" if match else "Snapshot restore replay: DIFFERENT"
+    note = (
+        "The restored case was recalculated by the deterministic engine."
+        if match else
+        "The restored case was recalculated, but the result differs from the Snapshot and requires engineering review."
+    )
+    return prefix + "\n\n" + note + "\n\n" + generate_report_v1(replayed)
+
+
+def handle_snapshot_resume_message(message: Dict[str, Any]) -> Optional[str]:
+    """Handle only explicit natural-language Snapshot continuation requests."""
+    text = str(message.get("text", "")).strip()
+    if not text or text.startswith("/"):
+        return None
+    if not is_case_snapshot_text(_snapshot_context(message)):
+        return None
+    lowered = text.casefold()
+    continuation_terms = ("أكمل", "اكمل", "استمر", "تابع", "resume", "continue", "recalculate")
+    calculation_terms = ("حساب", "الحساب", "احسب", "case", "snapshot", "calculation")
+    if not any(term in lowered for term in continuation_terms):
+        return None
+    if not any(term in lowered for term in calculation_terms):
+        return None
+    try:
+        return _restore_snapshot_case(message, resume=True)
+    except (ContextResolutionError, CaseReplayError, ValueError) as exc:
+        return f"Error: {getattr(exc, 'code', 'SNAPSHOT_RESTORE_FAILED')}: {getattr(exc, 'message', str(exc))}"
 
 
 def _case_id_from_args(args_str: str) -> str:
@@ -1417,9 +1540,17 @@ def handle_case_command(message: Dict[str, Any], tg) -> Tuple[str, Optional[byte
     """Display, serialize, audit, or replay a persistent Engineering Case."""
     text = message.get("text", "")
     parts = text.split(None, 2)
-    if len(parts) < 3 or parts[1].lower() not in {"report", "replay", "snapshot", "audit", "json"}:
+    action = parts[1].lower() if len(parts) >= 2 else ""
+    if action in {"restore", "resume"}:
+        try:
+            return _restore_snapshot_case(message, resume=action == "resume"), None, None
+        except (ContextResolutionError, CaseReplayError, ValueError) as exc:
+            return (
+                f"Error: {getattr(exc, 'code', 'SNAPSHOT_RESTORE_FAILED')}: "
+                f"{getattr(exc, 'message', str(exc))}"
+            ), None, None
+    if len(parts) < 3 or action not in {"report", "replay", "snapshot", "audit", "json"}:
         return _CASE_USAGE, None, None
-    action = parts[1].lower()
     case_id = parts[2].strip().split()[0]
 
     if action == "audit":
