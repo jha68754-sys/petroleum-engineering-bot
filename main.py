@@ -63,6 +63,7 @@ from services.file_processing import (
     segment_pdf_text,
     format_segmented_context,
 )
+from services.problem_extraction import format_problem_extraction
 from handlers.command_registry import registry
 from handlers.file_handlers import handle_document_upload, handle_photo_upload
 from handlers.error_handlers import get_user_safe_error
@@ -93,6 +94,10 @@ from state import (
 
 # Per-chat AI-call rate limiting (basic abuse/cost protection)
 AI_CALL_MIN_INTERVAL_SECONDS = float(os.environ.get("AI_CALL_MIN_INTERVAL_SECONDS", "2.0"))
+
+# Chat-scoped one-turn mode for long well-problem descriptions. This is only
+# extraction state; it never becomes numerical-engine input without confirmation.
+_PENDING_PROBLEM_EXTRACTION: Dict[int, bool] = {}
 
 # ═══════════════════════════════════════════════════════════════════════
 #  TOKEN REDACTION
@@ -386,6 +391,26 @@ def process_message(
 
         # --- Text commands ---
         if text.startswith("/"):
+            # Explicit long-form well-problem extraction. This is intentionally
+            # before the legacy /analyze document flow and before the generic AI.
+            command_parts = text.split(None, 2)
+            if command_parts and command_parts[0].lower() == "/analyze" and len(command_parts) >= 2 and command_parts[1].lower() in {"well", "problem"}:
+                description = command_parts[2].strip() if len(command_parts) >= 3 else ""
+                if description:
+                    tg.send_message(
+                        chat_id,
+                        clean_text(format_problem_extraction(description)),
+                        reply_to_message_id=message_id,
+                    )
+                else:
+                    _PENDING_PROBLEM_EXTRACTION[chat_id] = True
+                    tg.send_message(
+                        chat_id,
+                        "أرسل الآن وصف مشكلة البئر في رسالة طويلة، وسأستخرج القيم الهندسية المذكورة صراحةً وأعرضها للمراجعة قبل أي حساب.",
+                        reply_to_message_id=message_id,
+                    )
+                return
+
             # Priority 1: Handle /start directly to bypass any registry issues
             if text.split()[0].lower() == "/start":
                 from constants import START_MESSAGE
@@ -432,6 +457,15 @@ def process_message(
             tg.send_message(
                 chat_id,
                 f"Unknown command: {text.split()[0]}\nUse /start to see all commands.",
+                reply_to_message_id=message_id,
+            )
+            return
+
+        # --- Pending long-form well-problem extraction ---
+        if _PENDING_PROBLEM_EXTRACTION.pop(chat_id, False):
+            tg.send_message(
+                chat_id,
+                clean_text(format_problem_extraction(text)),
                 reply_to_message_id=message_id,
             )
             return
