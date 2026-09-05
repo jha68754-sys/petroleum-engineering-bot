@@ -102,6 +102,83 @@ def _fmt(value: float) -> str:
     return str(int(value)) if float(value).is_integer() else f"{value:g}"
 
 
+def _missing_for_system(fields: Iterable[ExtractedField]) -> Tuple[List[str], bool]:
+    by_key = {field.key for field in fields}
+    required = ("pr", "thp", "tvd", "id", "gor", "rs", "api", "gamma_g", "mu_l", "bo", "t_wh", "geothermal", "choke", "p_down")
+    labels = {key: next(spec[1] for spec in _FIELD_SPECS if spec[0] == key) for key in required}
+    missing = [labels[key] for key in required if key not in by_key]
+    ipr_missing = not ("j" in by_key or "qmax" in by_key or {"q_test", "pwf_test"} <= by_key)
+    return missing, ipr_missing
+
+
+def is_extraction_confirmation(text: str) -> bool:
+    """Recognize only explicit approval phrases for extracted data."""
+    normalized = " ".join(str(text).casefold().split())
+    phrases = (
+        "اعتمد البيانات المستخرجة",
+        "اعتمد البيانات",
+        "أعتمد البيانات المستخرجة",
+        "أوافق على البيانات المستخرجة",
+        "confirm extracted data",
+        "approve extracted data",
+    )
+    return any(phrase.casefold() in normalized for phrase in phrases)
+
+
+def _suggested_system_command(fields: Iterable[ExtractedField]) -> str:
+    field_map = {field.key: field for field in fields}
+    ordered = (
+        "model", "pr", "thp", "tvd", "id", "gor", "rs", "api", "gamma_g",
+        "mu_l", "bo", "t_wh", "geothermal", "choke", "p_down", "j", "qmax",
+        "q_test", "pwf_test",
+    )
+    tokens = ["/calc", "system", "model=linear"]
+    aliases = {
+        "pr": "pr", "thp": "thp", "tvd": "tvd", "id": "id", "gor": "gor",
+        "rs": "rs", "api": "api", "gamma_g": "gamma_g", "mu_l": "mu_l",
+        "bo": "bo", "t_wh": "t_wh", "geothermal": "geothermal", "choke": "choke",
+        "p_down": "p_down", "j": "j", "qmax": "qmax", "q_test": "q_test",
+        "pwf_test": "pwf_test",
+    }
+    for key in ordered:
+        field = field_map.get(key)
+        if field and key in aliases:
+            tokens.append(f"{aliases[key]}={_fmt(field.value)}")
+    tokens.append("case=1")
+    return " ".join(tokens)
+
+
+def format_extraction_confirmation(text: str) -> str:
+    """Acknowledge extraction without silently launching a calculation."""
+    fields = extract_engineering_fields(text)
+    missing, ipr_missing = _missing_for_system(fields)
+    lines = [
+        "تم اعتماد البيانات المستخرجة مبدئيًا.",
+        "لم أغيّر أي قيمة ولم أستخدم قيمة افتراضية من عندي.",
+        "",
+    ]
+    if missing or ipr_missing:
+        lines.append("لا أستطيع تشغيل حساب System بعد لأن البيانات التالية ما زالت ناقصة:")
+        lines.extend(f"- {item}" for item in missing)
+        if ipr_missing:
+            lines.append("- أساس IPR: PI، أو qmax، أو زوج q_test وpwf_test")
+        lines.extend([
+            "",
+            "أرسل القيم الناقصة صراحةً، ثم اكتب مثلًا: احسب نقطة التشغيل باستخدام Linear IPR.",
+            "لن أستنتج هذه القيم من وصف المشكلة.",
+        ])
+    else:
+        lines.extend([
+            "البيانات الأساسية مكتملة لمسار System.",
+            "الأمر المقترح بعد مراجعتك هو:",
+            "",
+            _suggested_system_command(fields),
+            "",
+            "لن أرسل هذا الأمر إلى المحرك إلا بعد طلب صريح منك.",
+        ])
+    return "\n".join(lines)
+
+
 def format_problem_extraction(text: str) -> str:
     """Return an Arabic confirmation-ready extraction report."""
     fields = extract_engineering_fields(text)
@@ -161,7 +238,13 @@ def format_problem_extraction(text: str) -> str:
     return "\n".join(lines)
 
 
-__all__ = ["ExtractedField", "extract_engineering_fields", "format_problem_extraction"]
+__all__ = [
+    "ExtractedField",
+    "extract_engineering_fields",
+    "format_problem_extraction",
+    "is_extraction_confirmation",
+    "format_extraction_confirmation",
+]
 
 
 if __name__ == "__main__":

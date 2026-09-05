@@ -63,7 +63,11 @@ from services.file_processing import (
     segment_pdf_text,
     format_segmented_context,
 )
-from services.problem_extraction import format_problem_extraction
+from services.problem_extraction import (
+    format_problem_extraction,
+    format_extraction_confirmation,
+    is_extraction_confirmation,
+)
 from handlers.command_registry import registry
 from handlers.file_handlers import handle_document_upload, handle_photo_upload
 from handlers.error_handlers import get_user_safe_error
@@ -98,6 +102,7 @@ AI_CALL_MIN_INTERVAL_SECONDS = float(os.environ.get("AI_CALL_MIN_INTERVAL_SECOND
 # Chat-scoped one-turn mode for long well-problem descriptions. This is only
 # extraction state; it never becomes numerical-engine input without confirmation.
 _PENDING_PROBLEM_EXTRACTION: Dict[int, bool] = {}
+_PENDING_PROBLEM_DATA: Dict[int, str] = {}
 
 # ═══════════════════════════════════════════════════════════════════════
 #  TOKEN REDACTION
@@ -397,6 +402,7 @@ def process_message(
             if command_parts and command_parts[0].lower() == "/analyze" and len(command_parts) >= 2 and command_parts[1].lower() in {"well", "problem"}:
                 description = command_parts[2].strip() if len(command_parts) >= 3 else ""
                 if description:
+                    _PENDING_PROBLEM_DATA[chat_id] = description
                     tg.send_message(
                         chat_id,
                         clean_text(format_problem_extraction(description)),
@@ -463,9 +469,22 @@ def process_message(
 
         # --- Pending long-form well-problem extraction ---
         if _PENDING_PROBLEM_EXTRACTION.pop(chat_id, False):
+            _PENDING_PROBLEM_DATA[chat_id] = text
             tg.send_message(
                 chat_id,
                 clean_text(format_problem_extraction(text)),
+                reply_to_message_id=message_id,
+            )
+            return
+
+        # --- Explicit extraction approval ---
+        # Approval is scoped to the last extracted text in this chat. It never
+        # silently launches a numerical engine; missing inputs remain explicit.
+        if is_extraction_confirmation(text) and chat_id in _PENDING_PROBLEM_DATA:
+            source_text = _PENDING_PROBLEM_DATA[chat_id]
+            tg.send_message(
+                chat_id,
+                clean_text(format_extraction_confirmation(source_text)),
                 reply_to_message_id=message_id,
             )
             return
